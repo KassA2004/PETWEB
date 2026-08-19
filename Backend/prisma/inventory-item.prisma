@@ -1,0 +1,16 @@
+// InventoryItem
+// Source: /Docs/InitialDB-plan.md - "InventoryItem"
+// Tracks the quantity of an object definition owned by a user.
+
+model InventoryItem {
+  id       String @id @default(uuid()) @db.Uuid
+  ownerId  String @db.Uuid
+  objectId String @db.Uuid
+  quantity Int
+
+  owner  User             @relation(fields: [ownerId], references: [id])
+  object ObjectDefinition @relation(fields: [objectId], references: [id])
+
+  @@index([ownerId])
+  @@index([objectId])
+}

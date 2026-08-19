@@ -1,0 +1,12 @@
+// ObjectDefinition
+// Source: /Docs/InitialDB-plan.md - "ObjectDefinition"
+// Defines what an object fundamentally is, independent of where it is placed or who owns it.
+
+model ObjectDefinition {
+  id             String @id @default(uuid()) @db.Uuid
+  type           String
+  appearanceData Json
+
+  environmentObjects EnvironmentObject[]
+  inventoryItems     InventoryItem[]
+}

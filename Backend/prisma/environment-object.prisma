@@ -1,0 +1,19 @@
+// EnvironmentObject
+// Source: /Docs/InitialDB-plan.md - "EnvironmentObject"
+// Defines a specific instance of an object placed within an environment.
+
+model EnvironmentObject {
+  id            String @id @default(uuid()) @db.Uuid
+  environmentId String @db.Uuid
+  objectId      String @db.Uuid
+  x             Float
+  y             Float
+  rotation      Float
+  scale         Float
+
+  environment Environment      @relation(fields: [environmentId], references: [id])
+  object      ObjectDefinition @relation(fields: [objectId], references: [id])
+
+  @@index([environmentId])
+  @@index([objectId])
+}

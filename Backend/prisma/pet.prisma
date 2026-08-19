@@ -1,0 +1,21 @@
+// Pet
+// Source: /Docs/InitialDB-plan.md - "Pet"
+
+model Pet {
+  id              String   @id @default(uuid()) @db.Uuid
+  ownerId         String   @db.Uuid
+  environmentId   String   @db.Uuid
+  name            String
+  species         String
+  appearanceData  Json
+  personalityData Json
+  stateData       Json
+  createdAt       DateTime @default(now())
+
+  owner       User        @relation(fields: [ownerId], references: [id])
+  environment Environment @relation(fields: [environmentId], references: [id])
+  memories    Memory[]
+
+  @@index([ownerId])
+  @@index([environmentId])
+}

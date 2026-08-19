@@ -1,0 +1,14 @@
+// Environment
+// Source: /Docs/InitialDB-plan.md - "Environment"
+
+model Environment {
+  id      String @id @default(uuid()) @db.Uuid
+  ownerId String @db.Uuid
+  name    String
+
+  owner   User                @relation(fields: [ownerId], references: [id])
+  pets    Pet[]
+  objects EnvironmentObject[]
+
+  @@index([ownerId])
+}
