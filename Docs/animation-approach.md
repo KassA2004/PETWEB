@@ -408,9 +408,11 @@ Small differences create more natural behavior.
 
 ---
 
-# 12. Head Movement
+# 12. Face Movement
 
-Head movement should be subtle and layered.
+The creature is a blob: it has no head and no neck to turn. "Looking" is done
+by sliding the face group across the front of the mass and shifting the eyes
+inside it, with the eyes leading the face.
 
 Possible movements:
 
@@ -421,13 +423,13 @@ Look up
 Look down
 Tilt left
 Tilt right
-Lower head
-Raise head
+Lower face
+Raise face
 Turn toward object
 Turn away
 ```
 
-Head movement should often accompany:
+Face movement should often accompany:
 
 * Curiosity
 * Attention
@@ -438,53 +440,57 @@ Head movement should often accompany:
 
 ---
 
-# 13. Ear System
+# 13. Topper System
 
-Ears should communicate emotional state.
+The blob has no ears. The topper — whatever grows out of the top of the mass —
+carries the same job: it is the part that reacts first and settles last.
 
 Examples:
 
 ```text
 Curious
-→ ears forward
+→ topper tips forward
 
 Relaxed
 → neutral
 
 Happy
-→ slight movement
+→ bounces
 
 Scared
-→ ears lowered
+→ pulled back
 
 Surprised
-→ ears raised
+→ flicked upright
 
 Sleepy
-→ relaxed/down
+→ drooped to one side
 ```
 
-Ear movement should also occur randomly during idle states.
+The topper should also drift randomly during idle states.
+
+Each topper type carries a floppiness value, so a heavy puff barely moves while
+a thin antenna whips — with no change to the motion code.
 
 ---
 
-# 14. Tail System
+# 14. Wobble System
 
-The tail should be independently animated.
+The blob is soft, and soft things keep moving after they stop. The wobble layer
+replaces the tail: one slow lean of the whole mass, with the arms and the
+topper trailing behind it on their own delay.
 
 Possible behaviors:
 
 ```text
-Idle sway
-Slow wag
-Fast wag
-Tail flick
-Tail curl
-Tail drop
-Tail puff
+Idle lean
+Slow sway
+Fast jiggle
+Squash and stretch
+Settle after a landing
 ```
 
-Tail behavior should respond to:
+Wobble should respond to:
 
 ```text
 Mood
@@ -499,37 +505,42 @@ Example:
 
 ```text
 Happy
-→ stronger wag
+→ faster, larger jiggle
 
 Curious
-→ tail raised
+→ leaning toward the target
 
 Relaxed
-→ slow movement
+→ slow sway
 
 Scared
-→ tail lowered/curling
+→ pulled in and tight
 ```
 
 ---
 
 # 15. WALK
 
-Walking should use the standardized quadruped rig.
+A blob does not walk, it hops. WALK uses the standardized blob rig.
 
-Walking consists of:
+One hop is the whole cycle:
 
 ```text
-Leg movement
+Stretch on the way up
 +
-Body bounce
+Squash on the landing
 +
-Head movement
+Feet tucking under
 +
-Tail movement
+Arms flung out
 +
-Ear movement
+Face lagging a beat behind
++
+Topper whipping over and settling
 ```
+
+Hop height scales with the creature's ground clearance, so a blob with tiny
+feet takes small hops and one on stilts takes big ones.
 
 Walking should not be perfectly mechanical.
 
@@ -1581,17 +1592,16 @@ bounce = 0.8
 
 # 48. Animation and Standardized Anatomy
 
-The animation system must operate on the standardized quadruped rig defined in the Pet Anatomy system.
+The animation system must operate on the standardized blob rig defined in the Pet Anatomy system.
 
 It must assume the existence of:
 
 ```text
 Body
-Head
-4 Legs
-Tail
-Ears
-Face
+Face (2 Eyes, Mouth)
+2 Arms
+2 Feet
+Topper
 ```
 
 Customization changes proportions and appearance.

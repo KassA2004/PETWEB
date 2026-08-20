@@ -1,60 +1,60 @@
 /**
  * Eye variants.
  *
- * Every eye type builds the same internal structure (socket shading, iris,
- * pupil, highlights, lid) so blinking and looking work identically across all
- * of them (/Docs/pet-anatomy.md section 15).
+ * Eyes are flat dark shapes with a highlight dot — no iris, no socket shading.
+ * Every type builds the same structure (a movable dark shape plus a lid), so
+ * blinking and looking work identically across all of them
+ * (/Docs/pet-anatomy.md section 15).
  */
 
 export const EYE_TYPES = {
-  /** Default: large, slightly almond, very readable. */
-  dew: {
-    label: 'Dew',
+  /** Default: the simple round dot. Reads at any size. */
+  dot: {
+    label: 'Dot',
     widthMul: 1,
     heightMul: 1,
-    /** Iris size relative to the eye. */
-    irisScale: 0.78,
-    /** Pupil size relative to the iris. */
-    pupilScale: 0.52,
-    /** Vertical squash of the lower lid — creates a friendly lower curve. */
-    lowerLid: 0.12,
-    /** Upper lid resting coverage, 0 = wide open, 1 = closed. */
-    lidRest: 0.08,
-    /** Number of specular highlights. */
-    highlights: 2,
-  },
-  /** Perfectly round, very wide awake. */
-  button: {
-    label: 'Button',
-    widthMul: 0.88,
-    heightMul: 0.94,
-    irisScale: 0.86,
-    pupilScale: 0.62,
-    lowerLid: 0.04,
+    /** 0 = nearly a box, 1 = a plain ellipse. */
+    roundness: 1,
+    /** Number of white highlight dots. */
+    glints: 1,
+    /** Resting lid coverage, 0 = wide open, 1 = shut. */
     lidRest: 0,
-    highlights: 2,
+  },
+  /** Tall oval — wide awake and slightly startled. */
+  bean: {
+    label: 'Bean',
+    widthMul: 0.82,
+    heightMul: 1.36,
+    roundness: 1,
+    glints: 1,
+    lidRest: 0,
+  },
+  /** Big and shiny, two highlights. The most cartoonish option. */
+  sparkle: {
+    label: 'Sparkle',
+    widthMul: 1.34,
+    heightMul: 1.34,
+    roundness: 1,
+    glints: 2,
+    lidRest: 0,
   },
   /** Heavy-lidded and dreamy. */
   sleepy: {
     label: 'Sleepy',
-    widthMul: 1.08,
-    heightMul: 0.78,
-    irisScale: 0.72,
-    pupilScale: 0.48,
-    lowerLid: 0.2,
-    lidRest: 0.34,
-    highlights: 1,
+    widthMul: 1.12,
+    heightMul: 0.92,
+    roundness: 1,
+    glints: 1,
+    lidRest: 0.42,
   },
-  /** Enormous — pushes the creature toward absurd. */
-  saucer: {
-    label: 'Saucer',
-    widthMul: 1.3,
-    heightMul: 1.28,
-    irisScale: 0.82,
-    pupilScale: 0.44,
-    lowerLid: 0.08,
+  /** Squared-off pixels — the odd one out, deliberately. */
+  pixel: {
+    label: 'Pixel',
+    widthMul: 0.9,
+    heightMul: 1.05,
+    roundness: 0.1,
+    glints: 0,
     lidRest: 0,
-    highlights: 3,
   },
 } as const;
 
@@ -64,11 +64,9 @@ export interface EyeShape {
   label: string;
   widthMul: number;
   heightMul: number;
-  irisScale: number;
-  pupilScale: number;
-  lowerLid: number;
+  roundness: number;
+  glints: number;
   lidRest: number;
-  highlights: number;
 }
 
 export function getEyeShape(type: EyeType): EyeShape {

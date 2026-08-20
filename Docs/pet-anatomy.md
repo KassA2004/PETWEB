@@ -19,42 +19,33 @@ Every creature must remain compatible with the same fundamental anatomy and anim
 
 # 2. Visual Direction
 
+The creature is a **blob**: one soft mass with a face on it.
+
+It is not an animal. It has no head, no neck, no ears and no tail. Trying to
+give it those things is what turns a blob back into a generic cartoon pet.
+
 The creatures should have:
 
-- Cute animal-like proportions
-- Four-legged anatomy
-- Rounded and soft shapes
-- Large expressive heads/eyes
-- Short or stylized limbs
-- Expressive tails
-- Simplified anatomy
-- Dreamy indie-game visual language
+- One unbroken silhouette, with small things poking out of it
+- A rounded-square (squircle) mass rather than a circle or a box
+- A large, simple, readable face placed high on the mass
+- Stubby arms and feet that exist for motion, not for detail
+- Flat fills, bold color, minimal detail
 - Ability to become absurd through customization
-
-The creatures should feel like fictional animals rather than realistic cats.
 
 The base visual concept is:
 
 ```text
-        EARS
-       /    \
-      / HEAD \
-     |  ●  ●  |
-     |   ◡    |
-      \______/
-          |
-       NECK
-          |
-     ┌─────────┐
-     │  BODY   │
-     │         │
-     └─────────┘
-      /  | |  \
-     /   | |   \
-   LEG  LEG LEG LEG
-          |
-        TAIL
-````
+        ,--.
+       (    )        <- topper
+      __|__|__
+     |        |
+     |  ●  ●  |      <- face, high on the mass
+    -|    ω   |-     <- arms
+     |        |
+     |________|
+       ▄    ▄        <- feet
+```
 
 The exact appearance can vary, but the underlying anatomical structure remains standardized.
 
@@ -69,19 +60,13 @@ Pet
 │
 ├── Body
 │
-├── Head
+├── Arm Left
+├── Arm Right
 │
-├── Neck
+├── Foot Left
+├── Foot Right
 │
-├── Front Leg Left
-├── Front Leg Right
-├── Back Leg Left
-├── Back Leg Right
-│
-├── Tail
-│
-├── Ear Left
-├── Ear Right
+├── Topper
 │
 ├── Face
 │   ├── Left Eye
@@ -106,28 +91,29 @@ Pet Root
 │
 └── Body
     │
-    ├── Neck
-    │   └── Head
-    │       ├── Ear Left
-    │       ├── Ear Right
-    │       └── Face
-    │           ├── Eye Left
-    │           ├── Eye Right
-    │           └── Mouth
+    ├── Foot Left
+    ├── Foot Right
     │
-    ├── Front Leg Left
-    ├── Front Leg Right
-    ├── Back Leg Left
-    ├── Back Leg Right
+    ├── Arm Left
+    ├── Arm Right
     │
-    └── Tail
+    ├── Topper
+    │
+    └── Face
+        ├── Eye Left
+        ├── Eye Right
+        └── Mouth
 ```
 
-Moving the body should automatically move all children attached to it.
+Moving the body should automatically move everything attached to it.
 
-Moving the head should move the eyes, mouth, and ears.
+Moving the face should move the eyes and mouth.
 
-Moving an individual leg should not move the body.
+Moving an individual arm should not move the body.
+
+Everything except the face sits **behind** the body mass in draw order. The
+blob is one unbroken silhouette with small parts emerging from it — feet below,
+arms at the sides, topper above.
 
 ---
 
@@ -139,28 +125,32 @@ The rig should define anchors such as:
 
 ```text
 Body
-├── headAnchor
-├── frontLegLeftAnchor
-├── frontLegRightAnchor
-├── backLegLeftAnchor
-├── backLegRightAnchor
-└── tailAnchor
+├── faceAnchor
+├── armLeftAnchor
+├── armRightAnchor
+├── footLeftAnchor
+├── footRightAnchor
+└── topperAnchor
 ```
 
-The head defines:
+The face defines:
 
 ```text
-Head
+Face
 ├── leftEyeAnchor
 ├── rightEyeAnchor
 ├── mouthAnchor
-├── leftEarAnchor
-└── rightEarAnchor
+├── leftCheekAnchor
+└── rightCheekAnchor
 ```
 
 These anchors define where components attach.
 
 This allows the visual appearance of a component to change without breaking the animation system.
+
+The pet root sits **on the floor, between the feet**: `-y` is up, and the blob
+faces the viewer. So the body centre has a negative y, and the feet land on
+`y = 0`.
 
 ---
 
@@ -174,40 +164,40 @@ For example:
 
 ```text
 Standard Pet
-├── Body
-├── Head
-├── 4 Legs
-└── Tail
+├── Rounded square mass
+├── Two dot eyes
+├── Small arms and feet
+└── A puff on top
 ```
 
 Can become:
 
 ```text
-Fat Pet
-├── Large Body
-├── Small Head
-├── Short Legs
-└── Tiny Tail
+Tall Pet
+├── Narrow, tall mass
+├── Sparkle eyes
+├── Long arms
+└── An antenna
 ```
 
 Or:
 
 ```text
-Long Pet
-├── Long Body
-├── Large Head
-├── Long Legs
-└── Long Tail
+Wide Pet
+├── Low, wide mass
+├── Sleepy eyes
+├── Tiny feet
+└── A sprout
 ```
 
 Or:
 
 ```text
 Absurd Pet
-├── Huge Body
-├── Tiny Head
-├── Extremely Short Legs
-└── Giant Tail
+├── Small mass
+├── Enormous eyes
+├── Huge arms and feet
+└── A topper bigger than the body
 ```
 
 All remain compatible with the same rig.
@@ -222,13 +212,13 @@ Example:
 
 ```ts
 interface PetBodyParameters {
-  width: number;
-  height: number;
-  headScale: number;
-  legLength: number;
-  legWidth: number;
-  tailLength: number;
-  earSize: number;
+  bodyScale: number;
+  eyeScale: number;
+  eyeSpacing: number;
+  mouthScale: number;
+  topperScale: number;
+  armScale: number;
+  footScale: number;
 }
 ```
 
@@ -236,23 +226,12 @@ A pet could therefore have:
 
 ```json
 {
-  "body": {
-    "width": 1.4,
-    "height": 0.9
-  },
-  "head": {
-    "scale": 1.3
-  },
-  "legs": {
-    "length": 0.65,
-    "width": 0.4
-  },
-  "tail": {
-    "length": 1.5
-  },
-  "ears": {
-    "size": 0.8
-  }
+  "body":   { "type": "pebble", "scale": 1.2 },
+  "eyes":   { "type": "sparkle", "scale": 1.4, "spacing": 0.22 },
+  "mouth":  { "type": "grin", "scale": 1.1 },
+  "topper": { "type": "antenna", "scale": 1.6 },
+  "arms":   { "scale": 0.8 },
+  "feet":   { "scale": 1.0 }
 }
 ```
 
@@ -283,11 +262,10 @@ Defines:
 * Shape
 * Size
 * Color
-* Texture
+* Pattern
 * Eyes
-* Ears
 * Mouth
-* Tail style
+* Topper style
 * Accessories
 
 Example:
@@ -295,16 +273,16 @@ Example:
 ```text
 ANATOMY
     ↓
-Standard four-legged rig
+Standard blob rig
 
 APPEARANCE
     ↓
-Round body
-Large eyes
-Tiny legs
-Huge ears
-Cloud tail
-Lavender color
+Rounded square mass
+Dot eyes
+Wave mouth
+Tiny feet
+Cloud puff on top
+Pink
 ```
 
 This separation is critical.
@@ -317,38 +295,36 @@ Changing appearance must not require rewriting the animation system.
 
 The creature should primarily be constructed from procedural vector geometry.
 
-Potential primitives:
+There are only three silhouette primitives in the whole project:
 
 ```text
-Circle
-Ellipse
-Rounded Rectangle
-Bezier Curve
-Polygon
-Custom Path
+Squircle        rounded-square masses  — the blob, cushions
+Organic Oval    soft wobbly ovals      — puffs, foliage, background shapes
+Capsule         stubby limbs and stems — arms, feet, stalks
 ```
 
-These primitives can be combined into more complex shapes.
+Everything is drawn **flat**: one fill per shape, no gradients, no filters.
+Depth comes from stacking a small number of flat shapes in the right order.
 
 Example:
 
 ```text
 Body
-= rounded ellipse
-+ custom curves
-+ shading
+= squircle
++ belly patch
++ one shade shape
++ one shine shape
 
-Head
-= rounded shape
-+ ears
-+ face
+Eye
+= dark squircle
++ highlight dot
++ lid
 
-Leg
-= rounded capsule
-+ paw
+Mouth
+= one or two stroked curves
 
-Tail
-= bezier curve
+Arm / Foot
+= capsule or flat oval
 ```
 
 PixiJS should render the resulting geometry.
@@ -363,12 +339,12 @@ Example:
 
 ```ts
 createBody(parameters)
-createHead(parameters)
-createLeg(parameters)
-createEar(parameters)
-createTail(parameters)
+createFace(parameters)
 createEye(parameters)
 createMouth(parameters)
+createArm(parameters)
+createFoot(parameters)
+createTopper(parameters)
 ```
 
 These functions should generate visual components based on standardized parameters.
@@ -398,13 +374,13 @@ Pet Root
     ↓
 Body
     ↓
-Head
+Feet
+    ↓
+Arms
+    ↓
+Topper
     ↓
 Face
-    ↓
-Legs
-    ↓
-Tail
 ```
 
 Each generated component is attached to its appropriate anchor.
@@ -419,7 +395,7 @@ The animation system should support:
 
 ```text
 IDLE
-WALK
+WALK (hop)
 RUN
 SLEEP
 EAT
@@ -436,50 +412,38 @@ Because every creature uses the same rig, these animations can be reused.
 
 ---
 
-# 13. Walking Animation
+# 13. Hop Animation
 
-Walking should use a standardized four-legged gait.
-
-Example:
-
-```text
-Phase 1
-
-Front Left  → Forward
-Back Right  → Forward
-
-Front Right → Back
-Back Left   → Back
-
-
-Phase 2
-
-Front Right → Forward
-Back Left   → Forward
-
-Front Left  → Back
-Back Right  → Back
-```
-
-The body should also have subtle:
+A blob does not walk, it hops. One hop is the whole cycle, and the cycle is
+built from two curves:
 
 ```text
-Vertical bounce
-Horizontal movement
-Head movement
-Tail movement
+hop      0 on the ground, 1 at the apex   -> height and stretch
+squash   strongest the instant it lands   -> the splat
 ```
 
-The exact amplitude should be influenced by the pet's body proportions.
+Stretch on the way up, squash on the landing: that pairing is what makes a soft
+body read as soft.
+
+Everything else hangs off the same two curves:
+
+```text
+Feet tuck up and swing under
+Arms fling out
+Face lags a beat behind the mass
+Topper whips over and settles
+```
+
+The exact amplitude should be influenced by the pet's proportions.
 
 For example:
 
 ```text
-Short legs
-→ smaller stride
+Tiny feet
+→ small hops
 
-Long legs
-→ larger stride
+Tall feet
+→ big hops
 ```
 
 The animation system adapts to the rig parameters.
@@ -493,7 +457,7 @@ Animation should not depend on a specific appearance.
 This must work:
 
 ```text
-Cat-like Pet
+Round Pebble Pet
      ↓
 WALK animation
 ```
@@ -501,7 +465,7 @@ WALK animation
 and:
 
 ```text
-Absurd Pet
+Absurd Tower Pet
      ↓
 Same WALK animation
 ```
@@ -511,7 +475,6 @@ The animation system operates on:
 ```text
 joints
 anchors
-bones
 transforms
 ```
 
@@ -521,15 +484,21 @@ rather than specific visual assets.
 
 # 15. Facial System
 
-The face should be modular.
+The face is a single group sitting on the front of the blob, and it is its own
+joint. The animation layer slides the whole face a few pixels to suggest the
+creature turning — that is the only "head turn" a blob needs.
 
 ```text
 Face
+├── Cheeks
 ├── Eyes
-├── Pupils
-├── Eyebrows (optional)
+│   └── Lids
 └── Mouth
 ```
+
+The face is **clipped to the body silhouette**, so a wide-set eye or a cheek on
+a narrow creature slides under the edge of the mass instead of floating beside
+it.
 
 Eyes should support:
 
@@ -540,7 +509,6 @@ Sleepy
 Happy
 Surprised
 Wide
-Angry
 ```
 
 The eyes should also support procedural movement:
@@ -557,98 +525,102 @@ Blink
 
 This allows the pet to appear responsive without requiring unique animation assets.
 
----
-
-# 16. Tail System
-
-The tail should be procedurally animated.
-
-Possible tail styles:
+Each eye is built the same way regardless of type:
 
 ```text
-Short
-Long
-Curved
-Fluffy
-Thin
-Round
+pupil   the dark shape. Slides a few pixels to look around.
+lid     coat-colored cover, scaled 0 (open) to 1 (shut).
+lash    a curve riding the lid's lower edge, so a shut eye reads as shut.
+```
+
+---
+
+# 16. Topper System
+
+The topper is the one thing growing out of the top of the blob. With no ears
+and no tail, this is where the creature's silhouette variety lives.
+
+Possible topper styles:
+
+```text
+None
+Puff
+Sprout
+Antenna
+Swirl
 Ridiculous
 ```
 
-The tail should have one or more controllable segments or a curve.
+Toppers attach to a single anchor at the crown and rotate around their base,
+which is what lets the wobble layer drag them a frame behind the body.
+
+Each topper type carries a floppiness value:
+
+```text
+Heavy puff
+→ barely moves
+
+Thin antenna
+→ whips
+```
 
 Animations can include:
 
 ```text
-Idle sway
-Happy wag
-Fear curl
-Curiosity movement
-Sleep movement
+Idle drift
+Happy bounce
+Fear pull-back
+Curiosity tip-forward
+Sleep droop
 ```
-
-The tail's behavior can eventually respond to the pet's state.
 
 ---
 
-# 17. Ear System
+# 17. Limb System
 
-Ears should have standardized attachment points.
+Arms and feet are nubs. They exist for motion, not for detail: an arm that
+swings and a foot that peeks out under the body is what stops the creature
+reading as a beanbag.
 
-Possible variations:
-
-```text
-Small
-Large
-Round
-Pointed
-Floppy
-Asymmetrical
-Ridiculous
-```
-
-Ears can independently rotate.
-
-Example:
+Both hang from their own origin, so the rig can rotate them about their
+attachment point.
 
 ```text
-Curious
-→ ears forward
+Arms
+→ splay outward at rest
+→ swing, fling, reach, flop
 
-Sad
-→ ears downward
-
-Surprised
-→ ears upward
-
-Sleep
-→ ears relaxed
+Feet
+→ spread under load
+→ tuck up mid-hop
+→ slide out when the body melts
 ```
 
 ---
 
 # 18. Procedural Expression
 
-Expressions should be generated by combining facial transformations.
+Expressions should be generated by combining transformations of the face and
+the mass.
 
 For example:
 
 ```text
 Happy
-├── Eyes slightly closed
-├── Mouth smiling
-└── Head slightly raised
+├── Mouth stretched wide
+├── Face raised slightly
+└── Body bouncing
 
 Sad
 ├── Eyes lowered
-├── Mouth curved downward
-└── Head lowered
+├── Face slid down the mass
+└── Mass settled and widened
 
 Surprised
 ├── Eyes enlarged
-├── Pupils enlarged
 ├── Mouth open
-└── Head moved backward
+├── Mass stretched tall
+└── Topper flicked upright
 ```
 
 No separate complete character sprite is required for each expression.
@@ -659,38 +631,34 @@ No separate complete character sprite is required for each expression.
 
 The pet should be rendered in layers.
 
-Example:
-
 ```text
 Layer 1
-Back Legs
+Contact Shadow
 
 Layer 2
-Tail
+Feet
 
 Layer 3
-Body
+Arms
 
 Layer 4
-Front Legs
+Topper
 
 Layer 5
-Neck
+Body
 
 Layer 6
-Head
-
-Layer 7
 Face
 
-Layer 8
+Layer 7
 Accessories
 
-Layer 9
+Layer 8
 Effects
 ```
 
-This allows limbs and accessories to appear naturally in front of or behind the body.
+This keeps the body as one unbroken silhouette with small parts emerging from
+behind it.
 
 ---
 
@@ -705,14 +673,13 @@ Pixi Container
 │
 └── Pet Container
     │
-    ├── Back Legs
-    ├── Tail
-    ├── Body
-    ├── Front Legs
-    ├── Head
-    ├── Face
-    ├── Accessories
-    └── Effects
+    ├── Contact Shadow
+    └── Body
+        ├── Feet
+        ├── Arms
+        ├── Topper
+        ├── Body Art
+        └── Face
 ```
 
 Each component is independently transformable.
@@ -727,15 +694,28 @@ Example:
 
 ```ts
 interface PetAppearance {
-  body: BodyConfig;
-  head: HeadConfig;
-  legs: LegConfig;
-  ears: EarConfig;
-  eyes: EyeConfig;
-  mouth: MouthConfig;
-  tail: TailConfig;
-  colors: ColorConfig;
-  accessories: AccessoryConfig[];
+  bodyType: BodyType;
+  bodyScale: number;
+
+  eyeType: EyeType;
+  eyeScale: number;
+  eyeSpacing: number;
+
+  mouthType: MouthType;
+  mouthScale: number;
+
+  topperType: TopperType;
+  topperScale: number;
+
+  armScale: number;
+  footScale: number;
+
+  primaryColor: number;
+  secondaryColor: number;
+  accentColor: number;
+
+  pattern: PatternType;
+  seed: number;
 }
 ```
 
@@ -763,19 +743,16 @@ Example:
 Seed: 182739
 
 Body:
-Large rounded
-
-Head:
-Oversized
+Wide pebble
 
 Eyes:
-Three sleepy eyes
+Two sleepy
 
-Legs:
-Very short
+Mouth:
+Flat line
 
-Tail:
-Long curly tail
+Topper:
+Antenna
 
 Colors:
 Pastel blue
@@ -794,12 +771,12 @@ The user should be able to create absurd creatures, but the creature must remain
 Allowed:
 
 ```text
-Huge head
-Tiny legs
-Long tail
-Large ears
+Huge mass
+Tiny feet
+Enormous eyes
+Giant topper
 Wide body
-Small eyes
+Small mouth
 Different colors
 Asymmetrical accessories
 ```
@@ -822,7 +799,7 @@ Advanced anatomy can be added later through additional rig types.
 The initial project should use ONE primary rig.
 
 ```text
-QuadrupedRig
+BlobRig
 ```
 
 All initial creatures must use it.
@@ -830,9 +807,9 @@ All initial creatures must use it.
 Future rig types may include:
 
 ```text
-QuadrupedRig
-FlyingRig
 BlobRig
+FlyingRig
+QuadrupedRig
 HumanoidRig
 MultiLegRig
 ```
@@ -851,7 +828,7 @@ The most important rule of the character system is:
 
 The animation system should be designed around the standardized rig.
 
-The renderer should be designed around procedural geometry.
+The renderer should be designed around flat procedural geometry.
 
 The database should store configuration.
 
@@ -864,7 +841,7 @@ Pet Data
     ↓
 Appearance Parameters
     ↓
-Standardized Quadruped Rig
+Standardized Blob Rig
     ↓
 Procedural Geometry
     ↓

@@ -13,6 +13,45 @@ social section.
 
 ---
 
+## 0. Better Auth tables — required for the MVP, **implemented**
+
+`01-auth-endpoints.md` §6 says Better Auth "owns its own `user`/`session`/`account`
+tables" separate from the domain `User` table. `InitialDB-plan.md` never named these
+because they belong to the auth library, not to application data — but they are real
+tables that must exist in the same database, so they are documented here.
+
+Four new tables, one Prisma file each (matching the "one table, one file" convention),
+named with an `Auth` prefix so they can never be confused with the domain `User` model:
+
+| Table | Purpose | Key fields |
+|-------|---------|------------|
+| `AuthUser` | Better Auth's own identity record | `id`, `email` (unique), `emailVerified`, `name`, `image`, `createdAt`, `updatedAt` |
+| `AuthSession` | active sessions | `id`, `token` (unique), `userId` → `AuthUser`, `expiresAt`, `ipAddress`, `userAgent` |
+| `AuthAccount` | credential storage (password hash lives here, not on `AuthUser`) | `id`, `userId` → `AuthUser`, `providerId`, `accountId`, `password` |
+| `AuthVerification` | email verification / reset tokens | `id`, `identifier`, `value`, `expiresAt` |
+
+Relationship to the domain `User` table: **no foreign key**. `AuthUser.id` and
+`User.id` hold the same UUID by convention — Better Auth generates the id (patched to
+`crypto.randomUUID()` so it matches the UUID v4 format `InitialDB-plan.md` requires
+everywhere else), and a `databaseHooks.user.create.after` hook creates the matching
+`User` row with that same id immediately afterward, inside the sign-up request. This
+is the "maps to it 1:1 by id" relationship `01-auth-endpoints.md` §6 describes — kept
+as a convention rather than a DB-level FK because the two tables are owned by two
+different systems (the auth library vs. application code) and Better Auth manages
+`AuthUser`'s lifecycle itself.
+
+**Scope note:** the sign-up bootstrap in `01-auth-endpoints.md` §2 also calls for
+granting starter `InventoryItem`s from seeded `ObjectDefinition`s. No `ObjectDefinition`
+seed data exists yet (that is package 05 work), so the hook currently creates the `User`
+row and the default `Environment` only. Starter items are a follow-up once a catalog
+exists to grant from.
+
+**Severity: blocking.** Nothing in the application can authenticate without these
+tables. Already implemented — see `Backend/prisma/auth-user.prisma`,
+`auth-session.prisma`, `auth-account.prisma`, `auth-verification.prisma`.
+
+---
+
 ## 1. `Goal` — required for the MVP
 
 `InitialDB-plan.md` defines `Goal` as `id`, `ownerId`, `description` only. The goal
@@ -114,6 +153,7 @@ approved separately when social features are actually requested.
 
 | Priority | Change | Blocks |
 |----------|--------|--------|
+| 0 | Better Auth tables (`AuthUser`/`AuthSession`/`AuthAccount`/`AuthVerification`) | everything — **implemented** |
 | 1 | `Goal` completion columns | package 07 (the whole reward loop) |
 | 2 | `ObjectDefinition` category/rarity/tags | packages 05, 06, 07 |
 | 3 | `Environment` bounds + background | package 04 |

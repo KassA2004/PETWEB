@@ -1,59 +1,60 @@
 /**
  * Body silhouette variants.
  *
- * A body type only supplies shape multipliers. It never changes the rig:
- * every body keeps the same anchors, so animation is unaffected
+ * The creature is a blob: one soft mass with a face on it. A body type only
+ * supplies shape multipliers for that mass — it never changes the rig, so every
+ * body keeps the same anchors and every animation keeps working
  * (/Docs/pet-anatomy.md sections 6 and 8).
  */
 
 export const BODY_TYPES = {
-  /** Default: soft rounded form, slightly heavier at the hindquarters. */
-  dumpling: {
-    label: 'Dumpling',
+  /** Default: the rounded-square blob. Slightly wider than tall. */
+  blob: {
+    label: 'Blob',
     widthMul: 1,
     heightMul: 1,
-    /** > 1 pushes mass toward the belly. */
-    bottomBias: 1.1,
-    /** > 1 pushes mass toward the chest (+x). */
-    frontBias: 0.94,
-    jitter: 0.045,
-    /** How far the spine arches up over the hips. */
-    backArch: 0.14,
-    /** Size of the chest fluff tuft. */
-    chestFluff: 1,
+    /** 0 = nearly a box, 1 = a plain ellipse. */
+    roundness: 0.45,
+    /** Outline wobble — a little hand-drawn irregularity. */
+    wobble: 0.012,
+    /** Size of the lighter belly patch, relative to the body. */
+    belly: 0.52,
   },
-  /** Longer, lower — a stretched dreamy creature. */
-  noodle: {
-    label: 'Noodle',
-    widthMul: 1.32,
-    heightMul: 0.82,
-    bottomBias: 1.04,
-    frontBias: 0.9,
-    jitter: 0.04,
-    backArch: 0.2,
-    chestFluff: 0.8,
+  /** Taller and rounder, like a standing jelly bean. */
+  bean: {
+    label: 'Bean',
+    widthMul: 0.86,
+    heightMul: 1.2,
+    roundness: 0.72,
+    wobble: 0.02,
+    belly: 0.5,
   },
-  /** Very round, barely any waist. */
+  /** Wide and low — a puddle that decided to sit up. */
   pebble: {
     label: 'Pebble',
-    widthMul: 0.88,
-    heightMul: 1.08,
-    bottomBias: 1.16,
-    frontBias: 1,
-    jitter: 0.05,
-    backArch: 0.08,
-    chestFluff: 1.25,
+    widthMul: 1.28,
+    heightMul: 0.78,
+    roundness: 0.66,
+    wobble: 0.016,
+    belly: 0.6,
   },
-  /** Tall and narrow, pear shaped. */
-  sprout: {
-    label: 'Sprout',
-    widthMul: 0.82,
-    heightMul: 1.18,
-    bottomBias: 1.24,
-    frontBias: 0.86,
-    jitter: 0.055,
-    backArch: 0.22,
-    chestFluff: 0.7,
+  /** Narrow and tall, almost a loaf standing on end. */
+  tower: {
+    label: 'Tower',
+    widthMul: 0.72,
+    heightMul: 1.42,
+    roundness: 0.3,
+    wobble: 0.01,
+    belly: 0.44,
+  },
+  /** Heavy bottom, small shoulders — a drop of something about to fall. */
+  drop: {
+    label: 'Drop',
+    widthMul: 1.06,
+    heightMul: 1.06,
+    roundness: 0.86,
+    wobble: 0.028,
+    belly: 0.64,
   },
 } as const;
 
@@ -63,11 +64,9 @@ export interface BodyShape {
   label: string;
   widthMul: number;
   heightMul: number;
-  bottomBias: number;
-  frontBias: number;
-  jitter: number;
-  backArch: number;
-  chestFluff: number;
+  roundness: number;
+  wobble: number;
+  belly: number;
 }
 
 export function getBodyShape(type: BodyType): BodyShape {

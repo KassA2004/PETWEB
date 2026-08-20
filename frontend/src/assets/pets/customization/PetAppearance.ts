@@ -11,35 +11,36 @@
 
 import { PALETTE } from '../../shared/color';
 import type { BodyType } from './BodyTypes';
-import type { EarType } from './EarTypes';
 import type { EyeType } from './EyeTypes';
-import type { HeadType } from './HeadTypes';
+import type { MouthType } from './MouthTypes';
 import type { PatternType } from './Patterns';
-import type { TailType } from './TailTypes';
+import type { TopperType } from './TopperTypes';
 
 export interface PetAppearance {
   bodyType: BodyType;
   bodyScale: number;
 
-  headType: HeadType;
-  headScale: number;
-
-  earType: EarType;
-  earScale: number;
-
   eyeType: EyeType;
   eyeScale: number;
+  /** Horizontal gap between the eyes, as a share of body width. */
+  eyeSpacing: number;
 
-  tailType: TailType;
-  tailScale: number;
+  mouthType: MouthType;
+  mouthScale: number;
 
-  /** Ground clearance multiplier — short legs are the default look. */
-  legLength: number;
-  legWidth: number;
+  topperType: TopperType;
+  topperScale: number;
 
+  /** The little side nubs. */
+  armScale: number;
+  /** The little feet under the body. */
+  footScale: number;
+
+  /** The blob itself. */
   primaryColor: number;
+  /** Belly patch, topper, markings. */
   secondaryColor: number;
-  /** Inner ears, nose, paw pads, blush. */
+  /** Cheeks and small details. */
   accentColor: number;
 
   pattern: PatternType;
@@ -56,48 +57,44 @@ export interface PetAppearance {
 export type PetAppearanceInput = Partial<PetAppearance>;
 
 /**
- * The default creature.
- *
- * Deliberately not a generic cat: heavy dumpling body, oversized head, very
- * short legs, tall leafy ears and a cloud-tufted tail.
+ * The default creature: a pink rounded-square blob with a puff on its head,
+ * two dot eyes and a small wave mouth.
  */
 export const DEFAULT_PET_APPEARANCE: PetAppearance = {
-  bodyType: 'dumpling',
+  bodyType: 'blob',
   bodyScale: 1,
 
-  headType: 'moon',
-  headScale: 1.12,
-
-  earType: 'leaf',
-  earScale: 1,
-
-  eyeType: 'dew',
+  eyeType: 'dot',
   eyeScale: 1,
+  eyeSpacing: 0.19,
 
-  tailType: 'cloud',
-  tailScale: 1,
+  mouthType: 'wave',
+  mouthScale: 1,
 
-  legLength: 0.9,
-  legWidth: 1,
+  topperType: 'puff',
+  topperScale: 1,
 
-  primaryColor: PALETTE.lavender,
-  secondaryColor: PALETTE.warmCream,
-  accentColor: PALETTE.dustyRose,
+  armScale: 1,
+  footScale: 1,
 
-  pattern: 'dapple',
+  primaryColor: PALETTE.blush,
+  secondaryColor: PALETTE.cream,
+  accentColor: PALETTE.punch,
 
-  seed: 20260819,
+  pattern: 'none',
+
+  seed: 20260820,
 };
 
 /** Guard rails: absurd is allowed, unrenderable is not. */
 const LIMITS: Record<string, { min: number; max: number }> = {
   bodyScale: { min: 0.4, max: 2.2 },
-  headScale: { min: 0.35, max: 2.6 },
-  earScale: { min: 0.25, max: 3 },
-  eyeScale: { min: 0.3, max: 2.4 },
-  tailScale: { min: 0.2, max: 3 },
-  legLength: { min: 0.25, max: 2.6 },
-  legWidth: { min: 0.35, max: 2.4 },
+  eyeScale: { min: 0.3, max: 2.6 },
+  eyeSpacing: { min: 0.05, max: 0.36 },
+  mouthScale: { min: 0.3, max: 2.4 },
+  topperScale: { min: 0, max: 3 },
+  armScale: { min: 0, max: 2.6 },
+  footScale: { min: 0, max: 2.6 },
 };
 
 function clampField(key: string, value: number): number {
@@ -118,11 +115,11 @@ export function createPetAppearance(input: PetAppearanceInput = {}): PetAppearan
   return {
     ...merged,
     bodyScale: clampField('bodyScale', merged.bodyScale),
-    headScale: clampField('headScale', merged.headScale),
-    earScale: clampField('earScale', merged.earScale),
     eyeScale: clampField('eyeScale', merged.eyeScale),
-    tailScale: clampField('tailScale', merged.tailScale),
-    legLength: clampField('legLength', merged.legLength),
-    legWidth: clampField('legWidth', merged.legWidth),
+    eyeSpacing: clampField('eyeSpacing', merged.eyeSpacing),
+    mouthScale: clampField('mouthScale', merged.mouthScale),
+    topperScale: clampField('topperScale', merged.topperScale),
+    armScale: clampField('armScale', merged.armScale),
+    footScale: clampField('footScale', merged.footScale),
   };
 }

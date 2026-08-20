@@ -1,0 +1,15 @@
+// AuthVerification
+// Source: /Docs/API-endpoints/11-schema-additions.md §0
+// Short-lived tokens for email verification and password reset. Not tied to a
+// user by FK — Better Auth looks these up by `identifier` (usually the email).
+
+model AuthVerification {
+  id         String   @id @db.Uuid
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([identifier])
+}

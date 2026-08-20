@@ -4,28 +4,34 @@
  * Colors are plain numbers (0xRRGGBB) so they can travel through definitions,
  * be stored in the database, and be handed straight to PixiJS.
  *
- * Palette direction follows /Docs/theme-and-design.md section 3:
- * pastels, muted warm colors, soft blues, dusty pinks, lavender, warm cream.
+ * The palette is flat and graphic: a small set of bold, warm, slightly soft
+ * colors. Nothing in this project uses gradients — every surface is one flat
+ * fill, optionally with a second flat shape on top for shade or shine
+ * (/Docs/theme-and-design.md).
  */
 
 export const PALETTE = {
-  dreamBlue: 0x9fb8da,
-  lavender: 0xc3b3e0,
-  dustyRose: 0xe8b4c8,
-  softPeach: 0xf2c6a8,
-  warmCream: 0xf5e6cf,
-  mutedMint: 0xa8cfc0,
-  softYellow: 0xf5dfa0,
-  deepIndigo: 0x3b3358,
-  duskViolet: 0x6c5b8f,
-  nightBlue: 0x2b2b47,
+  /** Pet pink — the default creature color. */
+  blush: 0xff8fb4,
+  /** Deeper pink, for shade under the blush. */
+  punch: 0xef5f8c,
+  /** Warm orange, the default room color. */
+  ember: 0xd9552b,
+  /** Darker orange, for the big background shapes. */
+  emberDeep: 0xb03f21,
+  /** Wicker, wood, basketry. */
+  sand: 0xd7a86e,
+  /** Paper cream — highlights, bedding, light surfaces. */
+  cream: 0xfdeacd,
+  mint: 0x74c9a8,
+  sky: 0x7bb6e8,
+  grape: 0x9b7fd4,
+  /** Near-black plum. Eyes, mouths, outlines — never pure black. */
+  ink: 0x3d2233,
 } as const;
 
-/** Shadows lean deep blue/purple rather than grey (theme doc section 3). */
-export const SHADOW_TINT = 0x2f2748;
-
-/** The scene's key light is warm and comes from the upper left. */
-export const LIGHT_TINT = 0xfff1d6;
+/** Everything dark in this world leans warm plum rather than grey. */
+export const SHADOW_TINT = PALETTE.ink;
 
 export interface Rgb {
   r: number;
@@ -57,28 +63,22 @@ export function mix(a: number, b: number, t: number): number {
   });
 }
 
-/** Move a color toward white. */
+/** Move a color toward white — the flat "shine" tone. */
 export function lighten(color: number, amount: number): number {
   return mix(color, 0xffffff, amount);
 }
 
-/**
- * Move a color toward its shadow tone.
- *
- * Deliberately not toward black: theme-and-design.md section 13 asks for
- * "darker versions of surrounding colors" rather than hard black edges.
- */
+/** Move a color toward the shared shadow tone — the flat "shade" tone. */
 export function darken(color: number, amount: number): number {
   return mix(color, SHADOW_TINT, amount);
 }
 
-/** Tint a color with the warm key light, for rim lights and highlights. */
-export function warmLight(color: number, amount: number): number {
-  return mix(color, LIGHT_TINT, amount);
-}
-
-/** CSS rgba() string — used for gradient stops that need per-stop alpha. */
-export function rgba(color: number, alpha: number): string {
-  const { r, g, b } = toRgb(color);
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+/**
+ * The line color for a given fill.
+ *
+ * Outlines are a darker version of whatever they surround, never a black
+ * comic-book line (/Docs/theme-and-design.md section 13).
+ */
+export function outline(color: number, amount = 0.34): number {
+  return darken(color, amount);
 }

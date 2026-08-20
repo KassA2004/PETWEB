@@ -115,6 +115,34 @@ decide between the landing screen and the world.
 
 ---
 
+## 6a. Implementation note: Better Auth's actual error shape
+
+Confirmed by testing against the running backend. Better Auth's routes are mounted
+outside Nest's pipeline (see §1's intro), so they never pass through the global
+`HttpExceptionFilter` — they return **Better Auth's own** error shape, not the
+`{ error: { code, ... } }` envelope from `00-conventions.md` §8:
+
+```json
+{ "message": "Invalid email or password", "code": "INVALID_EMAIL_OR_PASSWORD" }
+```
+
+Observed codes differ from the illustrative ones above:
+
+| Documented above | Actually returned |
+|---|---|
+| `409 EMAIL_TAKEN` | `422 USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL` |
+| `401 INVALID_CREDENTIALS` | `401 INVALID_EMAIL_OR_PASSWORD` |
+
+Sign-up also returns `200`, not `201` — Better Auth doesn't distinguish create-vs-read
+status codes on this route. The frontend should treat these as their HTTP status plus
+a message to show, not rely on `code` matching the rest of the API's error codes.
+
+`sign-out` (and any other state-changing Better Auth route) requires the request to
+carry an `Origin` header matching `trustedOrigins` — normal for any real browser
+`fetch`, but worth knowing if testing with a bare HTTP client.
+
+---
+
 ## 6. Relationship to `User`
 
 Better Auth owns its own `user`/`session`/`account` tables. The application `User`

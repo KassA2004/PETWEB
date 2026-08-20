@@ -22,3 +22,7 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Dev-only render snapshots (see devSnapshotPlugin in vite.config.ts)
+.snapshots
+.env

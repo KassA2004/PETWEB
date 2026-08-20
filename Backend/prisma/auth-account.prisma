@@ -1,0 +1,31 @@
+// AuthAccount
+// Source: /Docs/API-endpoints/11-schema-additions.md §0
+// Credential storage. For the email/password provider, `providerId` is
+// "credential" and `password` holds the hash — the hash never lives on AuthUser.
+// The same table would hold OAuth provider tokens if one were added later.
+//
+// Field list matches the installed better-auth version's account schema
+// exactly (node_modules/@better-auth/core/src/db/get-tables.ts) — the plugin
+// validates the Prisma model against this at runtime, so it can't drift.
+
+model AuthAccount {
+  id                    String    @id @db.Uuid
+  issuer                String
+  accountId             String
+  providerId            String
+  userId                String    @db.Uuid
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  user AuthUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([issuer, accountId])
+  @@index([userId])
+}

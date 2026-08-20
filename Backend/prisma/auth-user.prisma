@@ -1,0 +1,18 @@
+// AuthUser
+// Source: /Docs/API-endpoints/11-schema-additions.md §0
+// Better Auth's own identity table. Kept separate from the domain `User` model
+// (user.prisma) — the two share the same id by convention, not by foreign key.
+// See databaseHooks.user.create.after in src/auth/auth.ts for how they're linked.
+
+model AuthUser {
+  id            String   @id @db.Uuid
+  email         String   @unique
+  emailVerified Boolean  @default(false)
+  name          String
+  image         String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  sessions AuthSession[]
+  accounts AuthAccount[]
+}

@@ -2,13 +2,17 @@
  * Procedural shape primitives.
  *
  * Everything visual in this project is drawn from code (no sprite sheets, no
- * imported artwork). These helpers exist so parts and objects can be built from
- * organic curves instead of stacked circles — see /Docs/pet-anatomy.md section 9
- * and /Docs/theme-and-design.md section 12.
+ * imported artwork), and everything is drawn flat: one silhouette, one fill.
+ * Depth comes from stacking simple shapes, never from gradients or filters.
+ *
+ * There are only three silhouette primitives in the whole project:
+ *
+ *   drawSquircle      rounded-square masses  — the blob, cushions, screens
+ *   drawOrganicOval   soft wobbly ovals      — foliage, background shapes
+ *   drawCapsule       stubby limbs and stems — arms, feet, legs, stalks
  */
 
-import { FillGradient, Graphics } from 'pixi.js';
-import { rgba } from './color';
+import type { Graphics } from 'pixi.js';
 
 export interface Vec2 {
   x: number;
@@ -18,9 +22,8 @@ export interface Vec2 {
 /**
  * Small deterministic PRNG (mulberry32).
  *
- * Deterministic matters: the same pet must look identical every time it is
- * rendered, while still carrying the "designed imperfection" the visual design
- * doc asks for (section 14).
+ * Deterministic matters: the same pet or prop must look identical every time
+ * it is rendered, while still carrying a little hand-made irregularity.
  */
 export function createRng(seed: number): () => number {
   let state = seed >>> 0;
@@ -46,206 +49,134 @@ export function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
+/** Classic ease-in-out curve, clamped to [0, 1]. Used to blend poses in. */
+export function smoothstep(t: number): number {
+  const x = clamp(t, 0, 1);
+  return x * x * (3 - 2 * x);
+}
+
+export interface SquircleOptions {
+  /**
+   * 0 = almost a rectangle, 1 = a plain ellipse. The default sits where a
+   * rounded square still reads as a soft mass.
+   */
+  roundness?: number;
+  segments?: number;
+  /** Radius wobble, 0..1 — keeps the outline from looking machine-cut. */
+  wobble?: number;
+  /** Shifts where the wobble sits, so two squircles never match exactly. */
+  phase?: number;
+}
+
 /**
- * Draw a closed shape through `points` using Catmull-Rom interpolation
- * converted to cubic beziers.
+ * The signature shape of the whole project: a superellipse.
  *
- * This is what keeps silhouettes organic — the caller supplies a handful of
- * control points and gets a continuous soft curve rather than a polygon.
+ * A blob drawn as a squircle reads as a soft body with weight, where a circle
+ * reads as a ball and a rounded rect reads as a box. Everything that needs to
+ * feel squishy uses this.
  */
-export function smoothClosedPath(g: Graphics, points: Vec2[], tension = 1): Graphics {
-  const n = points.length;
-  if (n < 3) return g;
+export function drawSquircle(
+  g: Graphics,
+  cx: number,
+  cy: number,
+  rx: number,
+  ry: number,
+  options: SquircleOptions = {},
+): Graphics {
+  const roundness = clamp(options.roundness ?? 0.45, 0, 1);
+  const segments = options.segments ?? 56;
+  const wobble = options.wobble ?? 0;
+  const phase = options.phase ?? 0;
 
-  const at = (i: number) => points[((i % n) + n) % n];
+  // roundness 1 -> exponent 2 (ellipse); roundness 0 -> exponent 8 (near box).
+  const exponent = 2 + (1 - roundness) * 6;
+  const power = 2 / exponent;
 
-  g.moveTo(points[0].x, points[0].y);
+  for (let i = 0; i <= segments; i++) {
+    const t = (i / segments) * Math.PI * 2;
+    const cos = Math.cos(t);
+    const sin = Math.sin(t);
 
-  for (let i = 0; i < n; i++) {
-    const p0 = at(i - 1);
-    const p1 = at(i);
-    const p2 = at(i + 1);
-    const p3 = at(i + 2);
+    const wave = wobble === 0 ? 1 : 1 + wobble * Math.cos(3 * t + phase);
 
-    const c1x = p1.x + ((p2.x - p0.x) / 6) * tension;
-    const c1y = p1.y + ((p2.y - p0.y) / 6) * tension;
-    const c2x = p2.x - ((p3.x - p1.x) / 6) * tension;
-    const c2y = p2.y - ((p3.y - p1.y) / 6) * tension;
+    const x = cx + Math.sign(cos) * Math.abs(cos) ** power * rx * wave;
+    const y = cy + Math.sign(sin) * Math.abs(sin) ** power * ry * wave;
 
-    g.bezierCurveTo(c1x, c1y, c2x, c2y, p2.x, p2.y);
+    if (i === 0) g.moveTo(x, y);
+    else g.lineTo(x, y);
   }
 
   g.closePath();
   return g;
 }
 
-export interface BlobOptions {
-  /** Number of control points around the shape. More points = finer control. */
-  segments?: number;
-  /** Per-point radius wobble, 0..1. Keeps shapes from looking machine-made. */
-  jitter?: number;
-  /** Multiplier applied to the lower half — > 1 makes a pear/heavy-bottom form. */
-  bottomBias?: number;
-  /** Multiplier applied to the front (+x) half. */
-  frontBias?: number;
-  rng?: () => number;
-}
-
 /**
- * Generate control points for an organic blob centred on (cx, cy).
+ * A soft oval with a gentle harmonic wobble in its radius.
  *
- * Returned points are meant to be fed to `smoothClosedPath`.
+ * One continuous curve, no bezier joins to go wrong — used wherever something
+ * should look grown rather than built: leaves, cloud puffs, background shapes.
  */
-export function blobPoints(
-  cx: number,
-  cy: number,
-  rx: number,
-  ry: number,
-  options: BlobOptions = {},
-): Vec2[] {
-  const segments = options.segments ?? 14;
-  const jitter = options.jitter ?? 0.05;
-  const bottomBias = options.bottomBias ?? 1;
-  const frontBias = options.frontBias ?? 1;
-  const rng = options.rng ?? createRng(1337);
-
-  const points: Vec2[] = [];
-
-  for (let i = 0; i < segments; i++) {
-    const angle = (i / segments) * Math.PI * 2;
-    const sin = Math.sin(angle);
-    const cos = Math.cos(angle);
-
-    // Bias factors fade in smoothly so the silhouette stays continuous.
-    const bottomWeight = Math.max(0, sin);
-    const frontWeight = Math.max(0, cos);
-    const bias =
-      1 + (bottomBias - 1) * bottomWeight + (frontBias - 1) * frontWeight;
-
-    const wobble = 1 + (rng() - 0.5) * 2 * jitter;
-    const radius = bias * wobble;
-
-    points.push({
-      x: cx + cos * rx * radius,
-      y: cy + sin * ry * radius,
-    });
-  }
-
-  return points;
-}
-
-/** Convenience: build and draw an organic blob in one call. */
-export function drawBlob(
+export function drawOrganicOval(
   g: Graphics,
   cx: number,
   cy: number,
   rx: number,
   ry: number,
-  options: BlobOptions = {},
+  segments = 32,
+  organicity = 0.05,
+  phase = 0,
 ): Graphics {
-  return smoothClosedPath(g, blobPoints(cx, cy, rx, ry, options));
+  for (let i = 0; i <= segments; i++) {
+    const t = (i / segments) * Math.PI * 2;
+
+    const wobble =
+      1 +
+      organicity * Math.cos(3 * t + phase) +
+      organicity * 0.45 * Math.sin(5 * t + phase);
+
+    const x = cx + Math.cos(t) * rx * wobble;
+    const y = cy + Math.sin(t) * ry * wobble;
+
+    if (i === 0) g.moveTo(x, y);
+    else g.lineTo(x, y);
+  }
+
+  g.closePath();
+  return g;
 }
 
 /**
- * A capsule that tapers from `topWidth` to `bottomWidth`.
- *
- * Used for limbs, tail segments, plant stems and lamp stands.
+ * A vertical capsule: a rectangle with fully rounded caps, hanging from
+ * (x, y) downward. Limbs, stalks and table legs are all this shape.
  */
-export function drawTaperedCapsule(
+export function drawCapsule(
   g: Graphics,
   x: number,
   y: number,
-  topWidth: number,
-  bottomWidth: number,
+  width: number,
   length: number,
 ): Graphics {
-  const ht = topWidth / 2;
-  const hb = bottomWidth / 2;
-  const bottom = y + length;
-
-  g.moveTo(x - ht, y);
-  // Rounded cap across the top.
-  g.bezierCurveTo(x - ht, y - ht * 0.9, x + ht, y - ht * 0.9, x + ht, y);
-  // Right side, bowed slightly outward so limbs read as soft rather than conical.
-  g.bezierCurveTo(
-    x + ht + (hb - ht) * 0.2,
-    y + length * 0.45,
-    x + hb,
-    bottom - length * 0.25,
-    x + hb,
-    bottom,
-  );
-  // Rounded cap across the bottom.
-  g.bezierCurveTo(x + hb, bottom + hb * 0.9, x - hb, bottom + hb * 0.9, x - hb, bottom);
-  // Left side back up to the start.
-  g.bezierCurveTo(
-    x - hb,
-    bottom - length * 0.25,
-    x - ht - (hb - ht) * 0.2,
-    y + length * 0.45,
-    x - ht,
-    y,
-  );
-  g.closePath();
+  const r = width / 2;
+  g.roundRect(x - r, y, width, Math.max(length, width), r);
   return g;
 }
 
 /**
- * Vertical gradient in the shape's own local space (0 = top, 1 = bottom).
+ * A stroked arc between two points, bowing by `bow` pixels at its middle.
  *
- * Gradients rather than blur filters do most of the shading work here: they
- * cost nothing per frame, which matters because the pet redraws while animating.
+ * Positive `bow` curves downward. Mouths, wicker weave and plant stems are all
+ * drawn with this.
  */
-export function verticalGradient(
-  stops: { offset: number; color: number; alpha?: number }[],
-): FillGradient {
-  return new FillGradient({
-    type: 'linear',
-    start: { x: 0.5, y: 0 },
-    end: { x: 0.5, y: 1 },
-    textureSpace: 'local',
-    colorStops: stops.map((stop) => ({
-      offset: stop.offset,
-      color: rgba(stop.color, stop.alpha ?? 1),
-    })),
-  });
-}
+export function curveBetween(
+  g: Graphics,
+  from: Vec2,
+  to: Vec2,
+  bow: number,
+): Graphics {
+  const mx = (from.x + to.x) / 2;
+  const my = (from.y + to.y) / 2;
 
-/** Diagonal gradient, for surfaces lit from the upper left. */
-export function diagonalGradient(
-  stops: { offset: number; color: number; alpha?: number }[],
-): FillGradient {
-  return new FillGradient({
-    type: 'linear',
-    start: { x: 0.15, y: 0 },
-    end: { x: 0.85, y: 1 },
-    textureSpace: 'local',
-    colorStops: stops.map((stop) => ({
-      offset: stop.offset,
-      color: rgba(stop.color, stop.alpha ?? 1),
-    })),
-  });
-}
-
-/**
- * Radial gradient used for glows, contact shadows and light pools.
- *
- * Cheaper and cleaner than a BlurFilter for soft round falloff, and it never
- * gets clipped by filter padding.
- */
-export function radialGradient(
-  stops: { offset: number; color: number; alpha?: number }[],
-): FillGradient {
-  return new FillGradient({
-    type: 'radial',
-    center: { x: 0.5, y: 0.5 },
-    innerRadius: 0,
-    outerCenter: { x: 0.5, y: 0.5 },
-    outerRadius: 0.5,
-    textureSpace: 'local',
-    colorStops: stops.map((stop) => ({
-      offset: stop.offset,
-      color: rgba(stop.color, stop.alpha ?? 1),
-    })),
-  });
+  g.moveTo(from.x, from.y);
+  g.quadraticCurveTo(mx, my + bow * 2, to.x, to.y);
+  return g;
 }

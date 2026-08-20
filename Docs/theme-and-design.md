@@ -242,43 +242,49 @@ This creates a stronger sense of space while remaining 2D.
 
 # 9. Materials and Surface Treatment
 
-Objects should not generally appear as completely flat color-filled shapes.
+The world is drawn flat. Every surface is one solid fill; depth comes from
+stacking a small number of flat shapes in the right order, never from
+gradients, blurs or filters.
 
-Instead, surfaces should use combinations of:
+A surface is built from at most:
 
 ```text
-Base tone
+Base shape
 +
-Subtle shading
+One darker shape for shade
 +
-Soft highlight
+One lighter shape for shine
 +
-Shadow
-+
-Optional texture
+A flat contact shadow underneath
 ```
 
-The result should remain visually simple but have enough variation to feel tangible.
+The result should remain visually simple but have enough variation to feel
+tangible.
 
 For example:
 
 ```text
-Flat object:
+Bare shape:
 
 ████████
 
 Preferred:
 
-    light
-   ╱────╲
+   ╱────╲   <- one lighter shape, upper left
   │      │
-  │      │
+  │  ▒▒  │  <- one darker shape, lower edge
    ╲────╱
-      ↓
-   shadow
+   ══════   <- flat contact shadow
 ```
 
-The exact implementation can use procedural gradients, vector geometry, filters, and lighting effects.
+Two flat shapes on top of a fill is the budget. A third is usually a sign the
+form itself is not reading and should be redrawn instead.
+
+The exact implementation uses procedural vector geometry and flat fills. There
+are no gradients, blend modes or filters anywhere in the project: they cost
+frame time, they fight the art style, and every effect they would provide
+(glow, light pool, contact shadow, vignette) is achievable as a translucent
+flat shape.
 
 ---
 
@@ -316,7 +322,7 @@ They should have:
 
 The creature should remain recognizable at small sizes.
 
-The standardized quadruped anatomy must remain underneath the customization system.
+The standardized blob anatomy must remain underneath the customization system.
 
 ---
 
@@ -329,18 +335,21 @@ The renderer should support:
 ```text
 Procedural shapes
 +
-Gradients
+Flat fills
 +
-Highlights
+One highlight shape
 +
-Shadows
+One shade shape
 +
 Soft outlines
 +
-Glow where appropriate
+A flat contact shadow
 ```
 
-The creature should not look like a collection of primitive circles and rectangles.
+The creature should not look like a collection of primitive circles and
+rectangles. The squircle — a rounded square that is neither box nor ball — is
+the signature silhouette: it reads as a soft mass with weight, and it is what
+makes the blob a creature rather than a bubble.
 
 Procedural geometry should be used to create **organic-looking silhouettes**.
 

@@ -1,0 +1,18 @@
+// AuthSession
+// Source: /Docs/API-endpoints/11-schema-additions.md §0
+// One row per active session. The `token` value is what the session cookie holds.
+
+model AuthSession {
+  id        String   @id @db.Uuid
+  token     String   @unique
+  userId    String   @db.Uuid
+  expiresAt DateTime
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user AuthUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}

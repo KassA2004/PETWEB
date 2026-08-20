@@ -42,19 +42,20 @@ pet exists.
   {
     "key": "blob",
     "label": "Blob",
-    "description": "A soft floating shape with stubby legs.",
+    "description": "A soft rounded-square mass with a face on it.",
     "defaultAppearance": {
-      "body": { "width": 1.0, "height": 1.0 },
-      "head": { "scale": 1.2 },
-      "legs": { "length": 0.5, "width": 0.4 },
-      "tail": { "length": 0.8 },
-      "ears": { "size": 0.7 }
+      "body":   { "type": "blob", "scale": 1.0 },
+      "eyes":   { "type": "dot", "scale": 1.0, "spacing": 0.19 },
+      "mouth":  { "type": "wave", "scale": 1.0 },
+      "topper": { "type": "puff", "scale": 1.0 },
+      "arms":   { "scale": 1.0 },
+      "feet":   { "scale": 1.0 }
     }
   }
 ]
 ```
 
-Every species must resolve to the **same standardized quadruped rig**
+Every species must resolve to the **same standardized blob rig**
 (`pet-anatomy.md` §3, `AGENTS.md` — Visual Rules). Species changes parameters and
 palette, never the anatomy.
 
@@ -71,12 +72,14 @@ so the literal segment is not captured as a UUID param.
   "species": "blob",
   "environmentId": "77c2...",
   "appearanceData": {
-    "body":  { "width": 1.4, "height": 0.9 },
-    "head":  { "scale": 1.3 },
-    "legs":  { "length": 0.65, "width": 0.4 },
-    "tail":  { "length": 1.5 },
-    "ears":  { "size": 0.8 },
-    "palette": { "primary": "#E8B4C8", "secondary": "#9FB8DA", "accent": "#F5E1C0" }
+    "body":   { "type": "pebble", "scale": 1.2 },
+    "eyes":   { "type": "sparkle", "scale": 1.4, "spacing": 0.22 },
+    "mouth":  { "type": "grin", "scale": 1.1 },
+    "topper": { "type": "antenna", "scale": 1.6 },
+    "arms":   { "scale": 0.8 },
+    "feet":   { "scale": 1.0 },
+    "pattern": "spots",
+    "palette": { "primary": "#FF8FB4", "secondary": "#FDEACD", "accent": "#EF5F8C" }
   },
   "personalityData": {
     "curiosity": 0.7,
@@ -159,13 +162,15 @@ partial merge of a rig is ambiguous.
 
 ```json
 {
-  "body":  { "width": 1.1, "height": 1.0 },
-  "head":  { "scale": 1.4 },
-  "legs":  { "length": 0.55, "width": 0.35 },
-  "tail":  { "length": 2.0 },
-  "ears":  { "size": 1.2 },
-  "palette": { "primary": "#E8B4C8", "secondary": "#9FB8DA", "accent": "#F5E1C0" },
-  "accessories": [{ "slot": "head", "key": "giant_hat", "scale": 1.6 }]
+  "body":   { "type": "tower", "scale": 1.1 },
+  "eyes":   { "type": "bean", "scale": 1.9, "spacing": 0.14 },
+  "mouth":  { "type": "oh", "scale": 1.0 },
+  "topper": { "type": "swirl", "scale": 1.8 },
+  "arms":   { "scale": 1.6 },
+  "feet":   { "scale": 1.5 },
+  "pattern": "patch",
+  "palette": { "primary": "#9B7FD4", "secondary": "#FF8FB4", "accent": "#FDEACD" },
+  "accessories": [{ "slot": "topper", "key": "giant_hat", "scale": 1.6 }]
 }
 ```
 

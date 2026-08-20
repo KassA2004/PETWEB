@@ -6,85 +6,83 @@
  * together instead of pulling the creature apart.
  *
  * Coordinate system:
- *   The pet root sits on the floor, between the paws. +x is forward (the pet
- *   faces right), -y is up. So the body centre has a negative y, and every paw
- *   lands on y = 0.
+ *   The pet root sits on the floor, between the feet. -y is up, and the blob
+ *   faces the viewer. So the body centre has a negative y, and the feet land
+ *   on y = 0.
  */
 
 import type { Vec2 } from '../../shared/shapes';
 import { getBodyShape } from '../customization/BodyTypes';
-import { getEarShape } from '../customization/EarTypes';
 import { getEyeShape } from '../customization/EyeTypes';
-import { getHeadShape } from '../customization/HeadTypes';
-import { getTailShape } from '../customization/TailTypes';
+import { getMouthShape } from '../customization/MouthTypes';
+import { getTopperShape } from '../customization/TopperTypes';
 import type { PetAppearance } from '../customization/PetAppearance';
 
 /** Base measurements in pixels, before any appearance scaling. */
 const BASE = {
-  bodyWidth: 200,
-  bodyHeight: 124,
-  headWidth: 128,
-  headHeight: 116,
-  legLength: 46,
-  legWidth: 26,
-  tailLength: 155,
-  tailThickness: 24,
-  earWidth: 46,
-  earHeight: 82,
-  eyeWidth: 30,
-  eyeHeight: 32,
+  bodyWidth: 210,
+  bodyHeight: 196,
+  eyeSize: 30,
+  mouthWidth: 62,
+  mouthHeight: 26,
+  armWidth: 42,
+  armLength: 66,
+  footWidth: 58,
+  footHeight: 30,
+  topperSize: 96,
 } as const;
 
 export interface PetProportions {
-  /** Body, in pet-root space. */
+  /** The blob mass, in pet-root space. */
   bodyWidth: number;
   bodyHeight: number;
   bodyCenter: Vec2;
+  /** Squircle roundness and outline wobble for the body silhouette. */
+  bodyRoundness: number;
+  bodyWobble: number;
+  /** Radius of the lighter belly patch. */
+  bellyRadius: number;
 
-  /** Legs. `drawLength` runs from the hip anchor down to the floor. */
-  legWidth: number;
-  legClearance: number;
-  legDrawLength: number;
-  legDrawLengthFar: number;
-  pawWidth: number;
-  pawHeight: number;
+  /** Face group anchor, in body space. */
+  faceAnchor: Vec2;
+  /** Extent of the face group — animation scales its motion against this. */
+  faceWidth: number;
+  faceHeight: number;
 
-  /** Leg anchors, in body space. */
-  frontLegLeftAnchor: Vec2;
-  frontLegRightAnchor: Vec2;
-  backLegLeftAnchor: Vec2;
-  backLegRightAnchor: Vec2;
-
-  /** Neck anchor in body space, head anchor in neck space. */
-  neckAnchor: Vec2;
-  neckLength: number;
-  neckWidth: number;
-  headAnchor: Vec2;
-
-  /** Head, in head space (centred on the head origin). */
-  headWidth: number;
-  headHeight: number;
-  muzzleWidth: number;
-  muzzleHeight: number;
-
-  /** Ear anchors, in head space. */
-  earWidth: number;
-  earHeight: number;
-  earLeftAnchor: Vec2;
-  earRightAnchor: Vec2;
-
-  /** Face anchors, in head space. */
+  /** Eyes, in face space. */
   eyeWidth: number;
   eyeHeight: number;
   eyeLeftAnchor: Vec2;
   eyeRightAnchor: Vec2;
+
+  /** Mouth, in face space. */
+  mouthWidth: number;
+  mouthHeight: number;
   mouthAnchor: Vec2;
 
-  /** Tail anchor in body space. */
-  tailAnchor: Vec2;
-  tailLength: number;
-  tailThickness: number;
-  tailSegments: number;
+  /** Cheeks, in face space. */
+  cheekRadius: number;
+  cheekLeftAnchor: Vec2;
+  cheekRightAnchor: Vec2;
+
+  /** Side nubs, in body space. */
+  armWidth: number;
+  armLength: number;
+  armLeftAnchor: Vec2;
+  armRightAnchor: Vec2;
+
+  /** Feet, in body space. */
+  footWidth: number;
+  footHeight: number;
+  footLeftAnchor: Vec2;
+  footRightAnchor: Vec2;
+  /** How far the body floats above the floor, on its feet. */
+  groundClearance: number;
+
+  /** Topper, in body space. */
+  topperWidth: number;
+  topperHeight: number;
+  topperAnchor: Vec2;
 
   /** Overall silhouette, useful for framing and shadows. */
   totalHeight: number;
@@ -93,100 +91,86 @@ export interface PetProportions {
 
 export function computeProportions(appearance: PetAppearance): PetProportions {
   const body = getBodyShape(appearance.bodyType);
-  const head = getHeadShape(appearance.headType);
-  const ear = getEarShape(appearance.earType);
   const eye = getEyeShape(appearance.eyeType);
-  const tail = getTailShape(appearance.tailType);
+  const mouth = getMouthShape(appearance.mouthType);
+  const topper = getTopperShape(appearance.topperType);
 
-  const bodyWidth = BASE.bodyWidth * appearance.bodyScale * body.widthMul;
-  const bodyHeight = BASE.bodyHeight * appearance.bodyScale * body.heightMul;
+  const scale = appearance.bodyScale;
 
-  const legClearance = BASE.legLength * appearance.legLength;
-  const legWidth = BASE.legWidth * appearance.legWidth;
+  const bodyWidth = BASE.bodyWidth * scale * body.widthMul;
+  const bodyHeight = BASE.bodyHeight * scale * body.heightMul;
 
-  // The body floats exactly one leg-clearance above the floor.
-  const bodyCenterY = -(legClearance + bodyHeight / 2);
-  const bodyCenter: Vec2 = { x: 0, y: bodyCenterY };
+  const footWidth = BASE.footWidth * scale * appearance.footScale;
+  const footHeight = BASE.footHeight * scale * appearance.footScale;
 
-  // Hips sit inside the lower body so legs emerge from the form, not below it.
-  const hipY = bodyHeight * 0.22;
-  const legDrawLength = -(bodyCenterY + hipY);
+  // The blob rests on its feet, which barely peek out from under the mass.
+  const groundClearance = footHeight * 0.42;
+  const bodyCenter: Vec2 = { x: 0, y: -(bodyHeight / 2 + groundClearance) };
 
-  const headWidth = BASE.headWidth * appearance.headScale * head.widthMul;
-  const headHeight = BASE.headHeight * appearance.headScale * head.heightMul;
+  const eyeWidth = BASE.eyeSize * scale * appearance.eyeScale * eye.widthMul;
+  const eyeHeight = BASE.eyeSize * scale * appearance.eyeScale * eye.heightMul;
 
-  const neckLength = 14 * appearance.bodyScale;
-  const neckWidth = headWidth * 0.42;
+  const mouthWidth =
+    BASE.mouthWidth * scale * appearance.mouthScale * mouth.widthMul;
+  const mouthHeight =
+    BASE.mouthHeight * scale * appearance.mouthScale * mouth.heightMul;
 
-  const earWidth = BASE.earWidth * appearance.earScale * ear.widthMul;
-  const earHeight = BASE.earHeight * appearance.earScale * ear.heightMul;
+  const armWidth = BASE.armWidth * scale * appearance.armScale;
+  const armLength = BASE.armLength * scale * appearance.armScale;
 
-  const eyeWidth = BASE.eyeWidth * appearance.eyeScale * eye.widthMul;
-  const eyeHeight = BASE.eyeHeight * appearance.eyeScale * eye.heightMul;
+  const topperWidth =
+    BASE.topperSize * scale * appearance.topperScale * topper.widthMul;
+  const topperHeight =
+    BASE.topperSize * scale * appearance.topperScale * topper.heightMul;
 
-  const tailLength = BASE.tailLength * appearance.tailScale * tail.lengthMul;
-  const tailThickness = BASE.tailThickness * appearance.tailScale * tail.thicknessMul;
+  const eyeGap = bodyWidth * appearance.eyeSpacing;
 
-  const headAnchor: Vec2 = {
-    x: headWidth * 0.12,
-    y: -(neckLength + headHeight * 0.46),
-  };
-
-  const neckAnchor: Vec2 = {
-    x: bodyWidth * 0.3,
-    y: -bodyHeight * (0.3 + body.backArch * 0.3),
-  };
-
-  const totalHeight =
-    -(bodyCenterY + neckAnchor.y + headAnchor.y - headHeight / 2 - earHeight * 0.6);
+  // The face sits a little above the body's middle: eyes high on the mass is
+  // most of what makes a blob read as a creature rather than as a bag.
+  const faceAnchor: Vec2 = { x: 0, y: -bodyHeight * 0.12 };
 
   return {
     bodyWidth,
     bodyHeight,
     bodyCenter,
+    bodyRoundness: body.roundness,
+    bodyWobble: body.wobble,
+    bellyRadius: (bodyWidth / 2) * body.belly,
 
-    legWidth,
-    legClearance,
-    legDrawLength,
-    // The far pair is fractionally shorter, which reads as depth.
-    legDrawLengthFar: legDrawLength * 0.97,
-    pawWidth: legWidth * 1.24,
-    pawHeight: legWidth * 0.72,
-
-    // Near legs (+x side of the pair) are drawn in front of the body.
-    frontLegRightAnchor: { x: bodyWidth * 0.28, y: hipY },
-    frontLegLeftAnchor: { x: bodyWidth * 0.19, y: hipY - bodyHeight * 0.02 },
-    backLegRightAnchor: { x: -bodyWidth * 0.27, y: hipY },
-    backLegLeftAnchor: { x: -bodyWidth * 0.35, y: hipY - bodyHeight * 0.02 },
-
-    neckAnchor,
-    neckLength,
-    neckWidth,
-    headAnchor,
-
-    headWidth,
-    headHeight,
-    muzzleWidth: headWidth * 0.42 * head.muzzle,
-    muzzleHeight: headHeight * 0.26 * head.muzzle,
-
-    earWidth,
-    earHeight,
-    earLeftAnchor: { x: -headWidth * 0.29, y: -headHeight * 0.33 },
-    // Slight asymmetry — designed imperfection (theme doc section 14).
-    earRightAnchor: { x: headWidth * 0.26, y: -headHeight * 0.37 },
+    faceAnchor,
+    faceWidth: eyeGap * 2 + eyeWidth * 2,
+    faceHeight: eyeHeight * 2 + mouthHeight * 2,
 
     eyeWidth,
     eyeHeight,
-    eyeLeftAnchor: { x: -headWidth * 0.21, y: headHeight * 0.02 },
-    eyeRightAnchor: { x: headWidth * 0.22, y: headHeight * 0.03 },
-    mouthAnchor: { x: headWidth * 0.02, y: headHeight * 0.26 },
+    eyeLeftAnchor: { x: -eyeGap, y: 0 },
+    // A hair of asymmetry — designed imperfection (theme doc section 14).
+    eyeRightAnchor: { x: eyeGap, y: -eyeHeight * 0.03 },
 
-    tailAnchor: { x: -bodyWidth * 0.44, y: -bodyHeight * 0.1 },
-    tailLength,
-    tailThickness,
-    tailSegments: tail.segments,
+    mouthWidth,
+    mouthHeight,
+    mouthAnchor: { x: 0, y: eyeHeight + bodyHeight * 0.07 },
 
-    totalHeight,
+    cheekRadius: eyeWidth * 0.62,
+    cheekLeftAnchor: { x: -eyeGap - eyeWidth * 1.15, y: eyeHeight * 0.9 },
+    cheekRightAnchor: { x: eyeGap + eyeWidth * 1.15, y: eyeHeight * 0.9 },
+
+    armWidth,
+    armLength,
+    armLeftAnchor: { x: -bodyWidth * 0.5, y: bodyHeight * 0.06 },
+    armRightAnchor: { x: bodyWidth * 0.5, y: bodyHeight * 0.04 },
+
+    footWidth,
+    footHeight,
+    footLeftAnchor: { x: -bodyWidth * 0.24, y: bodyHeight * 0.5 },
+    footRightAnchor: { x: bodyWidth * 0.24, y: bodyHeight * 0.5 },
+    groundClearance,
+
+    topperWidth,
+    topperHeight,
+    topperAnchor: { x: bodyWidth * 0.03, y: -bodyHeight * 0.46 },
+
+    totalHeight: groundClearance + bodyHeight + topperHeight * 0.8,
     shadowWidth: bodyWidth * 1.02,
   };
 }
