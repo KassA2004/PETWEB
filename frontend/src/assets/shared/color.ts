@@ -4,10 +4,13 @@
  * Colors are plain numbers (0xRRGGBB) so they can travel through definitions,
  * be stored in the database, and be handed straight to PixiJS.
  *
- * The palette is flat and graphic: a small set of bold, warm, slightly soft
- * colors. Nothing in this project uses gradients — every surface is one flat
- * fill, optionally with a second flat shape on top for shade or shine
- * (/Docs/theme-and-design.md).
+ * The palette is bold, warm and slightly soft. Surfaces are shaded with a
+ * small, fixed tone ramp derived from one base color (see `tones`), rendered
+ * as a soft vertical gradient — light at the top, base through the middle,
+ * shade along the bottom (/Docs/theme-and-design.md §9).
+ *
+ * One base color in, a whole creature part out: that is what keeps a
+ * randomized creature looking like it was designed rather than assembled.
  */
 
 export const PALETTE = {
@@ -81,4 +84,53 @@ export function darken(color: number, amount: number): number {
  */
 export function outline(color: number, amount = 0.34): number {
   return darken(color, amount);
+}
+
+/**
+ * Perceived brightness, 0..1.
+ *
+ * Weighted for how the eye actually works rather than by averaging channels,
+ * because parts need to know whether they are sitting on something dark: a
+ * dark eye on a dark creature is not an eye, it is a hole.
+ */
+export function luminance(color: number): number {
+  const { r, g, b } = toRgb(color);
+  return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+}
+
+/** CSS rgba() string — gradient stops need per-stop alpha. */
+export function rgba(color: number, alpha = 1): string {
+  const { r, g, b } = toRgb(color);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+/**
+ * The tone ramp for one base color.
+ *
+ * Every shaded surface in the creature system uses exactly these five values,
+ * which is what makes a bee's wing, a pig's ear and a random purple blob look
+ * like they came out of the same box of crayons.
+ *
+ *   light  top of the form, catching the window light
+ *   base   the color you actually chose
+ *   shade  the underside
+ *   deep   contact shadow, inner ear, the gap under a belly
+ *   line   the soft outline
+ */
+export interface Tones {
+  light: number;
+  base: number;
+  shade: number;
+  deep: number;
+  line: number;
+}
+
+export function tones(base: number): Tones {
+  return {
+    light: lighten(base, 0.24),
+    base,
+    shade: darken(base, 0.15),
+    deep: darken(base, 0.34),
+    line: darken(base, 0.46),
+  };
 }

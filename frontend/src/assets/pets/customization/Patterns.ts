@@ -76,15 +76,19 @@ export function drawPattern(
     }
 
     case 'band': {
-      // One wide stripe across the middle, tilted a touch so it never looks
-      // like a UI progress bar.
-      const height = area.ry * 0.36;
-      const y = area.cy + area.ry * 0.1;
-      g.moveTo(-area.rx * 1.4, y - height);
-      g.lineTo(area.rx * 1.4, y - height * 1.5);
-      g.lineTo(area.rx * 1.4, y + height * 0.6);
-      g.lineTo(-area.rx * 1.4, y + height);
-      g.closePath();
+      // Two stripes low on the body. Kept below the face on purpose: a band
+      // across the eye line reads as a blindfold rather than as markings.
+      const height = area.ry * 0.17;
+
+      for (const offset of [0.42, 0.78]) {
+        const y = area.cy + area.ry * offset;
+        g.moveTo(-area.rx * 1.4, y - height);
+        g.lineTo(area.rx * 1.4, y - height * 1.35);
+        g.lineTo(area.rx * 1.4, y + height * 0.7);
+        g.lineTo(-area.rx * 1.4, y + height);
+        g.closePath();
+      }
+
       g.fill({ color: options.color, alpha });
       break;
     }

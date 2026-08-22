@@ -11,6 +11,7 @@ import { Container, Graphics } from 'pixi.js';
 import { PALETTE, darken, outline } from '../../shared/color';
 import { drawCapsule } from '../../shared/shapes';
 import { createContactShadow } from '../../environment/Shadows';
+import { attachLife } from '../ObjectLife';
 import type { ObjectRenderContext } from '../ObjectRenderer';
 
 export function createLamp(ctx: ObjectRenderContext): Container {
@@ -35,8 +36,10 @@ export function createLamp(ctx: ObjectRenderContext): Container {
   stand.fill({ color: darken(ctx.secondaryColor, 0.18) });
   root.addChild(stand);
 
-  // Glow behind the shade.
+  // Glow behind the shade. Labelled because the room switches it off when the
+  // lights go out — the lamp IS the light switch.
   const glow = new Graphics();
+  glow.label = 'lamp-glow';
   // Three rings rather than two: more bands, lower alpha each, so the
   // falloff reads as soft instead of as a drawn circle.
   for (const [radius, alpha] of [[1.25, 0.06], [0.95, 0.07], [0.66, 0.08]]) {
@@ -66,6 +69,35 @@ export function createLamp(ctx: ObjectRenderContext): Container {
   lip.ellipse(0, -height, shadeWidth * 0.5, shadeHeight * 0.13);
   lip.fill({ color: PALETTE.cream, alpha: 0.85 });
   root.addChild(lip);
+
+  // A bulb is never perfectly steady: a slow breath, and once in a while a
+  // flicker that is over before you are sure you saw it.
+  let time = ctx.seed % 7;
+  let flicker = 0;
+  let nextFlicker = 6 + (ctx.seed % 5);
+
+  attachLife(root, {
+    update(dt) {
+      time += dt;
+
+      if (flicker > 0) {
+        flicker = Math.max(0, flicker - dt);
+      } else {
+        nextFlicker -= dt;
+        if (nextFlicker <= 0) {
+          flicker = 0.18;
+          nextFlicker = 9 + Math.random() * 14;
+        }
+      }
+
+      const breath = 0.94 + Math.sin(time * 1.6) * 0.05 + Math.sin(time * 0.7) * 0.03;
+      const dip = flicker > 0 ? 1 - Math.sin((flicker / 0.18) * Math.PI) * 0.35 : 1;
+
+      glow.alpha = breath * dip;
+      glow.scale.set(1 + (breath - 0.94) * 0.35);
+      lip.alpha = 0.85 * dip;
+    },
+  });
 
   return root;
 }

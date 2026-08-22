@@ -77,15 +77,20 @@ Colors should have enough variation to make the world visually interesting while
 Example palette direction:
 
 ```text
-Dream Blue
-Lavender
-Dusty Rose
-Soft Peach
-Warm Cream
-Muted Mint
-Soft Yellow
-Deep Indigo
+Blush        the creature's default pink
+Punch        a deeper pink, for shade and accents
+Ember        the warm orange the room is built from
+Sand         wicker, wood, floors
+Cream        paper, highlights, light surfaces
+Mint
+Sky
+Grape
+Ink          near-black plum: eyes, mouths, outlines — never pure black
 ```
+
+The interface around the world uses the same palette on a warm paper surface,
+so the page and the habitat read as one product rather than a dashboard with a
+game bolted on.
 
 These are directional rather than fixed colors.
 
@@ -238,24 +243,86 @@ ATMOSPHERIC EFFECTS
 
 This creates a stronger sense of space while remaining 2D.
 
+## The room is a box
+
+The layers above are the *composition*. The space they sit in is a room seen
+in one-point perspective — a shallow diorama you are looking into rather than
+a flat elevation you are looking at:
+
+```text
+┌──────────────────────────────┐
+│ ╲        back wall        ╱  │
+│  ╲______________________╱    │   ← the wall/floor crease
+│  ╱                      ╲    │
+│ ╱          floor         ╲   │
+└──────────────────────────────┘
+```
+
+Left and right walls converge, the floor widens toward the viewer, and the
+floor's seam lines run across it at the boundaries of the room's three depth
+rows. Composition, not architecture: the box exists so that space is legible,
+not so that the room looks like a technical drawing.
+
+## Size is the depth cue
+
+Everything in the room is drawn smaller the further back it stands — a little
+under a third smaller at the back wall than at the front. This is doing most of
+the work, and it is why the old flat elevation read as crowded: with everything
+at one size, the only evidence of depth was which thing covered which, so the
+user could not tell where anything was until it overlapped something else.
+
+Three quieter cues support it:
+
+```text
+aerial perspective   things further off are slightly paler and cooler, because
+                     that is what distance does to contrast
+contact shadows      scale and soften with the same camera, so a shadow at the
+                     back is a smaller shadow
+floor seams          converging lines the eye can measure depth against, even
+                     in an empty room
+```
+
+## Depth has to be sayable, not only visible
+
+A pointer has two axes. When something is being carried, the floor is marked
+where it will land — the row it is over is brightened, an ellipse sits flat on
+the floor at the landing point, and a dashed tether joins the two. Objects set
+down snap to a row.
+
+None of it is visible when nothing is being moved. Affordances belong to the
+moment a decision is being made, and this room is meant to be looked at the
+rest of the time.
+
 ---
 
 # 9. Materials and Surface Treatment
 
-The world is drawn flat. Every surface is one solid fill; depth comes from
-stacking a small number of flat shapes in the right order, never from
-gradients, blurs or filters.
-
-A surface is built from at most:
+Every surface is shaded from **one base colour**, expanded into a fixed five-step
+tone ramp and rendered as a soft vertical gradient:
 
 ```text
-Base shape
+light   top of the form, catching the window
+base    the colour that was chosen
+shade   the underside
+deep    contact shadow, inner ear, the gap under a belly
+line    the soft outline
+```
+
+One colour in, a whole creature part out. That is what keeps a randomly
+generated creature looking designed rather than assembled, and it is why the
+customizer only ever asks for four colours no matter how many parts a creature
+has.
+
+A surface is built from:
+
+```text
+Base shape filled with the tone ramp
 +
-One darker shape for shade
+One flat lighter shape for the gloss highlight
 +
-One lighter shape for shine
+Optional markings, clipped to the silhouette
 +
-A flat contact shadow underneath
+A contact shadow underneath
 ```
 
 The result should remain visually simple but have enough variation to feel
@@ -280,11 +347,13 @@ Preferred:
 Two flat shapes on top of a fill is the budget. A third is usually a sign the
 form itself is not reading and should be redrawn instead.
 
-The exact implementation uses procedural vector geometry and flat fills. There
-are no gradients, blend modes or filters anywhere in the project: they cost
-frame time, they fight the art style, and every effect they would provide
-(glow, light pool, contact shadow, vignette) is achievable as a translucent
-flat shape.
+The implementation uses procedural vector geometry with local-space gradients
+(`textureSpace: 'local'`), so a part's lighting follows the part rather than the
+screen — an ear keeps its own shading wherever the rig swings it.
+
+Blend modes and filters are still not used anywhere: they cost frame time and
+every effect they would provide (glow, light pool, contact shadow, vignette) is
+achievable as a translucent shape.
 
 ---
 
@@ -335,16 +404,20 @@ The renderer should support:
 ```text
 Procedural shapes
 +
-Flat fills
+Tone-ramp gradient fills
 +
-One highlight shape
+One gloss highlight
 +
-One shade shape
+Markings clipped to the silhouette
 +
 Soft outlines
 +
-A flat contact shadow
+A contact shadow
 ```
+
+Dark creatures are a special case worth naming: a dark eye on a dark coat is
+not an eye, it is a hole. Parts check the coat's perceived brightness and add
+their own contrast when the body cannot provide it.
 
 The creature should not look like a collection of primitive circles and
 rectangles. The squircle — a rounded square that is neither box nor ball — is
@@ -486,6 +559,57 @@ Subtle particles
 ```
 
 This creates variety without requiring completely different scenes.
+
+## The mood is data
+
+All five hours exist, and they are one record each in `world/Ambience.ts`.
+Nothing in that file builds anything; the scenery reads it, so "what does
+sunset look like" has exactly one answer and it lives in one place.
+
+A mood is made of four things, in the order the eye reads them:
+
+```text
+key      the light actually falling into the room — the shafts out of the
+         window, the pool they land in, the lit patch of wall
+grade    where the room's own surface colours are pushed. Late light does not
+         add orange on top of a wall, it makes the wall orange
+wash     one translucent sheet over the whole frame
+air      what is floating in the light: dust by day, fireflies at night
+```
+
+plus the small print that keeps the room consistent under it — the vignette,
+how much of a contact shadow there is, how strongly lamps read, and what is
+outside the window.
+
+The window is the one place the hour is stated outright rather than implied,
+and it is worth exactly four shapes: a sky, two hills, a disc, and stars if the
+sky is dark enough to hold any.
+
+## The room is also a colour the user chooses
+
+The hour and the paint are separate axes. `ROOM_TINTS` is what the room is
+*made of* — surface colours, deliberately muted next to the creature palette
+(§16) — and every one of them is then graded by whatever hour it is. A sage
+room at midnight and an ember room at midnight are the same midnight.
+
+## Changing the mood is a rebuild
+
+A room is a few dozen flat shapes, so redressing it costs less than the
+bookkeeping of tweening every shape would, and it lets an hour change
+*anything* rather than only the things somebody remembered to make tweenable.
+Two generations cross-fade for about a second: the new ground goes under the
+old one, everything translucent dissolves across.
+
+The furniture, the creature and everything it remembers stay put. This is the
+light changing, not a new room.
+
+## Lamps and the light switch are a different axis again
+
+Ambience is what hour it is. The lamp switch is whether anybody left a light
+on. They compose — flicking the switch at midday dims the room, flicking it at
+night nearly closes it — and a lamp's own flicker is scaled by the hour rather
+than overridden by it, so it is barely there at noon and is the whole room at
+midnight.
 
 ---
 

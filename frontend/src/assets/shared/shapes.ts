@@ -2,8 +2,9 @@
  * Procedural shape primitives.
  *
  * Everything visual in this project is drawn from code (no sprite sheets, no
- * imported artwork), and everything is drawn flat: one silhouette, one fill.
- * Depth comes from stacking simple shapes, never from gradients or filters.
+ * imported artwork). Forms are shaded with soft vertical gradients built from
+ * a single base color's tone ramp (`tones` in ./color), plus flat shapes
+ * stacked on top for shine, markings and contact shade.
  *
  * There are only three silhouette primitives in the whole project:
  *
@@ -12,7 +13,10 @@
  *   drawCapsule       stubby limbs and stems — arms, feet, legs, stalks
  */
 
+import { FillGradient } from 'pixi.js';
 import type { Graphics } from 'pixi.js';
+import { rgba } from './color';
+import type { Tones } from './color';
 
 export interface Vec2 {
   x: number;
@@ -179,4 +183,76 @@ export function curveBetween(
   g.moveTo(from.x, from.y);
   g.quadraticCurveTo(mx, my + bow * 2, to.x, to.y);
   return g;
+}
+
+/**
+ * Vertical gradient in the shape's own local space (0 = top, 1 = bottom).
+ *
+ * `textureSpace: 'local'` matters: it makes the ramp follow the shape rather
+ * than the screen, so a part keeps its own lighting wherever it is drawn and
+ * however the rig moves it.
+ */
+export function verticalGradient(
+  stops: { offset: number; color: number; alpha?: number }[],
+): FillGradient {
+  return new FillGradient({
+    type: 'linear',
+    start: { x: 0.5, y: 0 },
+    end: { x: 0.5, y: 1 },
+    textureSpace: 'local',
+    colorStops: stops.map((stop) => ({
+      offset: stop.offset,
+      color: rgba(stop.color, stop.alpha ?? 1),
+    })),
+  });
+}
+
+/** Diagonal gradient, for forms lit from the upper left. */
+export function diagonalGradient(
+  stops: { offset: number; color: number; alpha?: number }[],
+): FillGradient {
+  return new FillGradient({
+    type: 'linear',
+    start: { x: 0.2, y: 0 },
+    end: { x: 0.8, y: 1 },
+    textureSpace: 'local',
+    colorStops: stops.map((stop) => ({
+      offset: stop.offset,
+      color: rgba(stop.color, stop.alpha ?? 1),
+    })),
+  });
+}
+
+/** Radial gradient, for glows and soft round falloff. */
+export function radialGradient(
+  stops: { offset: number; color: number; alpha?: number }[],
+): FillGradient {
+  return new FillGradient({
+    type: 'radial',
+    center: { x: 0.5, y: 0.5 },
+    innerRadius: 0,
+    outerCenter: { x: 0.5, y: 0.5 },
+    outerRadius: 0.5,
+    textureSpace: 'local',
+    colorStops: stops.map((stop) => ({
+      offset: stop.offset,
+      color: rgba(stop.color, stop.alpha ?? 1),
+    })),
+  });
+}
+
+/**
+ * The standard body shading ramp: light at the top, base through the middle,
+ * shade along the bottom.
+ *
+ * `weight` biases how much of the form the light claims — a small creature
+ * wants a higher light so it does not read as dirty.
+ */
+export function formShading(ramp: Tones, weight = 0.5): FillGradient {
+  return verticalGradient([
+    { offset: 0, color: ramp.light },
+    { offset: 0.3 + weight * 0.1, color: ramp.base },
+    { offset: 0.82, color: ramp.shade },
+    { offset: 1, color: ramp.deep },
+  ]);
 }

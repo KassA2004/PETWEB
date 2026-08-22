@@ -1,34 +1,23 @@
 /**
- * Eye — a dark shape, a highlight dot, and a lid.
+ * Eye.ts
  *
- * That is deliberately all of it. A flat dark eye with one glint is the most
- * legible expression tool there is at small sizes, and it lets the whole face
- * be animated by moving three containers instead of redrawing anything.
+ * Eye — a dark shape, a highlight, and two lids.
  *
- * The structure is identical for every eye type, which is what lets blinking
- * and looking work the same across all of them:
- *
- *   root
- *   ├── pupil   the dark shape. Slides a few pixels to look around.
- *   └── lid     coat-colored cover, scaled 0 (open) to 1 (shut).
+ * Updated for a flat, 2D vector art style. Lids use hard, blocky edges
+ * and the pupil is simplified to a solid shape without organic shading.
  */
 
 import { Container, Graphics } from 'pixi.js';
-import { darken } from '../../shared/color';
-import { drawSquircle } from '../../shared/shapes';
-import { getEyeShape } from '../customization/EyeTypes';
+import { darken, lighten, luminance, mix, tones } from '../../shared/color';
+import { getEyeShape } from '../customization/FaceTypes';
 import type { PetAppearance } from '../customization/PetAppearance';
 import type { PetProportions } from '../anatomy/proportions';
 
 export interface EyeView {
   root: Container;
-  /** The dark shape. Move this to look around; it is clamped by the caller. */
   pupil: Container;
-  /**
-   * Upper eyelid. `scale.y` runs 0 (open) to 1 (closed) — the blink module
-   * writes here, and only ever increases it.
-   */
   lid: Container;
+  lowerLid: Container;
   radiusX: number;
   radiusY: number;
 }
@@ -46,48 +35,63 @@ export function createEye(
   const root = new Container();
   root.label = `eye-${side}`;
 
+  // --- Backing -------------------------------------------------------------
+  const coatBrightness = luminance(appearance.primaryColor);
+  if (coatBrightness < 0.42) {
+    const backing = new Graphics();
+    backing.circle(0, 0, rx * 1.25);
+    backing.fill({
+      color: mix(0xfff6e8, appearance.primaryColor, 0.15),
+      alpha: 1, // Solid backing for 2D style
+    });
+    root.addChild(backing);
+  }
+
   // --- Pupil ---------------------------------------------------------------
   const pupil = new Container();
   pupil.label = `pupil-${side}`;
   root.addChild(pupil);
 
   const dark = new Graphics();
-  drawSquircle(dark, 0, 0, rx, ry, { roundness: shape.roundness });
-  dark.fill({ color: 0x3d2233 });
+  // Solid, flat circle for the eye base, matching the reference art
+  dark.circle(0, 0, rx);
+  dark.fill({ color: 0x4a3121 }); // Standardized dark brown/grey from reference
   pupil.addChild(dark);
 
+  // Simplified glint for flat vector style (no soft alpha/multiple layers)
   if (shape.glints > 0) {
     const glint = new Graphics();
-    glint.circle(-rx * 0.3, -ry * 0.36, rx * 0.3);
-    if (shape.glints > 1) {
-      glint.circle(rx * 0.32, ry * 0.3, rx * 0.15);
-    }
-    glint.fill({ color: 0xffffff, alpha: 0.92 });
+    glint.circle(-rx * 0.25, -ry * 0.25, rx * 0.3);
+    glint.fill({ color: 0xffffff });
     pupil.addChild(glint);
   }
 
-  // --- Lid -----------------------------------------------------------------
-  // Pivoted at the top of the eye, so scaling y closes it downward like a
-  // real lid rather than shrinking it toward its own middle.
+  const ramp = tones(appearance.primaryColor);
+
+  // --- Lower lid: rises for a squint ---------------------------------------
+  const lowerLid = new Container();
+  lowerLid.label = `lower-lid-${side}`;
+  lowerLid.position.set(0, ry * 1.05);
+  lowerLid.scale.y = 0;
+
+  // --- Upper lid: closes downward ------------------------------------------
   const lid = new Container();
   lid.label = `lid-${side}`;
-  lid.position.set(0, -ry * 1.1);
+  lid.position.set(0, -ry * 1.05);
 
   const lidArt = new Graphics();
-  lidArt.ellipse(0, ry * 1.05, rx * 1.3, ry * 1.2);
-  lidArt.fill({ color: appearance.primaryColor });
+  // Flat rectangle acting as a rigid mask
+  lidArt.rect(-rx * 1.5, 0, rx * 3, ry * 2);
+  lidArt.fill({ color: ramp.base });
   lid.addChild(lidArt);
 
-  // The lash line, riding the lid's lower edge. It is the whole reason a shut
-  // eye reads as shut rather than as a blank patch of coat: as the lid scales
-  // down over the eye, this curve travels down with it and ends up as the
-  // closed-eye line.
+  // Hard, thick vector line for the lash line
   const lash = new Graphics();
-  lash.moveTo(-rx * 0.86, ry * 1.4);
-  lash.quadraticCurveTo(0, ry * 2.05, rx * 0.86, ry * 1.4);
+  lash.moveTo(-rx * 1.1, ry * 2);
+  lash.lineTo(rx * 1.1, ry * 2);
   lash.stroke({
-    color: darken(appearance.primaryColor, 0.45),
-    width: Math.max(2, rx * 0.16),
+    color: darken(appearance.primaryColor, 0.2),
+    width: Math.max(3, rx * 0.2),
     cap: 'round',
   });
   lid.addChild(lash);
@@ -95,5 +99,5 @@ export function createEye(
   lid.scale.y = shape.lidRest;
   root.addChild(lid);
 
-  return { root, pupil, lid, radiusX: rx, radiusY: ry };
+  return { root, pupil, lid, lowerLid, radiusX: rx, radiusY: ry };
 }

@@ -1,102 +1,148 @@
 /**
- * Mouth — one or two flat strokes.
+ * Mouth — drawn from the creature's current feelings, every time they change.
  *
- * The mouth is drawn once and then animated purely by scaling its joint: the
- * animation layer opens it by stretching y and widens a grin by stretching x,
- * so no state ever has to redraw a mouth shape (/Docs/pet-anatomy.md §18).
+ * There is no list of mouth shapes to choose from. Picking "grin" from a menu
+ * and then watching it grin while the creature is being thrown across the room
+ * is exactly what makes a pet feel like a puppet, so the shape is a function of
+ * three animated numbers instead:
  *
- * Drawn in face space, with the origin at the mouth anchor.
+ *   curve   -1 (miserable) .. +1 (delighted)
+ *   open     0 (shut) .. 1 (yelling)
+ *   width    how wide the whole thing is
+ *
+ * The user picks size, line weight, fangs and a resting mood — cosmetics and
+ * personality, not poses (/Docs/animation-approach.md §55).
+ *
+ * The layers below are built once and redrawn in place. Redraws are gated on
+ * meaningful change, so holding an expression costs nothing per frame.
  */
 
 import { Container, Graphics } from 'pixi.js';
-import { PALETTE } from '../../shared/color';
-import { getMouthShape } from '../customization/MouthTypes';
-import type { MouthType } from '../customization/MouthTypes';
-import type { PetAppearance } from '../customization/PetAppearance';
-import type { PetProportions } from '../anatomy/proportions';
+import { mix } from '../../shared/color';
 
-export function createMouth(
-  proportions: PetProportions,
-  appearance: PetAppearance,
-): Container {
-  const shape = getMouthShape(appearance.mouthType);
+export interface MouthParams {
+  /** -1 frown .. +1 smile. */
+  curve: number;
+  /** 0 shut .. 1 wide open. */
+  open: number;
+  /** Full width in pixels. */
+  width: number;
+  /** Stroke weight in pixels. */
+  weight: number;
+  /** 0..1 visible teeth. */
+  fangs: number;
+  /** Line and fill color. */
+  color: number;
+  tongue: number;
+}
 
+export interface MouthView {
+  root: Container;
+  apply(params: MouthParams): void;
+}
+
+function changed(a: MouthParams | null, b: MouthParams): boolean {
+  if (!a) return true;
+  return (
+    Math.abs(a.curve - b.curve) > 0.012 ||
+    Math.abs(a.open - b.open) > 0.012 ||
+    Math.abs(a.width - b.width) > 0.5 ||
+    Math.abs(a.weight - b.weight) > 0.3 ||
+    Math.abs(a.fangs - b.fangs) > 0.05 ||
+    a.color !== b.color ||
+    a.tongue !== b.tongue
+  );
+}
+
+export function createMouth(): MouthView {
   const root = new Container();
   root.label = 'mouth';
 
-  const w = proportions.mouthWidth;
-  const h = proportions.mouthHeight;
-  const weight = Math.max(2, w * shape.weight);
+  // Fixed layers, built once and redrawn in place.
+  const shape = new Graphics();
+  const clip = new Graphics();
+  const tongue = new Graphics();
+  const teeth = new Graphics();
 
-  const art = new Graphics();
+  tongue.mask = clip;
 
-  switch (appearance.mouthType as MouthType) {
-    case 'wave': {
-      // Two soft bumps meeting in the middle — the small cat mouth.
-      art.moveTo(-w / 2, 0);
-      art.quadraticCurveTo(-w / 4, h, 0, 0);
-      art.quadraticCurveTo(w / 4, h, w / 2, 0);
-      break;
-    }
+  root.addChild(shape, clip, tongue, teeth);
 
-    case 'smile': {
-      art.moveTo(-w / 2, 0);
-      art.quadraticCurveTo(0, h * 1.9, w / 2, 0);
-      break;
-    }
+  let last: MouthParams | null = null;
 
-    case 'line': {
-      art.moveTo(-w / 2, 0);
-      art.quadraticCurveTo(0, h * 0.35, w / 2, 0);
-      break;
-    }
+  const apply = (params: MouthParams) => {
+    if (!changed(last, params)) return;
+    last = { ...params };
 
-    case 'oh': {
-      art.ellipse(0, h * 0.35, w / 2, h * 0.75);
-      break;
-    }
+    const w = Math.max(6, params.width);
+    const half = w / 2;
+    const curve = Math.max(-1, Math.min(1, params.curve));
+    const open = Math.max(0, Math.min(1, params.open));
+    const weight = Math.max(1.5, params.weight);
 
-    case 'grin': {
-      art.moveTo(-w / 2, 0);
-      art.quadraticCurveTo(0, h * 2.4, w / 2, 0);
-      art.closePath();
-      break;
-    }
-  }
+    // The line the upper lip follows. A positive curve bows downward on
+    // screen, which is a smile; negative bows up, which is a frown.
+    const lift = curve * w * 0.3;
 
-  if (shape.filled) {
-    art.fill({ color: PALETTE.ink });
-  } else {
-    art.stroke({
-      color: PALETTE.ink,
-      width: weight,
-      cap: 'round',
-      join: 'round',
-    });
-  }
+    shape.clear();
+    clip.clear();
+    tongue.clear();
+    teeth.clear();
 
-  root.addChild(art);
+    if (open < 0.05) {
+      // --- Closed: one stroke ---------------------------------------------
+      shape.moveTo(-half, 0);
+      shape.quadraticCurveTo(0, lift, half, 0);
+      shape.stroke({ color: params.color, width: weight, cap: 'round' });
 
-  // Filled mouths get a small tongue so an open mouth is not a flat hole.
-  if (shape.filled) {
-    const tongue = new Graphics();
-    tongue.ellipse(0, h * 1.05, w * 0.28, h * 0.42);
-    tongue.fill({ color: appearance.accentColor, alpha: 0.9 });
-    tongue.mask = (() => {
-      const clip = new Graphics();
-      if (appearance.mouthType === 'oh') {
-        clip.ellipse(0, h * 0.35, w / 2, h * 0.75);
-      } else {
-        clip.moveTo(-w / 2, 0);
-        clip.quadraticCurveTo(0, h * 2.4, w / 2, 0);
-        clip.closePath();
+      // A smile deep enough to need corners gets them, which stops a wide
+      // grin from reading as a plain arc.
+      if (curve > 0.45) {
+        shape.moveTo(-half, 0);
+        shape.quadraticCurveTo(-half * 0.9, -weight * 0.9, -half * 0.72, -weight * 1.2);
+        shape.moveTo(half, 0);
+        shape.quadraticCurveTo(half * 0.9, -weight * 0.9, half * 0.72, -weight * 1.2);
+        shape.stroke({ color: params.color, width: weight * 0.8, cap: 'round' });
       }
-      clip.fill({ color: 0xffffff });
-      root.addChild(clip);
-      return clip;
-    })();
-    root.addChild(tongue);
-  }
+    } else {
+      // --- Open: a closed shape between two arcs ---------------------------
+      const depth = w * (0.16 + open * 0.62);
 
-  return root;
+      const outline = (g: Graphics) => {
+        g.moveTo(-half, 0);
+        g.quadraticCurveTo(0, lift, half, 0);
+        g.quadraticCurveTo(0, lift + depth, -half, 0);
+        g.closePath();
+      };
+
+      outline(shape);
+      shape.fill({ color: params.color });
+
+      outline(clip);
+      clip.fill({ color: 0xffffff });
+
+      tongue.ellipse(0, lift + depth * 0.72, half * 0.5, depth * 0.42);
+      tongue.fill({ color: params.tongue, alpha: 0.95 });
+    }
+
+    // --- Fangs ---------------------------------------------------------------
+    if (params.fangs > 0.05) {
+      const size = weight * (1.1 + params.fangs * 1.8);
+      const inset = half * (0.52 - params.fangs * 0.12);
+
+      for (const side of [-1, 1]) {
+        const x = side * inset;
+        const top = lift * 0.5;
+        teeth.moveTo(x - size * 0.5, top);
+        teeth.lineTo(x + size * 0.5, top);
+        teeth.lineTo(x, top + size * 1.5);
+        teeth.closePath();
+      }
+
+      teeth.fill({ color: 0xfff6e8 });
+      teeth.stroke({ color: mix(params.color, 0xfff6e8, 0.3), width: 1, alpha: 0.4 });
+    }
+  };
+
+  return { root, apply };
 }

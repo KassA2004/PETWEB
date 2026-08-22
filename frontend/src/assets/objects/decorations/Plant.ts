@@ -4,6 +4,10 @@
  * The leaf count and angles are seeded, so two plants placed in the same room
  * are recognisably the same object without being identical.
  *
+ * The foliage sways. Two slow sine waves that do not divide into each other,
+ * pivoting where the stems leave the pot, so the plant never repeats and never
+ * looks like it is being animated at you.
+ *
  * Anchored at its floor contact point.
  */
 
@@ -11,6 +15,7 @@ import { Container, Graphics } from 'pixi.js';
 import { darken, lighten, outline } from '../../shared/color';
 import { createRng, drawOrganicOval, rngRange } from '../../shared/shapes';
 import { createContactShadow } from '../../environment/Shadows';
+import { attachLife } from '../ObjectLife';
 import type { ObjectRenderContext } from '../ObjectRenderer';
 
 export function createPlant(ctx: ObjectRenderContext): Container {
@@ -51,11 +56,29 @@ export function createPlant(ctx: ObjectRenderContext): Container {
   }
 
   stems.stroke({ color: darken(ctx.color, 0.35), width: 9 * ctx.scale });
-  root.addChild(stems);
 
   leaves.fill({ color: ctx.color });
   leaves.stroke({ color: outline(ctx.color), width: 3, alpha: 0.45 });
-  root.addChild(leaves);
+
+  // Everything above the soil bends together, hinged at the top of the pot.
+  const foliage = new Container();
+  foliage.label = 'plant-foliage';
+  foliage.pivot.set(0, -potHeight * 0.7);
+  foliage.position.set(0, -potHeight * 0.7);
+  foliage.addChild(stems);
+  foliage.addChild(leaves);
+  root.addChild(foliage);
+
+  let time = rngRange(rng, 0, 10);
+
+  attachLife(root, {
+    update(dt) {
+      time += dt;
+      foliage.rotation =
+        Math.sin(time * 0.53) * 0.035 + Math.sin(time * 0.21 + 1.3) * 0.022;
+      foliage.skew.x = Math.sin(time * 0.37 + 0.6) * 0.02;
+    },
+  });
 
   // --- Pot -----------------------------------------------------------------
   const pot = new Graphics();

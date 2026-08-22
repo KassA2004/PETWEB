@@ -1,18 +1,20 @@
 /**
- * Face — cheeks, two eyes and a mouth, grouped so they move as one.
+ * Face.ts
  *
- * The face is a single group sitting on the front of the blob. Because it is
- * its own joint, the animation layer can slide the whole face a few pixels to
- * suggest the creature turning, without touching the body silhouette — which
- * is the only "head turn" a blob needs (/Docs/pet-anatomy.md §15).
+ * Face — cheeks, eyes, brows, snout and mouth, grouped so they move as one.
  *
- * Drawn in body space; the group positions itself at the face anchor.
+ * Updated to use flat, solid circular blush patches to match the 2D
+ * cubic character design language.
  */
 
 import { Container, Graphics } from 'pixi.js';
+import { darken, mix } from '../../shared/color';
+import { createBrow } from './Brow';
 import { createEye } from './Eye';
 import type { EyeView } from './Eye';
 import { createMouth } from './Mouth';
+import type { MouthView } from './Mouth';
+import { createSnout } from './Snout';
 import type { PetAppearance } from '../customization/PetAppearance';
 import type { PetProportions } from '../anatomy/proportions';
 
@@ -20,7 +22,11 @@ export interface FaceView {
   root: Container;
   eyeLeft: EyeView;
   eyeRight: EyeView;
-  mouth: Container;
+  browLeft: Container;
+  browRight: Container;
+  mouth: MouthView;
+  cheeks: Graphics;
+  snout: Container;
 }
 
 export function createFace(
@@ -32,43 +38,60 @@ export function createFace(
   root.position.set(proportions.faceAnchor.x, proportions.faceAnchor.y);
 
   // --- Cheeks --------------------------------------------------------------
-  // Behind the eyes, low alpha. Two soft patches are the cheapest warmth the
-  // face can have, and they read even when everything else is closed.
+  // Flat, perfect circles for the 2D blush vector style
   const cheeks = new Graphics();
-  cheeks.ellipse(
+  cheeks.circle(
     proportions.cheekLeftAnchor.x,
     proportions.cheekLeftAnchor.y,
-    proportions.cheekRadius,
-    proportions.cheekRadius * 0.72,
+    proportions.cheekRadius
   );
-  cheeks.ellipse(
+  cheeks.circle(
     proportions.cheekRightAnchor.x,
     proportions.cheekRightAnchor.y,
-    proportions.cheekRadius,
-    proportions.cheekRadius * 0.72,
+    proportions.cheekRadius
   );
-  cheeks.fill({ color: appearance.accentColor, alpha: 0.45 });
+  cheeks.fill({ color: appearance.accentColor });
+  cheeks.alpha = Math.max(0.6, appearance.blush); // Keep opacity high for solid read
   root.addChild(cheeks);
+
+  // --- Snout ---------------------------------------------------------------
+  const snout = createSnout(proportions, appearance);
+  snout.position.set(proportions.snoutAnchor.x, proportions.snoutAnchor.y);
+  root.addChild(snout);
 
   // --- Eyes ----------------------------------------------------------------
   const eyeLeft = createEye('left', proportions, appearance);
-  eyeLeft.root.position.set(
-    proportions.eyeLeftAnchor.x,
-    proportions.eyeLeftAnchor.y,
-  );
+  eyeLeft.root.position.set(proportions.eyeLeftAnchor.x, proportions.eyeLeftAnchor.y);
   root.addChild(eyeLeft.root);
 
   const eyeRight = createEye('right', proportions, appearance);
-  eyeRight.root.position.set(
-    proportions.eyeRightAnchor.x,
-    proportions.eyeRightAnchor.y,
-  );
+  eyeRight.root.position.set(proportions.eyeRightAnchor.x, proportions.eyeRightAnchor.y);
   root.addChild(eyeRight.root);
 
-  // --- Mouth ---------------------------------------------------------------
-  const mouth = createMouth(proportions, appearance);
-  mouth.position.set(proportions.mouthAnchor.x, proportions.mouthAnchor.y);
-  root.addChild(mouth);
+  // --- Brows ---------------------------------------------------------------
+  const browLeft = createBrow('left', proportions, appearance);
+  browLeft.position.set(proportions.browLeftAnchor.x, proportions.browLeftAnchor.y);
+  root.addChild(browLeft);
 
-  return { root, eyeLeft, eyeRight, mouth };
+  const browRight = createBrow('right', proportions, appearance);
+  browRight.position.set(proportions.browRightAnchor.x, proportions.browRightAnchor.y);
+  root.addChild(browRight);
+
+  // --- Mouth ---------------------------------------------------------------
+  const mouth = createMouth();
+  mouth.root.position.set(proportions.mouthAnchor.x, proportions.mouthAnchor.y);
+
+  mouth.apply({
+    curve: appearance.restingMood * 0.8,
+    open: 0,
+    width: proportions.mouthWidth,
+    weight: proportions.mouthWeight,
+    fangs: appearance.fangs,
+    color: darken(appearance.primaryColor, 0.62),
+    tongue: mix(appearance.accentColor, 0xff6b8a, 0.4),
+  });
+
+  root.addChild(mouth.root);
+
+  return { root, eyeLeft, eyeRight, browLeft, browRight, mouth, cheeks, snout };
 }

@@ -96,7 +96,7 @@ so the literal segment is not captured as a UUID param.
 | `name` | string | 1–32 chars, required |
 | `species` | string | must exist in `/pets/species` |
 | `environmentId` | UUID | optional — defaults to the user's first environment |
-| `appearanceData` | object | validated against the rig schema (`pet-anatomy.md` §7); each numeric parameter clamped to `0.25`–`3.0` |
+| `appearanceData` | object | validated against the rig schema (`pet-anatomy.md` §7); each numeric parameter clamped to `0.25`–`3.0`. `accessories` is keyed by slot (`head`/`face`/`neck`), at most one item per slot (`pet-anatomy.md` §18) |
 | `personalityData` | object | five traits, each `0.0`–`1.0`; omitted traits are randomized |
 
 `stateData` is **not** accepted on create — the backend seeds it:
@@ -170,7 +170,11 @@ partial merge of a rig is ambiguous.
   "feet":   { "scale": 1.5 },
   "pattern": "patch",
   "palette": { "primary": "#9B7FD4", "secondary": "#FF8FB4", "accent": "#FDEACD" },
-  "accessories": [{ "slot": "topper", "key": "giant_hat", "scale": 1.6 }]
+  "accessories": {
+    "head": { "type": "topHat",  "color": "#3D2233", "scale": 1.6 },
+    "face": { "type": "glasses", "color": "#3D2233", "scale": 1.0 },
+    "neck": { "type": "bowtie",  "color": "#EF5F8C", "scale": 1.0 }
+  }
 }
 ```
 
