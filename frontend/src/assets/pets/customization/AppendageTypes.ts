@@ -12,89 +12,11 @@
  *
  * `floppiness` scales how far a part lags behind the body. `weight` scales how
  * long it keeps moving afterwards.
+ *
+ * Ears used to live here too. They grew into the largest identity library in
+ * the project and moved to ./EarTypes; they are re-exported at the bottom so
+ * "appendages" still means all three.
  */
-
-// --- Ears -------------------------------------------------------------------
-
-export const EAR_TYPES = {
-  /** Long upright rabbit ears. */
-  bunny: {
-    label: 'Bunny',
-    widthMul: 0.42,
-    heightMul: 1.9,
-    /** Rest angle outward from vertical, radians. */
-    tilt: 0.14,
-    /** How far the tip bends over. */
-    droop: 0.1,
-    /** Inner-ear shape coverage, 0 = none. */
-    inner: 0.62,
-    floppiness: 1.5,
-    weight: 0.8,
-    /** Drawn behind the body rather than on top of it. */
-    behind: false,
-  },
-  none: {
-    label: 'None',
-    widthMul: 0, heightMul: 0, tilt: 0, droop: 0, inner: 0,
-    floppiness: 0, weight: 1, behind: false,
-  },
-  /** Pointed cat/fox triangles. */
-  cat: {
-    label: 'Cat',
-    widthMul: 0.78, heightMul: 0.78, tilt: 0.3, droop: 0, inner: 0.6,
-    floppiness: 0.7, weight: 1, behind: false,
-  },
-  /** Big round bear/pig discs. */
-  round: {
-    label: 'Round',
-    widthMul: 0.95, heightMul: 0.9, tilt: 0.5, droop: 0.04, inner: 0.58,
-    floppiness: 0.8, weight: 1.1, behind: true,
-  },
-  /** Long and hanging down beside the cheeks. */
-  floppy: {
-    label: 'Floppy',
-    widthMul: 0.72, heightMul: 1.35, tilt: 1.15, droop: 0.7, inner: 0.4,
-    floppiness: 2, weight: 0.7, behind: true,
-  },
-  /** Thin stalks with a bobble — insects and antennae. */
-  antenna: {
-    label: 'Antennae',
-    widthMul: 0.2, heightMul: 1.5, tilt: 0.36, droop: 0.28, inner: 0,
-    floppiness: 2.4, weight: 0.5, behind: false,
-  },
-  /** Curved horns. Does not flop; it is bone. */
-  horns: {
-    label: 'Horns',
-    widthMul: 0.4, heightMul: 1.05, tilt: 0.42, droop: 0, inner: 0,
-    floppiness: 0.15, weight: 1.6, behind: false,
-  },
-  /** Side fins, low on the head. */
-  fins: {
-    label: 'Fins',
-    widthMul: 1.05, heightMul: 0.55, tilt: 1.35, droop: 0, inner: 0.5,
-    floppiness: 1.1, weight: 0.9, behind: true,
-  },
-} as const;
-
-export type EarType = keyof typeof EAR_TYPES;
-
-export interface EarShape {
-  label: string;
-  widthMul: number;
-  heightMul: number;
-  tilt: number;
-  droop: number;
-  inner: number;
-  floppiness: number;
-  weight: number;
-  behind: boolean;
-}
-
-export function getEarShape(type: EarType): EarShape {
-  return EAR_TYPES[type];
-}
-
-export const EAR_TYPE_KEYS = Object.keys(EAR_TYPES) as EarType[];
 
 // --- Wings ------------------------------------------------------------------
 
@@ -219,3 +141,12 @@ export function getTailShape(type: TailType): TailShape {
 }
 
 export const TAIL_TYPE_KEYS = Object.keys(TAIL_TYPES) as TailType[];
+
+/* Ears are their own system now — see ./EarTypes. */
+export {
+  EAR_TYPES,
+  EAR_TYPE_KEYS,
+  earSideVariation,
+  getEarShape,
+} from './EarTypes';
+export type { EarKind, EarShape, EarType } from './EarTypes';

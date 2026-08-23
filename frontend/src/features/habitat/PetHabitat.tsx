@@ -4,7 +4,7 @@ import { PetRoom } from '../../scenes/PetRoom';
 import type { RoomStatus } from '../../scenes/PetRoom';
 import type { ObjectType } from '../../assets/objects/ObjectRenderer';
 import type { PetAppearance } from '../../assets/pets/customization/PetAppearance';
-import { LANES } from '../../world/Lanes';
+import { cellLabel } from '../../world/FloorGrid';
 import {
   AMBIENCE_LIST,
   DEFAULT_AMBIENCE,
@@ -86,16 +86,16 @@ export function PetHabitat({
     ambience: DEFAULT_AMBIENCE,
     tint: DEFAULT_ROOM_TINT,
     holding: null,
-    holdingLane: null,
+    holdingCell: null,
   });
 
   const field = toCssHex(fieldFor(ambience, tint));
 
-  // Which row of the room the thing in your hand is over. The floor says this
+  // Which tile of the floor the thing in your hand is over. The floor says this
   // too, in the guide under the pointer; saying it in words as well is what
   // makes the room's depth learnable rather than merely visible.
-  const laneLabel = status.holdingLane
-    ? LANES.find((lane) => lane.id === status.holdingLane)?.label
+  const placementLabel = status.holdingCell
+    ? cellLabel(status.holdingCell)
     : null;
 
   // --- Mount the world -----------------------------------------------------
@@ -235,9 +235,9 @@ export function PetHabitat({
             <span className="text-xs text-muted-foreground">is {status.mood}</span>
           </div>
           <div className="flex items-center gap-2">
-            {laneLabel ? (
+            {placementLabel ? (
               <span className="rounded-full bg-primary/15 px-2.5 py-1 text-[0.65rem] font-medium tracking-wide text-primary uppercase">
-                {laneLabel}
+                {placementLabel}
               </span>
             ) : null}
             <span

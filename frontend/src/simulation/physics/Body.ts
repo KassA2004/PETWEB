@@ -37,6 +37,8 @@ export interface BodyOptions {
   solidity?: Solidity;
   /** How tall a ledge this body steps onto instead of bumping into. */
   stepHeight?: number;
+  /** Fixed in space — wall decor. Gravity does not apply. */
+  anchored?: boolean;
   neverSleeps?: boolean;
   userData?: unknown;
 }
@@ -72,6 +74,7 @@ export function createBody(options: BodyOptions): PhysicsBody {
     neverSleeps: options.neverSleeps ?? type === 'character',
 
     held: false,
+    anchored: options.anchored ?? false,
     stepHeight: options.stepHeight ?? 0,
 
     solidity: options.solidity ?? 'solid',

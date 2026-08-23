@@ -11,10 +11,16 @@ model Pet {
   personalityData Json
   stateData       Json
   createdAt       DateTime @default(now())
+  /// Bumped whenever the appearance or the name changes, so the client can
+  /// show "saved a minute ago" without keeping its own clock.
+  updatedAt       DateTime @default(now()) @updatedAt
 
-  owner       User        @relation(fields: [ownerId], references: [id])
+  owner       User        @relation(fields: [ownerId], references: [id], onDelete: Cascade)
   environment Environment @relation(fields: [environmentId], references: [id])
   memories    Memory[]
+
+  /// The users who currently have this pet selected. At most one, by construction.
+  activeFor User[] @relation("ActivePet")
 
   @@index([ownerId])
   @@index([environmentId])

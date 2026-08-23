@@ -72,7 +72,6 @@ import type {
   Vec3,
 } from '../simulation/physics';
 import {
-  ROOM_WIDTH,
   SCREEN_HEIGHT,
   SCREEN_WIDTH,
   heightAt,
@@ -82,8 +81,13 @@ import {
   unprojectGround,
   unprojectX,
 } from '../world/Projection';
-import { LANES, snapToLane } from '../world/Lanes';
-import type { LaneId } from '../world/Lanes';
+import {
+  GRID_COLUMNS,
+  cellAt,
+  cellCenter,
+  rowForBand,
+  snapToGrid,
+} from '../world/FloorGrid';
 import { DEFAULT_ENVIRONMENT } from '../world/environments';
 import type { EnvironmentDefinition, PlacedProp } from '../world/environments';
 import {
@@ -191,7 +195,13 @@ export interface RoomStatus {
   /** What the pointer currently has hold of. */
   holding: 'pet' | 'prop' | null;
   /** Which row of the room the held thing is over, for the interface. */
-  holdingLane: LaneId | null;
+  /**
+   * Which tile of the floor grid the carried thing is over.
+   *
+   * Null when nothing is being carried, and null while something is being held
+   * above the back wall, where there is no floor under it to name.
+   */
+  holdingCell: { row: number; col: number } | null;
 }
 
 export interface PetRoomOptions {
@@ -795,6 +805,10 @@ export class PetRoom {
         // a plant.
         solidity: traits.solidity ?? 'solid',
         surface: surface ?? null,
+        // Wall decor is the one thing in the room that is legitimately in
+        // mid-air, so it is exempt from the check that drops unsupported
+        // furniture back onto whatever is under it.
+        anchored: traits.mount !== undefined,
       }),
     );
 
@@ -834,13 +848,20 @@ export class PetRoom {
 
     const traits = getObjectTraits(type);
     const mounted = traits.mount !== undefined;
-    const lane = LANES.find((row) => row.id === (traits.lane ?? 'front')) ?? LANES[2];
+
+    // A new object lands on a tile: the row its type prefers, and a column
+    // somewhere across the middle of the room. Explicit coordinates from the
+    // caller win, and are snapped like any other placement.
+    const home = cellCenter(
+      Math.floor(GRID_COLUMNS * (0.3 + Math.random() * 0.4)),
+      rowForBand(traits.home ?? 'front'),
+    );
 
     const entity = this.addProp({
       id,
       definition: { type, seed: id.length * 7 + 3 },
-      x: options.x ?? ROOM_WIDTH * 0.32 + Math.random() * ROOM_WIDTH * 0.36,
-      z: options.z ?? (mounted ? 8 : lane.z + (Math.random() - 0.5) * 40),
+      x: options.x ?? home.x,
+      z: options.z ?? (mounted ? 8 : home.z),
     });
 
     if (mounted) return;
@@ -1102,10 +1123,19 @@ export class PetRoom {
     const spanX = halfX(body.collider);
     const spanZ = halfZ(body.collider);
 
+    // Snapped to a tile of the floor grid in both axes, then clamped by the
+    // body's own footprint — a bed set down against the right wall should stop
+    // with its edge against it rather than with half of it through the plaster.
+    const snapped = snapToGrid(body.position.x, body.position.z);
+
     const inside = {
-      x: clamp(body.position.x, bounds.minX + spanX, Math.max(bounds.minX + spanX, bounds.maxX - spanX)),
+      x: clamp(
+        snapped.x,
+        bounds.minX + spanX,
+        Math.max(bounds.minX + spanX, bounds.maxX - spanX),
+      ),
       z: clamp(
-        snapToLane(body.position.z),
+        snapped.z,
         bounds.minZ + spanZ,
         Math.max(bounds.minZ + spanZ, bounds.maxZ - spanZ),
       ),
@@ -1999,6 +2029,19 @@ export class PetRoom {
     );
   }
 
+  /**
+   * Which tile a carried body is over.
+   *
+   * Nothing while it is lifted past the back wall: at that point the pointer is
+   * choosing a height rather than a place on the floor, and naming a tile there
+   * would be inventing an answer.
+   */
+  private holdingCell(body: PhysicsBody): { row: number; col: number } | null {
+    if (body.position.z <= this.world.bounds.minZ + 1) return null;
+    const cell = cellAt(body.position.x, body.position.z);
+    return { row: cell.row, col: cell.col };
+  }
+
   private emitStatus(mood?: string, behavior?: PetBehavior): void {
     if (!this.onStatus) return;
 
@@ -2011,9 +2054,7 @@ export class PetRoom {
       ambience: this.mood.ambience.id,
       tint: this.mood.tint,
       holding: this.grabbed ? (this.grabbed.id === 'pet' ? 'pet' : 'prop') : null,
-      holdingLane: held
-        ? (LANES.find((lane) => held.position.z < lane.to) ?? LANES[2]).id
-        : null,
+      holdingCell: held ? this.holdingCell(held) : null,
     };
 
     const previous = this.lastStatus;
@@ -2025,7 +2066,8 @@ export class PetRoom {
       previous.ambience === next.ambience &&
       previous.tint === next.tint &&
       previous.holding === next.holding &&
-      previous.holdingLane === next.holdingLane
+      previous.holdingCell?.row === next.holdingCell?.row &&
+      previous.holdingCell?.col === next.holdingCell?.col
     ) {
       return;
     }

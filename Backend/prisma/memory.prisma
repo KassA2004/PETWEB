@@ -12,7 +12,8 @@ model Memory {
   createdAt   DateTime @default(now())
 
   owner User @relation(fields: [ownerId], references: [id])
-  pet   Pet  @relation(fields: [petId], references: [id])
+  // Deleting a pet takes its memories with it (03-pet-endpoints.md §9).
+  pet   Pet  @relation(fields: [petId], references: [id], onDelete: Cascade)
 
   @@index([ownerId])
   @@index([petId])

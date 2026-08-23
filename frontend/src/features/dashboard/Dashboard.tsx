@@ -1,7 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { createAccessoryConfig } from '../../assets/pets/customization/AccessoryTypes';
-import { createPetAppearance } from '../../assets/pets/customization/PetAppearance';
-import type { PetAppearance } from '../../assets/pets/customization/PetAppearance';
 import { Tabs } from '../../components/ui/tabs';
 import type { TabItem } from '../../components/ui/tabs';
 import { UserBadge } from '../auth/UserBadge';
@@ -10,6 +8,8 @@ import { GoalsPanel } from '../goals/GoalsPanel';
 import { PetHabitat } from '../habitat/PetHabitat';
 import type { Placement } from '../habitat/PetHabitat';
 import { InventoryPanel } from '../inventory/InventoryPanel';
+import { PetLibraryPanel } from '../pets/PetLibraryPanel';
+import { usePetLibrary } from '../pets/usePetLibrary';
 import {
   SEED_GOALS,
   SEED_INVENTORY,
@@ -26,9 +26,10 @@ import type { Goal, InventoryItem } from '../../lib/mock/world';
  * something the page is. Everything shares one appearance object: the
  * customizer writes it, the inventory writes it, and the habitat renders it.
  *
- * State is local and in-memory — the goals and inventory endpoints do not
- * exist yet, and this is deliberately the mock that proves what they need to
- * return.
+ * That object now belongs to `usePetLibrary`, which loads the creature the user
+ * last had selected and can save it back. Goals and inventory are still local
+ * and in-memory — those endpoints do not exist yet, and this is deliberately
+ * the mock that proves what they need to return.
  */
 
 type TabValue = 'goals' | 'inventory' | 'style';
@@ -37,20 +38,22 @@ type TabValue = 'goals' | 'inventory' | 'style';
 const INITIAL_PLACEMENTS: Placement[] = [];
 
 export function Dashboard() {
-  const [appearance, setAppearance] = useState<PetAppearance>(() =>
-    createPetAppearance(),
-  );
-  const [petName, setPetName] = useState('Blorb');
+  // The creature, its saved presets, and which one is selected. Survives a
+  // reload and a fresh sign-in, which local state never did.
+  const library = usePetLibrary();
+  const {
+    appearance,
+    name: petName,
+    updateAppearance,
+    setName: setPetName,
+  } = library;
+
   const [goals, setGoals] = useState<Goal[]>(SEED_GOALS);
   const [inventory, setInventory] = useState<InventoryItem[]>(SEED_INVENTORY);
   const [placements, setPlacements] = useState<Placement[]>(INITIAL_PLACEMENTS);
   const [tab, setTab] = useState<TabValue>('goals');
   const [celebrate, setCelebrate] = useState(0);
   const [toast, setToast] = useState<string | null>(null);
-
-  const updateAppearance = useCallback((patch: Partial<PetAppearance>) => {
-    setAppearance((current) => createPetAppearance({ ...current, ...patch }));
-  }, []);
 
   // --- Goals ---------------------------------------------------------------
   const addGoal = (title: string) => {
@@ -208,12 +211,15 @@ export function Dashboard() {
             )}
 
             {tab === 'style' && (
-              <CustomizerPanel
-                appearance={appearance}
-                onChange={updateAppearance}
-                petName={petName}
-                onPetNameChange={setPetName}
-              />
+              <div className="space-y-4">
+                <PetLibraryPanel library={library} />
+                <CustomizerPanel
+                  appearance={appearance}
+                  onChange={updateAppearance}
+                  petName={petName}
+                  onPetNameChange={setPetName}
+                />
+              </div>
             )}
           </div>
         </aside>

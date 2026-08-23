@@ -8,24 +8,36 @@
  * that is — otherwise picking a chair up and putting it down is a guess, and
  * the room slowly fills with furniture nobody meant to arrange that way.
  *
- * Three things appear while something is being carried, and nothing appears
+ * Four things appear while something is being carried, and nothing appears
  * when it is not:
  *
- *   the band     the depth row under the pointer, brightened across the floor
- *   the ring     an ellipse on the floor exactly where the thing will land,
- *                drawn in perspective, so it is visibly a circle lying flat
+ *   the tile     the square of floor the thing will land on, filled in
+ *                perspective, so it is visibly one tile of the grid already
+ *                drawn into the floor
+ *   the row      the rest of that depth row, brightened much more faintly, so
+ *                depth still reads at a glance without hunting for the tile
+ *   the ring     an ellipse exactly where the thing will come down, drawn flat
  *   the tether   a line from the ring up to the carried object, because the
  *                object is above the floor and the eye needs the two joined
  *
- * Together they answer "how far into the room is this" before the drop, which
+ * Together they answer "where in the room is this going" before the drop, which
  * is the only moment at which the answer is worth anything.
  */
 
 import { Container, Graphics } from 'pixi.js';
 import { PALETTE, mix } from '../../assets/shared/color';
-import { LANES, laneAt } from '../../world/Lanes';
+import {
+  GRID_ROWS,
+  TILE_DEPTH,
+  cellAt,
+  cellCenter,
+  tilePolygon,
+} from '../../world/FloorGrid';
+import type { GridCell } from '../../world/FloorGrid';
 import { ROOM_WIDTH, floorLine, project, scaleAt } from '../../world/Projection';
-import type { Lane } from '../../world/Lanes';
+
+/** Where the row-pip column sits, so the room can keep it clear of props. */
+export const GUIDE_MARGIN_X = ROOM_WIDTH * 0.045;
 
 export interface DepthTarget {
   /** Where on the floor the carried thing will come down. */
@@ -45,11 +57,16 @@ export interface DepthGuideView {
   update(target: DepthTarget | null, dt: number): void;
 }
 
-/** The floor quad for one lane, as a flat screen-space polygon. */
-function lanePolygon(lane: Lane): number[] {
-  const back = floorLine(lane.from);
-  const front = floorLine(lane.to);
-  return [back[0].x, back[0].y, back[1].x, back[1].y, front[1].x, front[1].y, front[0].x, front[0].y];
+/** One depth row as a flat screen-space polygon spanning the whole floor. */
+function rowPolygon(row: number): number[] {
+  const back = floorLine(row * TILE_DEPTH);
+  const front = floorLine((row + 1) * TILE_DEPTH);
+  return [
+    back[0].x, back[0].y,
+    back[1].x, back[1].y,
+    front[1].x, front[1].y,
+    front[0].x, front[0].y,
+  ];
 }
 
 export function createDepthGuide(): DepthGuideView {
@@ -58,43 +75,48 @@ export function createDepthGuide(): DepthGuideView {
   root.alpha = 0;
   root.eventMode = 'none';
 
-  // One pre-drawn highlight per lane; only the active one is ever visible, so
-  // nothing is redrawn while the pointer moves.
-  const bands = new Map<string, Graphics>();
+  // One pre-drawn wash per row; only the active one is ever visible, so nothing
+  // in this layer is redrawn while the pointer moves along a row.
+  const rowWashes: Graphics[] = [];
 
-  for (const lane of LANES) {
-    const band = new Graphics();
-    band.poly(lanePolygon(lane));
-    band.fill({ color: PALETTE.cream, alpha: 0.12 });
-
-    const [edgeLeft, edgeRight] = floorLine(lane.from === 0 ? 1 : lane.from);
-    band.moveTo(edgeLeft.x, edgeLeft.y);
-    band.lineTo(edgeRight.x, edgeRight.y);
-    band.stroke({ color: PALETTE.cream, width: 3, alpha: 0.35 });
-
-    band.visible = false;
-    root.addChild(band);
-    bands.set(lane.id, band);
+  for (let row = 0; row < GRID_ROWS; row++) {
+    const wash = new Graphics();
+    wash.poly(rowPolygon(row));
+    wash.fill({ color: PALETTE.cream, alpha: 0.09 });
+    wash.visible = false;
+    root.addChild(wash);
+    rowWashes.push(wash);
   }
 
-  // The row pips: three marks stacked up the left edge of the floor, the
-  // active one filled. A wordless answer to "which row is this".
+  // The tile itself has to be redrawn, because it moves in two axes rather than
+  // one and pre-drawing every cell would be dozens of Graphics for the sake of
+  // one that is visible.
+  const tile = new Graphics();
+  root.addChild(tile);
+
+  // The row pips: one mark per depth row stacked up the left edge of the floor,
+  // the active one filled. A wordless answer to "how far back is this".
   const pips = new Container();
-  const pipShapes = LANES.map((lane) => {
-    const at = project(60, 0, lane.z);
+  const pipShapes = Array.from({ length: GRID_ROWS }, (_, row) => {
+    const centre = cellCenter(0, row);
+    const at = project(GUIDE_MARGIN_X, 0, centre.z);
     const shape = new Graphics();
-    shape.circle(at.x, at.y, 7 * scaleAt(lane.z));
+    const radius = 6 * scaleAt(centre.z);
+
+    shape.circle(at.x, at.y, radius);
     shape.fill({ color: PALETTE.cream, alpha: 0.28 });
-    shape.circle(at.x, at.y, 7 * scaleAt(lane.z));
+    shape.circle(at.x, at.y, radius);
     shape.stroke({ color: PALETTE.ink, width: 1.5, alpha: 0.25 });
+
     pips.addChild(shape);
-    return { lane, shape };
+    return shape;
   });
   root.addChild(pips);
 
   const marker = new Graphics();
   root.addChild(marker);
 
+  let drawnCell: GridCell | null = null;
   let shown = false;
 
   return {
@@ -108,10 +130,22 @@ export function createDepthGuide(): DepthGuideView {
 
       if (!target || !shown) return;
 
-      const lane = laneAt(target.z);
-      for (const [id, band] of bands) band.visible = id === lane.id;
-      for (const pip of pipShapes) {
-        pip.shape.alpha = pip.lane.id === lane.id ? 1 : 0.35;
+      const cell = cellAt(target.x, target.z);
+
+      // Redraw the tile only when the pointer actually crosses into a new one.
+      if (!drawnCell || drawnCell.col !== cell.col || drawnCell.row !== cell.row) {
+        drawnCell = cell;
+
+        tile.clear();
+        tile.poly(tilePolygon(cell));
+        tile.fill({ color: PALETTE.cream, alpha: 0.24 });
+        tile.poly(tilePolygon(cell));
+        tile.stroke({ color: PALETTE.cream, width: 2.5, alpha: 0.85 });
+
+        for (let row = 0; row < GRID_ROWS; row++) {
+          rowWashes[row].visible = row === cell.row;
+          pipShapes[row].alpha = row === cell.row ? 1 : 0.35;
+        }
       }
 
       const scale = scaleAt(target.z);
@@ -141,6 +175,3 @@ export function createDepthGuide(): DepthGuideView {
     },
   };
 }
-
-/** Where the row-pip column sits, so the room can keep it clear of props. */
-export const GUIDE_MARGIN_X = ROOM_WIDTH * 0.06;

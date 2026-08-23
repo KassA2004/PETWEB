@@ -25,8 +25,51 @@ appearance on user edit, personality almost never, state continuously.
 | 8 | `GET` | `/pets/:petId/state` | `[MVP]` | Last persisted state snapshot |
 | 9 | `PATCH` | `/pets/:petId/state` | `[MVP]` | Persist a state snapshot |
 | 10 | `POST` | `/pets/:petId/interactions` | `[MVP]` | Record a user interaction, get a reaction |
-| 11 | `GET` | `/pets/species` | `[MVP]` | Base species / rig preset catalog |
+| 11 | `GET` | `/pets/species` | `[LATER]` | Base species / rig preset catalog |
 | 12 | `PUT` | `/pets/:petId/personality` | `[LATER]` | Replace personality traits |
+| 13 | `GET` | `/pets/active` | `[MVP]` | The pet the user currently has selected |
+| 14 | `PUT` | `/pets/active` | `[MVP]` | Select which saved pet is live |
+
+---
+
+## 1a. Saved presets — deviation from this document
+
+This package originally capped a user at **one** pet. The product needs saved
+**presets**: a user builds a creature in the editor, names it, keeps it, and
+comes back to it later. So:
+
+* the one-pet cap is **gone**. `409 PET_LIMIT_REACHED` is not implemented.
+* `User.activePetId` records which saved pet is live
+  (`/Docs/InitialDB-plan.md` §1). It is what makes a creature survive a reload
+  and a fresh sign-in, which is the whole point of saving one.
+* `POST /pets` **selects** the pet it just created — you pressed Save because
+  this is the creature you are making.
+* `DELETE /pets/:petId` returns `200` with the remaining library rather than
+  `204`, because deleting can change which pet is selected and the client would
+  otherwise have to guess or refetch. It also does **not** require the name
+  echoed back; the client confirms in place, and a typed-name confirmation for
+  a preset you can rebuild in thirty seconds is friction without a benefit.
+
+Endpoints 8, 10 and 11 (`state`, `interactions`, `species`) are not implemented
+yet — the simulation is still entirely client-side and there is no species
+catalog to serve.
+
+### `GET /pets/active`
+
+`200` → the same full pet object as `GET /pets/:petId`, or an empty body when
+the user has not chosen one.
+
+### `PUT /pets/active`
+
+```json
+{ "petId": "9a1f..." }
+```
+
+`petId: null` clears the selection. `200` → `{ "pets": [...], "activePetId": "9a1f..." }`,
+which is also the shape `GET /pets` returns.
+
+Errors: `404 NOT_FOUND` when the pet is not the caller's — deliberately not
+`403`, so the API never confirms that an id exists.
 
 ---
 
@@ -96,8 +139,26 @@ so the literal segment is not captured as a UUID param.
 | `name` | string | 1–32 chars, required |
 | `species` | string | must exist in `/pets/species` |
 | `environmentId` | UUID | optional — defaults to the user's first environment |
-| `appearanceData` | object | validated against the rig schema (`pet-anatomy.md` §7); each numeric parameter clamped to `0.25`–`3.0`. `accessories` is keyed by slot (`head`/`face`/`neck`), at most one item per slot (`pet-anatomy.md` §18) |
-| `personalityData` | object | five traits, each `0.0`–`1.0`; omitted traits are randomized |
+| `appearanceData` | object | see the validation note below |
+| `personalityData` | object | not accepted — the backend seeds all five traits |
+
+**Appearance validation, as built.** The rig lives entirely in the frontend, and
+so does the constraint table that decides what a valid eye spacing is
+(`frontend/src/assets/pets/customization/PetConstraints.ts`). Mirroring forty
+field ranges into the backend would put the same rules in two places and
+guarantee they drift — silently, and in the worst direction: the server would
+start rejecting creatures the editor was happily drawing.
+
+So the backend enforces the properties it is genuinely the right place to
+enforce — the payload is a JSON object, under 16 KB, nested no more than four
+deep, and every number in it is finite and under 1e9 — and stores it verbatim.
+The client re-clamps on read, which doubles as the migration path: a preset
+saved before the mouth library existed still loads, it just gets the default
+mouth (`Backend/src/pets/pet-appearance.ts`).
+
+`species` is **not** accepted either — it is derived from the appearance's body
+type, because with one standardized rig (`pet-anatomy.md` §6) species is a label
+rather than a structure.
 
 `stateData` is **not** accepted on create — the backend seeds it:
 
@@ -107,8 +168,11 @@ so the literal segment is not captured as a UUID param.
 
 `201` → full pet object.
 
-Errors: `422 VALIDATION_FAILED`, `404 ENVIRONMENT_NOT_FOUND`, `409 PET_LIMIT_REACHED`
-(the MVP caps a user at **one** pet; the cap lives in config, not in the schema).
+Errors: `422 VALIDATION_FAILED` (name, or a non-object appearance),
+`400 BAD_REQUEST` (an appearance that is too large, too deep, or contains a
+number that is not one), `404 NOT_FOUND` (an environment that is not the
+caller's). `environmentId` defaults to the user's first room, which sign-up
+always creates.
 
 ---
 

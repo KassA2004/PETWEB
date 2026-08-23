@@ -1,4 +1,3 @@
-````md
 # PET ANATOMY & PROCEDURAL CHARACTER SYSTEM
 
 ## 1. Purpose
@@ -21,8 +20,10 @@ Every creature must remain compatible with the same fundamental anatomy and anim
 
 The creature is a **blob**: one soft mass with a face on it.
 
-It is not an animal. It has no head, no neck, no ears and no tail. Trying to
-give it those things is what turns a blob back into a generic cartoon pet.
+It has no head and no neck — the face sits directly on the mass — and no arms.
+What it does have is one set of appendages growing out of the silhouette: ears,
+wings and a tail (§17). Those are where its identity lives, and they attach to
+the mass rather than to a skeleton it does not have.
 
 The creatures should have:
 
@@ -239,16 +240,19 @@ interface PetBodyParameters {
   bodyScale: number;   // overall size
   bodyWidth: number;   // the "how fat" dial, independent of size
   bodyHeight: number;
+  asymmetry: number;   // 0 machined, 1 hand-drawn — the "wonk" dial
   eyeScale: number;
   eyeSpacing: number;
   eyeHeight: number;   // where the eyes sit on the mass, 0 high .. 1 low
+  pupilScale: number;  // multiplier on the eye preset's own pupil
+  eyeTilt: number;     // extra rotation; inward reads angry, outward sad
   earScale: number;
   earSpread: number;
   wingScale: number;
   tailScale: number;
   footScale: number;
   restingMood: number; // -1 permanently unimpressed .. +1 permanently pleased
-  fangs: number;
+  fangs: number;       // tooth size, not a toggle — `teethType` is the toggle
 }
 ```
 
@@ -257,6 +261,12 @@ whether a creature reads as a baby (large eyes, low on the face) or as a threat
 (small eyes, high on the face). `restingMood` is the personality the expression
 system blends every feeling out of. Together with brow shape and `fangs`, they
 are what the Cuteness dial actually moves.
+
+Note that only *numbers* are listed here. The choices — which body profile,
+which ear kind, which eye preset, which mouth shape language — are separate
+enum fields, and the two are clamped differently: absolute ranges on the
+numbers, dependent constraints resolved in pixel space
+(/Docs/theme-and-design.md §12.2).
 
 A pet could therefore have:
 
@@ -561,13 +571,21 @@ Blink
 
 This allows the pet to appear responsive without requiring unique animation assets.
 
-Each eye is built the same way regardless of type:
+Each eye is built the same way regardless of type, inside a container **masked
+by the eye's own outline**:
 
 ```text
-pupil   the dark shape. Slides a few pixels to look around.
+sclera  white, or the dark of a solid eye
+pupil   iris, pupil and glints. Slides within the range the eye publishes.
 lid     coat-colored cover, scaled 0 (open) to 1 (shut).
+lower   lower lid, rising to meet the upper one on a full close.
 lash    a curve riding the lid's lower edge, so a shut eye reads as shut.
 ```
+
+The mask is what makes the pupil problem disappear: a pupil cannot leave an eye
+it is drawn inside of, and a lid takes the shape of whichever eye it is closing.
+Eye *presets* live in `customization/EyeTypes.ts` and are pure data
+(/Docs/theme-and-design.md §11.6).
 
 ---
 
@@ -982,5 +1000,60 @@ Visible Creature
 
 This allows the project to create a large variety of cute and absurd creatures without creating a separate character model and animation system for every pet.
 
+---
+
+# 27. Where The Code Lives
+
+One responsibility per file. Definitions are data; renderers are code; nothing
+is both.
+
+```text
+src/assets/shared/
+  geometry.ts          smooth paths, width profiles, ribbons, spines
+  shapes.ts            squircle, organic oval, capsule, rng, easing
+  color.ts             palette, tone ramps, mixing
+
+src/assets/pets/
+  PetRenderer.ts       public entry point: appearance in, display object out
+  anatomy/
+    PetRig.ts          the standardized skeleton and its draw order
+    joints.ts          the transform layer animation talks to
+    proportions.ts     every measurement, and where dependent constraints land
+  customization/       ALL DATA — adding content means adding a row here
+    BodyTypes.ts       width profiles
+    FootTypes.ts       foot kinds
+    EarTypes.ts        ear kinds, tapers, bends
+    AppendageTypes.ts  wings and tails (re-exports ears)
+    EyeTypes.ts        the eye library
+    BrowTypes.ts       brow shapes and their resting attitudes
+    MouthTypes.ts      mouth shape languages
+    TeethTypes.ts      tooth sets, described numerically
+    CheekTypes.ts      blush shapes
+    SnoutTypes.ts      noses, muzzles, beaks
+    FaceTypes.ts       barrel over the five face libraries
+    Patterns.ts        markings
+    AccessoryTypes.ts  hats, eyewear, neckwear
+    TopperTypes.ts     the thing on top
+    PetAppearance.ts   the serializable configuration + absolute clamping
+    PetConstraints.ts  every limit in the system, absolute and dependent
+    Archetypes.ts      hand-tuned starting points and the seeded randomizer
+  parts/               ALL RENDERING — one renderer per part, no per-type switches
+    BodySilhouette.ts  the outline everything else defers to
+    Body.ts            assembly: feet, coat, shading, markings
+    Foot.ts            per-kind foot outlines
+    Ear.ts             one renderer for every ear kind
+    Eye.ts, EyeShapes.ts
+    Brow.ts, Cheek.ts, Snout.ts
+    Mouth.ts, Teeth.ts
+    Face.ts            assembly and draw order
+    Tail.ts, Wing.ts, Topper.ts, Accessory.ts
+
+src/animation/expression/
+  Expression.ts        the emotion table — twelve numbers per feeling
+  FaceDriver.ts        applies those numbers as OFFSETS from the design
 ```
-```
+
+The rule that keeps this maintainable: **a part renderer must not switch on a
+type name.** If it has to, the preset shape is missing a field. Adding a
+thirteenth ear should be a row of data, not an edit to `Ear.ts`.
+

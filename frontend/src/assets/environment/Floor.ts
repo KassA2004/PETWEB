@@ -13,8 +13,14 @@
 
 import { Container, Graphics } from 'pixi.js';
 import { PALETTE, darken, lighten, outline } from '../shared/color';
-import { LANES } from '../../world/Lanes';
-import { ROOM_DEPTH, ROOM_WIDTH, floorLine, project } from '../../world/Projection';
+import {
+  GRID_COLUMNS,
+  GRID_ROWS,
+  TILE_DEPTH,
+  TILE_WIDTH,
+  columnLine,
+} from '../../world/FloorGrid';
+import { ROOM_DEPTH, floorLine } from '../../world/Projection';
 
 export interface FloorOptions {
   color?: number;
@@ -57,29 +63,31 @@ export function createFloor(options: FloorOptions = {}): Container {
   band(shading, ROOM_DEPTH - 110, ROOM_DEPTH, lighten(color, 0.1), 0.35);
   root.addChild(shading);
 
-  // Lane seams: the room's depth ruler.
-  const seams = new Graphics();
-  for (const lane of LANES) {
-    if (lane.from <= 0) continue;
-    const [left, right] = floorLine(lane.from);
-    seams.moveTo(left.x, left.y);
-    seams.lineTo(right.x, right.y);
+  // The placement grid, drawn into the floor itself. This is the room's ruler:
+  // it is what makes depth legible with nothing in the room at all, and it is
+  // the same grid a dropped object snaps to, so what you see is what you get.
+  //
+  // Rows read stronger than columns on purpose. Depth is the axis the eye finds
+  // hard and the axis the pointer is worst at, so the lines that answer "how far
+  // back is this" are the ones worth drawing clearly; the columns only need to
+  // be present enough to make the tiles read as tiles.
+  const rows = new Graphics();
+  for (let i = 1; i < GRID_ROWS; i++) {
+    const [left, right] = floorLine(i * TILE_DEPTH);
+    rows.moveTo(left.x, left.y);
+    rows.lineTo(right.x, right.y);
   }
-  seams.stroke({ color: outline(color, 0.3), width: 3, alpha: 0.28 });
-  root.addChild(seams);
+  rows.stroke({ color: outline(color, 0.3), width: 2.5, alpha: 0.26 });
+  root.addChild(rows);
 
-  // A handful of boards running into the room. Sparse on purpose: enough
-  // converging lines to sell the perspective, not so many it becomes a grid.
-  const boards = new Graphics();
-  for (let i = 1; i < 8; i++) {
-    const x = (ROOM_WIDTH / 8) * i;
-    const back = project(x, 0, 0);
-    const front = project(x, 0, ROOM_DEPTH);
-    boards.moveTo(back.x, back.y);
-    boards.lineTo(front.x, front.y);
+  const columns = new Graphics();
+  for (let i = 1; i < GRID_COLUMNS; i++) {
+    const [back, front] = columnLine(i * TILE_WIDTH);
+    columns.moveTo(back.x, back.y);
+    columns.lineTo(front.x, front.y);
   }
-  boards.stroke({ color: outline(color, 0.24), width: 2, alpha: 0.14 });
-  root.addChild(boards);
+  columns.stroke({ color: outline(color, 0.26), width: 2, alpha: 0.17 });
+  root.addChild(columns);
 
   return root;
 }

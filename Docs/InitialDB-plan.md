@@ -10,6 +10,12 @@ This document outlines the structured database for the digital pet simulation ap
 | `id` | UUID (PK) | Unique identifier for the user |
 | `username` | String | User's display name |
 | `email` | String | User's email address |
+| `activePetId` | UUID (FK, nullable) | Which saved pet the user is currently looking after. `ON DELETE SET NULL` |
+
+The active-pet pointer lives on the user rather than as an `isActive` flag on
+`Pet` so that "exactly one selected" is a property of the schema instead of
+something every write has to remember to maintain. It is what makes a creature
+survive a reload and a fresh sign-in.
 
 ### **Pet**
 | Field | Type | Description |
@@ -23,6 +29,15 @@ This document outlines the structured database for the digital pet simulation ap
 | `personalityData` | JSON | Stores personality attributes and modifiers |
 | `stateData` | JSON | Current live state (e.g., `{ "mood": "happy", "energy": 72, "activity": "playing" }`) |
 | `createdAt` | DateTime | Timestamp of pet creation |
+| `updatedAt` | DateTime | Last time the name or appearance changed |
+
+A user may have **many** pets: they are the saved presets the creature editor
+writes to, and `User.activePetId` says which one is live. This supersedes the
+one-pet-per-user cap in `/Docs/API-endpoints/03-pet-endpoints.md` §3 — see the
+deviation note there.
+
+`Memory.petId` and `Pet.ownerId` both cascade on delete, so removing a preset
+takes its memories with it and removing an account takes its pets.
 
 ### **Environment**
 | Field | Type | Description |

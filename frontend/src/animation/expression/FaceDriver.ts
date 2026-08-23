@@ -6,14 +6,24 @@
  * has to cooperate with whatever the current expression is doing to the same
  * lid — a sleeping creature must not blink its eyes open.
  *
+ * Every value written here is an **offset from the creature's design**, never a
+ * replacement for it:
+ *
+ *   lids     start from the eye preset's own resting coverage, so a Sleepy eye
+ *            is still half shut when the creature is delighted
+ *   pupils   move within the range that eye published, so they cannot escape
+ *   brows    rotate around the rest angle the brow type chose, so Angular brows
+ *            stay crosser than Worried ones at the same `browInner`
+ *   mouth    is handed a curve, not a shape; the design decides what that does
+ *
  * The driver eases toward its target rather than snapping, so an emotion
  * arriving looks like the creature reacting rather than a sprite swap.
  */
 
-import { darken, mix } from '../../assets/shared/color';
 import { clamp } from '../../assets/shared/shapes';
-import type { PetRig } from '../../assets/pets/anatomy/PetRig';
 import { createRng } from '../../assets/shared/shapes';
+import { mouthColors } from '../../assets/pets/parts/Face';
+import type { PetRig } from '../../assets/pets/anatomy/PetRig';
 import type { FaceParams } from './Expression';
 import { restingFace } from './Expression';
 
@@ -57,9 +67,11 @@ export class FaceDriver {
       mouthCurve: approach(this.current.mouthCurve, target.mouthCurve, rate),
       mouthOpen: approach(this.current.mouthOpen, target.mouthOpen, rate),
       mouthWidth: approach(this.current.mouthWidth, target.mouthWidth, rate),
+      mouthTwist: approach(this.current.mouthTwist, target.mouthTwist, rate),
       eyeOpen: approach(this.current.eyeOpen, target.eyeOpen, rate),
       eyeSquint: approach(this.current.eyeSquint, target.eyeSquint, rate),
       eyeWide: approach(this.current.eyeWide, target.eyeWide, rate),
+      eyeTilt: approach(this.current.eyeTilt, target.eyeTilt, rate),
       browInner: approach(this.current.browInner, target.browInner, rate),
       browRaise: approach(this.current.browRaise, target.browRaise, rate),
       blush: approach(this.current.blush, target.blush, rate),
@@ -109,53 +121,77 @@ export class FaceDriver {
 
   /** Write the current numbers onto the rig's face. */
   private apply(gaze: GazeTarget | null): void {
-    const { face, proportions, appearance } = this.rig;
+    const { face, joints, proportions, appearance } = this.rig;
     const params = this.current;
 
-    const closure = clamp(Math.max(1 - params.eyeOpen, this.blinkClosure()), 0, 1);
+    for (const side of ['left', 'right'] as const) {
+      const eye = side === 'left' ? face.eyeLeft : face.eyeRight;
+      const joint = side === 'left' ? joints.eyeLeft : joints.eyeRight;
+      const mirror = side === 'left' ? -1 : 1;
 
-    // The two lids are not allowed to meet in the middle. Left alone they
-    // leave a thin dark sliver that reads as a bow tie rather than as an eye,
-    // so the squint yields to whatever the upper lid is already doing.
-    const squint = clamp(params.eyeSquint, 0, Math.max(0, 1 - closure * 1.6));
+      // Widening the eyes lifts the design's resting lid out of the way, so a
+      // Sleepy-eyed creature can still look startled without losing its droop.
+      const restLid = eye.lidRest * clamp(2 - params.eyeWide, 0, 1);
+      const expressionLid = restLid + (1 - clamp(params.eyeOpen, 0, 1)) * (1 - restLid);
+      const closure = clamp(Math.max(expressionLid, this.blinkClosure()), 0, 1);
 
-    for (const eye of [face.eyeLeft, face.eyeRight]) {
+      // The lower lid joins in only over the last stretch of a close, and then
+      // rises to meet the upper one. Without it a fully shut eye shows a slice
+      // of sclera under the lid; with it the two meet on the closed-eye line.
+      const meeting = Math.max(0, (closure - 0.6) / 0.4);
+      const squint = clamp(Math.max(eye.lowerRest, params.eyeSquint, meeting), 0, 1);
+
       eye.lid.scale.y = closure;
       eye.lowerLid.scale.y = squint;
 
       eye.root.scale.set(clamp(params.eyeWide, 0.5, 1.6));
-      eye.pupil.scale.set(clamp(params.pupil, 0.6, 1.5));
+      eye.root.rotation = joint.rest.rotation + mirror * params.eyeTilt;
 
+      eye.pupil.scale.set(clamp(proportions.pupilScale * params.pupil, 0.25, 2.2));
+
+      // Gaze moves the pupil within the range its own eye shape allows, so it
+      // can never leave the eye however hard the creature stares.
       if (gaze) {
         eye.pupil.position.set(
-          clamp(gaze.x, -1, 1) * eye.radiusX * 0.3,
-          clamp(gaze.y, -1, 1) * eye.radiusY * 0.26,
+          eye.pupilRest.x + clamp(gaze.x, -1, 1) * eye.pupilRange.x,
+          eye.pupilRest.y + clamp(gaze.y, -1, 1) * eye.pupilRange.y,
         );
       } else {
-        eye.pupil.position.set(0, 0);
+        eye.pupil.position.set(eye.pupilRest.x, eye.pupilRest.y);
       }
     }
 
     // Brows: the inner end drops for anger and lifts for worry, and both rise
-    // together for surprise. Mirrored, so "inner" means inner on both sides.
+    // together for surprise. Added to the brow type's own rest angle, so a
+    // design that is already cross stays crosser.
     const browAngle = params.browInner * 0.5;
     const browLift = params.browRaise * proportions.browWidth * 0.24;
 
-    face.browLeft.rotation = browAngle;
-    face.browRight.rotation = -browAngle;
+    face.browLeft.rotation = joints.browLeft.rest.rotation + browAngle;
+    face.browRight.rotation = joints.browRight.rest.rotation - browAngle;
     face.browLeft.y = proportions.browLeftAnchor.y - browLift;
     face.browRight.y = proportions.browRightAnchor.y - browLift;
 
-    face.cheeks.alpha = clamp(appearance.blush * 0.5 * params.blush, 0, 0.85);
+    face.cheeks.alpha = clamp(
+      appearance.blush * face.cheekStrength * 0.6 * params.blush,
+      0,
+      0.92,
+    );
+
+    const colors = mouthColors(appearance);
 
     face.mouth.apply({
+      type: appearance.mouthType,
+      teeth: appearance.teethType,
       curve: params.mouthCurve,
       open: params.mouthOpen,
+      twist: params.mouthTwist,
       width: proportions.mouthWidth * params.mouthWidth,
       weight: proportions.mouthWeight,
       fangs: appearance.fangs,
-      color: darken(appearance.primaryColor, 0.62),
-      tongue: mix(appearance.accentColor, 0xff6b8a, 0.4),
+      color: colors.color,
+      tongue: colors.tongue,
+      seed: appearance.seed,
     });
   }
 }

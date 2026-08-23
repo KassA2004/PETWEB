@@ -188,6 +188,16 @@ export interface PhysicsBody {
   held: boolean;
 
   /**
+   * Fixed in space: gravity does not apply and nothing has to hold it up.
+   *
+   * For wall-hung decor, which is the one thing in the room that is legitimately
+   * in mid-air. Everything else that is off the ground is either falling, being
+   * carried, or standing on something — and if it is none of those, it is a bug
+   * (see `PhysicsWorld.settleUnsupported`).
+   */
+  anchored: boolean;
+
+  /**
    * How tall a ledge this body simply steps onto, rather than bumping into.
    *
    * Zero for everything but the creature. Without it a rug edge or a dropped

@@ -55,6 +55,8 @@ export function SliderRow({
 export interface ChipOption<T extends string> {
   value: T;
   label: string;
+  /** Shown on hover. The libraries carry a one-line description of each part. */
+  hint?: string;
 }
 
 interface ChipRowProps<T extends string> {
@@ -81,6 +83,7 @@ export function ChipRow<T extends string>({
               key={option.value}
               type="button"
               aria-pressed={selected}
+              title={option.hint}
               onClick={() => onChange(option.value)}
               className={cn(
                 'rounded-full border px-3 py-1.5 text-xs font-medium transition-colors outline-none',

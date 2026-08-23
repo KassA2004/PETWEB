@@ -5,22 +5,36 @@
  * serializable data that can live in the database (Pet.appearanceData), while
  * every drawing decision stays in frontend code.
  *
- * The design goal is combinatorial: parts are independent, so a body shape that
- * was authored for a chubby pig also has to survive bunny ears, bee wings and
+ * Everything here is **character design** — the persistent traits that decide
+ * who a creature looks like. What it is *feeling* is nowhere in this file. A
+ * mouth type, a set of teeth and a resting mood live here; a curve, an openness
+ * and a squint are computed every frame by the expression system
+ * (/src/animation/expression). That separation is the load-bearing idea in the
+ * whole character system: picking a `:3` mouth chooses a shape language, not a
+ * permanent smile.
+ *
+ * The design goal is combinatorial: parts are independent, so a body shape
+ * authored for a chubby pig also has to survive bunny ears, bee wings and
  * saucer eyes. Nothing here describes a species — species are what emerge when
  * the parts happen to line up (see ./Archetypes).
- *
- * Appearance never changes the anatomy. It changes shapes, proportions and
- * colors of a rig that is always identical (/Docs/pet-anatomy.md §8).
  */
 
 import { PALETTE } from '../../shared/color';
 import { ACCESSORY_SLOTS } from './AccessoryTypes';
 import type { AccessoryConfig, AccessorySlot } from './AccessoryTypes';
-import type { EarType, TailType, WingType } from './AppendageTypes';
-import type { BodyType, FootType } from './BodyTypes';
-import type { BrowType, EyeType, SnoutType } from './FaceTypes';
+import type { TailType, WingType } from './AppendageTypes';
+import type { BodyType } from './BodyTypes';
+import type { EarType } from './EarTypes';
+import type { FootType } from './FootTypes';
+import type { BrowType } from './BrowTypes';
+import type { CheekType } from './CheekTypes';
+import type { EyeType } from './EyeTypes';
+import type { MouthType } from './MouthTypes';
+import type { SnoutType } from './SnoutTypes';
+import type { TeethType } from './TeethTypes';
 import type { PatternType } from './Patterns';
+import { APPEARANCE_RANGES, clampField } from './PetConstraints';
+import type { RangedField } from './PetConstraints';
 import type { TopperType } from './TopperTypes';
 
 /**
@@ -41,6 +55,12 @@ export interface PetAppearance {
   bodyWidth: number;
   /** Extra height on top of the body type. */
   bodyHeight: number;
+  /**
+   * How lopsided the silhouette is allowed to be, 0..1. At 0 the creature is
+   * mirror-symmetric and reads as clip art; at 1 it reads as hand-drawn, or as
+   * slightly wrong, depending on the body type.
+   */
+  asymmetry: number;
   footType: FootType;
   footScale: number;
 
@@ -61,7 +81,7 @@ export interface PetAppearance {
   topperType: TopperType;
   topperScale: number;
 
-  // --- Face ----------------------------------------------------------------
+  // --- Face: design, never expression ---------------------------------------
   eyeType: EyeType;
   eyeScale: number;
   /** Horizontal gap between the eyes, as a share of body width. */
@@ -71,6 +91,10 @@ export interface PetAppearance {
    * Low, wide-set, large eyes read as a baby; high, close, small eyes do not.
    */
   eyeHeight: number;
+  /** Multiplier on the eye preset's own pupil size. */
+  pupilScale: number;
+  /** Extra rotation on top of the preset's rest tilt. Inward reads angry. */
+  eyeTilt: number;
 
   browType: BrowType;
   browScale: number;
@@ -78,17 +102,22 @@ export interface PetAppearance {
   snoutType: SnoutType;
   snoutScale: number;
 
-  /** Cosmetics only — the mouth's *shape* comes from the expression system. */
+  /** The mouth's shape language. The expression system bends it, never swaps it. */
+  mouthType: MouthType;
   mouthWidth: number;
   mouthWeight: number;
+  teethType: TeethType;
+  /** Tooth size, 0..1. The fastest route from cute to alarming. */
+  fangs: number;
+
+  cheekType: CheekType;
+
   /**
    * The creature's resting expression, -1 (permanently unimpressed) to +1
    * (permanently delighted). A personality bias the expression system blends
    * from, not a fixed mouth shape.
    */
   restingMood: number;
-  /** Visible teeth, 0..1. The fastest route from cute to alarming. */
-  fangs: number;
 
   // --- Color ---------------------------------------------------------------
   /** The coat. */
@@ -124,12 +153,13 @@ export interface PetAppearance {
 /** Everything is optional on the way in; `createPetAppearance` fills the gaps. */
 export type PetAppearanceInput = Partial<PetAppearance>;
 
-/** The default creature: a pink blob with a puff, ears and a small nose. */
+/** The default creature: a pink blob with round ears and a small nose. */
 export const DEFAULT_PET_APPEARANCE: PetAppearance = {
   bodyType: 'blob',
   bodyScale: 1,
   bodyWidth: 1,
   bodyHeight: 1,
+  asymmetry: 0.6,
   footType: 'nubs',
   footScale: 1,
 
@@ -151,6 +181,8 @@ export const DEFAULT_PET_APPEARANCE: PetAppearance = {
   eyeScale: 1,
   eyeSpacing: 0.2,
   eyeHeight: 0.5,
+  pupilScale: 1,
+  eyeTilt: 0,
 
   browType: 'none',
   browScale: 1,
@@ -158,10 +190,15 @@ export const DEFAULT_PET_APPEARANCE: PetAppearance = {
   snoutType: 'nose',
   snoutScale: 1,
 
+  mouthType: 'smile',
   mouthWidth: 1,
   mouthWeight: 1,
+  teethType: 'none',
+  fangs: 0.5,
+
+  cheekType: 'round',
+
   restingMood: 0.35,
-  fangs: 0,
 
   primaryColor: PALETTE.blush,
   secondaryColor: PALETTE.cream,
@@ -177,43 +214,7 @@ export const DEFAULT_PET_APPEARANCE: PetAppearance = {
   seed: 20260820,
 };
 
-/**
- * Guard rails.
- *
- * These exist to keep the rig assemblable, not to enforce good taste. The brief
- * explicitly wants creatures that range into the ridiculous, so the ranges are
- * wide and the ugly combinations are allowed.
- */
-const LIMITS: Record<string, { min: number; max: number }> = {
-  bodyScale: { min: 0.8, max: 1.25 },   // Keeps overall size within a safe 20-25% variance
-  bodyWidth: { min: 0.75, max: 1.3 },   // Prevents paper-thin or overly stretched bodies
-  bodyHeight: { min: 0.8, max: 1.25 },  // Prevents squashed or string-bean characters
-  footScale: { min: 0.6, max: 1.4 },    // 0 meant no feet (unless intended as a toggle). 1.4 is safely large.
-  earScale: { min: 0.6, max: 1.5 },     // Kept a bit more flexible for stylized ears
-  earSpread: { min: 0.15, max: 0.4 },   // Tighter range prevents ears clipping into the head or floating off
-  earTilt: { min: -0.4, max: 0.6 },     // Reduced rotation angles to prevent unnatural snapping
-  wingScale: { min: 0.5, max: 1.5 },    // (Note: if 0 was used to hide wings completely, change min back to 0)
-  tailScale: { min: 0.5, max: 1.5 },    // Same as wings.
-  topperScale: { min: 0.7, max: 1.4 },  // Prevents giant hats/hair from clipping through bounds
-  eyeScale: { min: 0.7, max: 1.4 },     // Prevents tiny dots or giant overlapping eyes
-  eyeSpacing: { min: 0.15, max: 0.3 },  // Prevents cyclops (overlapping) or eyes sliding off the face
-  eyeHeight: { min: 0.3, max: 0.7 },    // Keeps eyes generally in the middle 40% of the face
-  browScale: { min: 0.7, max: 1.3 },    // Prevents unibrows or microscopic eyebrows
-  snoutScale: { min: 0.7, max: 1.4 },   // Prevents the muzzle from stretching out of the face bounds
-  mouthWidth: { min: 0.6, max: 1.4 },   // Prevents the mouth from extending past the cheeks
-  mouthWeight: { min: 0.7, max: 1.3 },  // Keeps lip/mouth thickness natural
-  restingMood: { min: -1, max: 1 },     // Left as-is (standard -1 to 1 blendshape/slider value)
-  fangs: { min: 0, max: 1 },            // Left as-is (assuming it's a 0-100% visibility/scale blendshape)
-  blush: { min: 0, max: 1 },            // Left as-is (opacity mapping)
-};
-
-const ACCESSORY_SCALE = { min: 0.35, max: 2.5 };
-
-function clampField(key: string, value: number): number {
-  const limit = LIMITS[key];
-  if (!limit) return value;
-  return Math.max(limit.min, Math.min(limit.max, value));
-}
+const RANGED_FIELDS = Object.keys(APPEARANCE_RANGES) as RangedField[];
 
 function clampAccessories(accessories: PetAccessories): PetAccessories {
   const result: PetAccessories = {};
@@ -222,28 +223,28 @@ function clampAccessories(accessories: PetAccessories): PetAccessories {
     const item = accessories[slot];
     if (!item) continue;
 
-    result[slot] = {
-      ...item,
-      scale: Math.max(
-        ACCESSORY_SCALE.min,
-        Math.min(ACCESSORY_SCALE.max, item.scale),
-      ),
-    };
+    result[slot] = { ...item, scale: clampField('accessoryScale', item.scale) };
   }
 
   return result;
 }
 
-/** Resolve a partial appearance into a complete, clamped one. */
+/**
+ * Resolve a partial appearance into a complete, clamped one.
+ *
+ * Only the absolute ranges are applied here. Relationships between values —
+ * eyes that would overlap, feet wider than the body — are resolved in pixel
+ * space by the proportions layer, so the number you chose is the number that
+ * stays in the editor (see ./PetConstraints).
+ */
 export function createPetAppearance(input: PetAppearanceInput = {}): PetAppearance {
   const merged: PetAppearance = { ...DEFAULT_PET_APPEARANCE, ...input };
-  const result = { ...merged } as PetAppearance;
+  const result = { ...merged };
 
-  for (const key of Object.keys(LIMITS)) {
-    const field = key as keyof PetAppearance;
-    const value = merged[field];
+  for (const field of RANGED_FIELDS) {
+    const value = merged[field as keyof PetAppearance];
     if (typeof value === 'number') {
-      (result[field] as number) = clampField(key, value);
+      (result[field as keyof PetAppearance] as number) = clampField(field, value);
     }
   }
 

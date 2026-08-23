@@ -24,7 +24,7 @@ import type {
   Solidity,
   SurfaceSpec,
 } from '../../simulation/physics';
-import type { LaneId } from '../../world/Lanes';
+import type { DepthBand } from '../../world/FloorGrid';
 import { createBasket } from './furniture/Basket';
 import { createBed } from './furniture/Bed';
 import { createChair } from './furniture/Chair';
@@ -231,8 +231,13 @@ export interface ObjectTraits {
   surface?: SurfaceSpec;
   /** Decor that hangs on the wall, at this height above the floor. */
   mount?: number;
-  /** Where in the room it belongs when nobody has said otherwise. */
-  lane?: LaneId;
+  /**
+   * Roughly where in the room a *new* one appears.
+   *
+   * A starting preference, not a constraint: once it is in the room it can be
+   * put on any tile of the floor grid.
+   */
+  home?: DepthBand;
 }
 
 export const OBJECT_TRAITS: Record<ObjectType, ObjectTraits> = {
@@ -247,7 +252,7 @@ export const OBJECT_TRAITS: Record<ObjectType, ObjectTraits> = {
     restitution: 0.18,
     friction: 0.9,
     surface: { kind: 'bed', give: 10, comfort: 1 },
-    lane: 'middle',
+    home: 'middle',
   },
   basket: {
     label: 'Wicker Basket',
@@ -260,7 +265,7 @@ export const OBJECT_TRAITS: Record<ObjectType, ObjectTraits> = {
     restitution: 0.28,
     friction: 0.9,
     surface: { kind: 'container', rim: 62, inset: 18, comfort: 0.85 },
-    lane: 'front',
+    home: 'front',
   },
   chair: {
     label: 'Little Chair',
@@ -271,7 +276,7 @@ export const OBJECT_TRAITS: Record<ObjectType, ObjectTraits> = {
     restitution: 0.3,
     friction: 0.8,
     surface: { kind: 'seat', give: 4, comfort: 0.45 },
-    lane: 'middle',
+    home: 'middle',
   },
   table: {
     label: 'Round Table',
@@ -286,7 +291,7 @@ export const OBJECT_TRAITS: Record<ObjectType, ObjectTraits> = {
     solidity: 'scenery',
     // Climbable, and a fine place to stand. Nobody sleeps on a table.
     surface: { kind: 'tabletop', comfort: 0.05 },
-    lane: 'middle',
+    home: 'middle',
   },
   lamp: {
     label: 'Floor Lamp',
@@ -299,7 +304,7 @@ export const OBJECT_TRAITS: Record<ObjectType, ObjectTraits> = {
     restitution: 0.24,
     friction: 0.8,
     solidity: 'scenery',
-    lane: 'back',
+    home: 'back',
   },
   plant: {
     label: 'Potted Plant',
@@ -310,7 +315,7 @@ export const OBJECT_TRAITS: Record<ObjectType, ObjectTraits> = {
     restitution: 0.26,
     friction: 0.8,
     solidity: 'scenery',
-    lane: 'back',
+    home: 'back',
   },
   clock: {
     label: 'Wall Clock',
@@ -322,7 +327,7 @@ export const OBJECT_TRAITS: Record<ObjectType, ObjectTraits> = {
     friction: 0.9,
     solidity: 'scenery',
     mount: 250,
-    lane: 'back',
+    home: 'back',
   },
   rug: {
     label: 'Round Rug',
@@ -339,7 +344,7 @@ export const OBJECT_TRAITS: Record<ObjectType, ObjectTraits> = {
     restitution: 0.1,
     friction: 0.95,
     solidity: 'scenery',
-    lane: 'front',
+    home: 'front',
   },
   ball: {
     label: 'Bouncy Ball',
@@ -351,7 +356,7 @@ export const OBJECT_TRAITS: Record<ObjectType, ObjectTraits> = {
     friction: 0.12,
     drag: 0.15,
     rolls: true,
-    lane: 'front',
+    home: 'front',
   },
   plush: {
     label: 'Blob Plush',
@@ -361,7 +366,7 @@ export const OBJECT_TRAITS: Record<ObjectType, ObjectTraits> = {
     mass: 0.8,
     restitution: 0.3,
     friction: 0.42,
-    lane: 'front',
+    home: 'front',
   },
   cube: {
     label: 'Toy Block',
@@ -371,7 +376,7 @@ export const OBJECT_TRAITS: Record<ObjectType, ObjectTraits> = {
     mass: 0.9,
     restitution: 0.22,
     friction: 0.5,
-    lane: 'front',
+    home: 'front',
   },
   pillow: {
     label: 'Soft Pillow',
@@ -384,7 +389,7 @@ export const OBJECT_TRAITS: Record<ObjectType, ObjectTraits> = {
     restitution: 0.34,
     friction: 0.6,
     surface: { kind: 'shelf', give: 6, comfort: 0.55 },
-    lane: 'front',
+    home: 'front',
   },
 };
 

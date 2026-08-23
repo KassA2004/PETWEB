@@ -6,6 +6,14 @@ model User {
   username String
   email    String
 
+  /// Which saved pet the user is currently looking after.
+  ///
+  /// A pointer on the user rather than a flag on the pet: "exactly one active"
+  /// is then a property of the schema instead of something every write has to
+  /// remember to maintain. Nulled automatically when that pet is deleted.
+  activePetId String? @db.Uuid
+  activePet   Pet?    @relation("ActivePet", fields: [activePetId], references: [id], onDelete: SetNull)
+
   pets           Pet[]
   environments   Environment[]
   memories       Memory[]

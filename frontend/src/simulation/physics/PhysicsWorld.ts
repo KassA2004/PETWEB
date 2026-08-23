@@ -62,6 +62,7 @@ import {
   LANDING_SPEED,
   MAX_SUBSTEPS,
   REPORT_SPEED,
+  SETTLE_SLACK,
 } from './constants';
 import { damp } from './math';
 import type {
@@ -378,6 +379,64 @@ export class PhysicsWorld {
       }
 
       updateSleep(body, dt);
+    }
+
+    this.settleUnsupported(dt);
+  }
+
+  /**
+   * Make sure nothing static is standing on thin air.
+   *
+   * Static bodies are never integrated — that is what "furniture stays put"
+   * means — so they have no gravity of their own, and the moment the thing they
+   * were placed on top of is carried away or taken out of the room they simply
+   * stay where they are. Stack another one on that, remove the one underneath,
+   * repeat, and furniture climbs out of the frame.
+   *
+   * Dynamic bodies never had this problem: `remove` and `grab` wake them and
+   * they fall. So this is the same rule, applied to the one class of body that
+   * cannot enforce it for itself: if a static thing is above whatever is under
+   * it, it falls until it is not.
+   *
+   * It falls rather than snaps because the two look completely different — a
+   * chair that drops onto the floor when you take the table away reads as
+   * physics, and one that teleports reads as a glitch.
+   *
+   * Note what this deliberately does NOT do: it never pushes anything *up*, and
+   * it has no opinion about how high a stack may go. Building upward is a
+   * feature; hanging in the air is not.
+   */
+  private settleUnsupported(dt: number): void {
+    // Bottom of the stack first. Lowering a table has to happen before the lamp
+    // standing on it is asked what it is standing on, or the lamp spends a frame
+    // measuring against a surface that is already on its way down.
+    const stack = this.bodies
+      .filter(
+        (body) =>
+          body.type === 'static' && !body.held && !body.anchored,
+      )
+      .sort((a, b) => a.position.y - b.position.y);
+
+    for (const body of stack) {
+      const rest = this.surfaceHeightAt(body.position.x, body.position.z, body.id);
+      const gap = body.position.y - rest;
+
+      if (gap <= SETTLE_SLACK) {
+        body.velocity.y = 0;
+        continue;
+      }
+
+      body.velocity.y -= this.gravity * dt;
+      const next = body.position.y + body.velocity.y * dt;
+
+      if (next <= rest) {
+        body.position.y = rest;
+        body.velocity.y = 0;
+        // Whatever was riding on it has just been moved, whether it knows or not.
+        for (const rider of this.occupants(body.id)) wake(rider);
+      } else {
+        body.position.y = next;
+      }
     }
   }
 

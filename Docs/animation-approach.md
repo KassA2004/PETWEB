@@ -1886,19 +1886,48 @@ the map inverts           every pixel of visible floor is exactly one place in
                           three-dimensional space with no mode and no guessing
 ```
 
-## Depth lanes
+## The floor grid
 
-Physics uses a continuous `z`. A *user* placing furniture does not want
-continuous depth — they want to know which row of the room a thing is in. So
-the room has three: **back**, **middle**, **front**.
+Physics uses a continuous `x` and `z`. A *user* placing furniture does not want
+continuous position — they want to know which part of the floor a thing is on.
+So the floor is a grid of tiles, sized from the furniture rather than from the
+room: about a hundred world units square, which lands on **13 columns by 6
+rows** in a room that is 1280 by 600.
 
-They earn their place three times over. They give the floor its seam lines, so
-depth is visible with nothing in the room at all. They give a set-down object
-somewhere definite to land, so two things never end up four pixels apart in
-depth and permanently in each other's way. And they give the drag affordance
-something to name.
+This started as three depth rows and nothing at all across the width, which
+meant an object could be anywhere on the x axis and only ever in one of three
+places on the z axis. Depth was the axis people actually wanted control over,
+and it was the one that had almost none.
+
+The tiles earn their place three times over. They give the floor its seam
+lines, so depth is visible with nothing in the room at all. They give a set-down
+object somewhere definite to land, so two things never end up four pixels apart
+and permanently in each other's way. And they give the drag affordance something
+to name — the room can say *row 3, column 7* while you are deciding.
+
+Snapping happens on *placement* only, never on a throw: a ball that snapped to a
+tile mid-bounce would look broken. Placement wants tidiness; physics wants to be
+left alone.
 
 The creature ignores all of it and walks wherever it likes.
+
+## Nothing hangs in the air
+
+Static bodies are never integrated — that is what "furniture stays put" means —
+so they have no gravity of their own. Left alone, that produces a bug with a
+name: put a chair on a table, take the table out of the room, and the chair
+stays where it was. Stack another on that, remove the one underneath, repeat,
+and furniture climbs out of the frame.
+
+So every step, any static body sitting above whatever is actually under it falls
+until it is not (`PhysicsWorld.settleUnsupported`). It *falls* rather than snaps,
+because the two look completely different: a chair that drops when you take the
+table away reads as physics, and one that teleports reads as a glitch.
+
+Two things it deliberately does not do. It never pushes anything *up* — building
+a stack as high as you like is a feature, not a defect. And it exempts bodies
+flagged `anchored`, which is wall-hung decor: the one thing in the room that is
+legitimately in mid-air.
 
 ## Three kinds of body
 

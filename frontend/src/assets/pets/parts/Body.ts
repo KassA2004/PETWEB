@@ -1,374 +1,203 @@
 /**
- * Body.ts
+ * Body — the mass, its feet and its shading.
  *
- * Stylized pet body.
+ * This file assembles; it does not design. The outline comes from
+ * ./BodySilhouette, the feet from ./Foot, and the markings from
+ * ../customization/Patterns. What lives here is the *stack*: which flat shape
+ * goes over which, and where the feet plant.
  *
- * Design language:
- * - Soft cubic / rounded silhouette
- * - Slightly narrower upper shoulders
- * - Broad, heavy lower body
- * - Chunky integrated feet
- * - Flat layered shading
- * - Small controlled highlight shapes
- * - No gradients
- * - No generic superellipse silhouette
+ * Shading is four solid shapes and no gradients (/Docs/theme-and-design.md):
  *
- * The body is drawn in body-local space with the origin at its centre.
+ *   1  the coat                     one flat fill
+ *   2  a bottom shade               a curved band, cut to the silhouette
+ *   3  a belly panel                the lighter surface
+ *   4  one small light patch        upper left, where the room's window is
+ *
+ * Everything after the first is clipped to the silhouette, so no amount of
+ * customization can push a highlight off the edge of the creature.
  */
 
 import { Container, Graphics } from 'pixi.js';
-import { darken, lighten, tones } from '../../shared/color';
+import { darken, lighten, mix, tones } from '../../shared/color';
+import { clamp } from '../../shared/shapes';
+import { drawSmoothClosed } from '../../shared/geometry';
 import type { PetAppearance } from '../customization/PetAppearance';
-import { getFootShape } from '../customization/BodyTypes';
+import { getBodyShape } from '../customization/BodyTypes';
+import { getFootShape } from '../customization/FootTypes';
 import { drawPattern } from '../customization/Patterns';
 import type { PetProportions } from '../anatomy/proportions';
+import { bodyHalfWidthAt, bodyLowerEdgeAt, drawPetSilhouette } from './BodySilhouette';
+import { drawFoot, drawFootDetail } from './Foot';
 
-export interface BodySilhouetteOptions {
-  roundness: number;
-  topTaper: number;
-  bottomBias: number;
-  wobble: number;
-  phase: number;
-  segments?: number;
-}
-
-/* -------------------------------------------------------------------------- */
-/* Helpers                                                                    */
-/* -------------------------------------------------------------------------- */
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.max(min, Math.min(max, value));
-}
-
-function roundedBodyPath(
-  g: Graphics,
-  cx: number,
-  cy: number,
-  rx: number,
-  ry: number,
-  options: BodySilhouetteOptions,
-): Graphics {
-  const roundness = clamp(options.roundness, 0, 1);
-  const topTaper = clamp(options.topTaper, 0, 1);
-  const bottomBias = clamp(options.bottomBias, 0, 1);
-  const wobble = clamp(options.wobble, 0, 1);
-
-  /*
-   * These control points deliberately form a "soft block" rather than
-   * mathematically perfect geometry.
-   *
-   * Reference shape:
-   *
-   *              ______
-   *           __/      \__
-   *         /              \
-   *        |                |
-   *        |                |
-   *        |                |
-   *         \              /
-   *          \____    ____/
-   *
-   * The lower corners are heavier than the upper corners.
-   */
-
-  const topWidth = rx * (0.78 + topTaper * 0.12);
-  const shoulderWidth = rx * (0.96 + bottomBias * 0.04);
-  const lowerWidth = rx * (0.90 + bottomBias * 0.08);
-
-  const topY = cy - ry;
-  const shoulderY = cy - ry * 0.78;
-  const sideY = cy - ry * 0.15;
-  const lowerY = cy + ry * 0.68;
-  const bottomY = cy + ry;
-
-  const topRadius = rx * (0.18 + roundness * 0.08);
-  const lowerRadius = rx * (0.16 + roundness * 0.12);
-
-  /*
-   * Tiny deterministic irregularity.
-   * This is intentionally subtle. The old wobble could make the silhouette
-   * look like damaged vector art rather than a living creature.
-   */
-  const phase = options.phase;
-  const leftWobble =
-    1 +
-    wobble *
-      0.025 *
-      Math.sin(phase * 1.7);
-
-  const rightWobble =
-    1 +
-    wobble *
-      0.025 *
-      Math.cos(phase * 1.3);
-
-  const leftShoulder = shoulderWidth * leftWobble;
-  const rightShoulder = shoulderWidth * rightWobble;
-
-  g.moveTo(cx - topWidth + topRadius, topY);
-
-  /* Top-left crown */
-  g.bezierCurveTo(
-    cx - topWidth * 0.55,
-    topY,
-    cx - topWidth * 0.18,
-    topY,
-    cx - topWidth + topRadius,
-    topY,
-  );
-
-  g.bezierCurveTo(
-    cx - topWidth * 0.98,
-    topY + ry * 0.03,
-    cx - leftShoulder * 0.98,
-    shoulderY - ry * 0.05,
-    cx - leftShoulder,
-    shoulderY,
-  );
-
-  /* Left shoulder into side */
-  g.bezierCurveTo(
-    cx - leftShoulder * 1.02,
-    shoulderY + ry * 0.15,
-    cx - leftShoulder,
-    sideY - ry * 0.12,
-    cx - leftShoulder,
-    sideY,
-  );
-
-  /* Left side */
-  g.bezierCurveTo(
-    cx - leftShoulder,
-    sideY + ry * 0.28,
-    cx - lowerWidth * 1.01,
-    lowerY - ry * 0.10,
-    cx - lowerWidth + lowerRadius,
-    lowerY,
-  );
-
-  /* Lower-left corner */
-  g.bezierCurveTo(
-    cx - lowerWidth * 0.72,
-    lowerY + ry * 0.20,
-    cx - rx * 0.66,
-    bottomY,
-    cx - rx * 0.40,
-    bottomY,
-  );
-
-  /* Bottom */
-  g.bezierCurveTo(
-    cx - rx * 0.18,
-    bottomY,
-    cx + rx * 0.18,
-    bottomY,
-    cx + rx * 0.40,
-    bottomY,
-  );
-
-  /* Lower-right corner */
-  g.bezierCurveTo(
-    cx + rx * 0.66,
-    bottomY,
-    cx + lowerWidth * 0.72,
-    lowerY + ry * 0.20,
-    cx + lowerWidth - lowerRadius,
-    lowerY,
-  );
-
-  /* Right side */
-  g.bezierCurveTo(
-    cx + lowerWidth * 1.01,
-    lowerY - ry * 0.10,
-    cx + rightShoulder,
-    sideY + ry * 0.28,
-    cx + rightShoulder,
-    sideY,
-  );
-
-  g.bezierCurveTo(
-    cx + rightShoulder,
-    sideY - ry * 0.12,
-    cx + rightShoulder * 1.02,
-    shoulderY + ry * 0.15,
-    cx + rightShoulder,
-    shoulderY,
-  );
-
-  /* Right shoulder into crown */
-  g.bezierCurveTo(
-    cx + rightShoulder * 0.98,
-    shoulderY - ry * 0.05,
-    cx + topWidth * 0.98,
-    topY + ry * 0.03,
-    cx + topWidth - topRadius,
-    topY,
-  );
-
-  /* Crown */
-  g.bezierCurveTo(
-    cx + topWidth * 0.18,
-    topY,
-    cx + topWidth * 0.55,
-    topY,
-    cx - topWidth + topRadius,
-    topY,
-  );
-
-  g.closePath();
-
-  return g;
-}
-
-/* -------------------------------------------------------------------------- */
-/* Public silhouette                                                          */
-/* -------------------------------------------------------------------------- */
-
-/**
- * Draws the main body silhouette.
- *
- * This intentionally uses a hand-shaped cubic path instead of a superellipse.
- * A superellipse is mathematically neat but produces a very generic mascot
- * body. This path gives us the chunky "toy creature" proportions of the
- * reference.
- */
-export function drawBodySilhouette(
-  g: Graphics,
-  cx: number,
-  cy: number,
-  rx: number,
-  ry: number,
-  options: BodySilhouetteOptions,
-): Graphics {
-  return roundedBodyPath(
-    g,
-    cx,
-    cy,
-    rx,
-    ry,
-    options,
-  );
-}
-
-export function drawPetSilhouette(
-  g: Graphics,
-  proportions: PetProportions,
-  appearance: PetAppearance,
-): Graphics {
-  return drawBodySilhouette(
-    g,
-    0,
-    0,
-    proportions.bodyWidth / 2,
-    proportions.bodyHeight / 2,
-    {
-      roundness: proportions.bodyRoundness,
-      topTaper: proportions.bodyTopTaper,
-      bottomBias: proportions.bodyBottomBias,
-      wobble: proportions.bodyWobble,
-      phase: appearance.seed % 7,
-    },
-  );
-}
+export { bodyOutline, bodyHalfWidthAt, bodyLowerEdgeAt, drawPetSilhouette } from './BodySilhouette';
 
 /* -------------------------------------------------------------------------- */
 /* Feet                                                                       */
 /* -------------------------------------------------------------------------- */
 
-function drawFoot(
-  g: Graphics,
-  x: number,
-  y: number,
-  width: number,
-  height: number,
-  color: number,
-): void {
-  /*
-   * The feet are deliberately organic rather than perfect rounded rectangles.
-   * They should feel like they are growing out of the body.
-   */
+/** Where each foot sits across the bottom of the body, in body-local x. */
+function footPositions(
+  proportions: PetProportions,
+  appearance: PetAppearance,
+): number[] {
+  const shape = getFootShape(appearance.footType);
+  const body = getBodyShape(appearance.bodyType);
+  if (shape.count <= 0) return [];
 
-  const halfW = width / 2;
+  const rx = proportions.bodyWidth / 2;
+  const stance = body.stance * shape.spread;
 
-  g.moveTo(x - halfW * 0.72, y - height * 0.38);
+  // Never let a foot hang off the side of the mass: the ankle has to have body
+  // above it, or the foot stops looking attached. This is the dependent
+  // constraint that makes "huge feet on a narrow body" comic instead of broken.
+  const ankleHalfWidth = bodyHalfWidthAt(proportions, appearance, 0.86);
+  const limit = Math.max(0, ankleHalfWidth - proportions.footWidth * 0.3);
 
-  g.bezierCurveTo(
-    x - halfW * 0.95,
-    y - height * 0.18,
-    x - halfW * 0.92,
-    y + height * 0.25,
-    x - halfW * 0.62,
-    y + height * 0.43,
-  );
+  const spread = Math.min(stance * rx, limit);
 
-  g.bezierCurveTo(
-    x - halfW * 0.30,
-    y + height * 0.62,
-    x + halfW * 0.30,
-    y + height * 0.62,
-    x + halfW * 0.62,
-    y + height * 0.43,
-  );
-
-  g.bezierCurveTo(
-    x + halfW * 0.92,
-    y + height * 0.25,
-    x + halfW * 0.95,
-    y - height * 0.18,
-    x + halfW * 0.72,
-    y - height * 0.38,
-  );
-
-  g.bezierCurveTo(
-    x + halfW * 0.40,
-    y - height * 0.55,
-    x - halfW * 0.40,
-    y - height * 0.55,
-    x - halfW * 0.72,
-    y - height * 0.38,
-  );
-
-  g.closePath();
-
-  g.fill({ color });
-}
-
-function drawToeHints(
-  g: Graphics,
-  x: number,
-  y: number,
-  width: number,
-  height: number,
-  toes: number,
-  color: number,
-): void {
-  if (toes <= 0) return;
-
-  const count = Math.min(toes, 4);
-  const toeRadius = Math.max(1.5, width * 0.075);
-
-  for (let i = 0; i < count; i++) {
-    const normalized =
-      count === 1
-        ? 0
-        : (i / (count - 1)) * 2 - 1;
-
-    g.ellipse(
-      x + normalized * width * 0.22,
-      y + height * 0.28,
-      toeRadius,
-      toeRadius * 0.72,
-    );
+  if (shape.count === 4) {
+    return [-spread, -spread * 0.34, spread * 0.34, spread];
   }
 
-  g.fill({
-    color,
-    alpha: 0.42,
+  return [-spread, spread];
+}
+
+function buildFeet(
+  proportions: PetProportions,
+  appearance: PetAppearance,
+): Container | null {
+  const shape = getFootShape(appearance.footType);
+  const positions = footPositions(proportions, appearance);
+
+  if (positions.length === 0 || proportions.footWidth <= 0) return null;
+
+  const group = new Container();
+  group.label = 'feet';
+
+  const ramp = tones(appearance.primaryColor);
+  const silhouettes = new Graphics();
+  const details = new Graphics();
+
+  const ry = proportions.bodyHeight / 2;
+  const floorY = ry + proportions.groundClearance;
+
+  for (const x of positions) {
+    // Bury the top of the foot inside the mass, measured from the silhouette's
+    // actual lower edge above this foot rather than from the bounding box.
+    const edgeY = bodyLowerEdgeAt(proportions, appearance, x);
+    const wanted = edgeY - shape.sink * proportions.footHeight;
+    const grounded = floorY - proportions.footHeight;
+    const top = Math.min(wanted, grounded);
+
+    const options = {
+      shape,
+      width: proportions.footWidth,
+      height: proportions.footHeight,
+      mirror: x < 0 ? -1 : 1,
+      ramp,
+      accent: appearance.secondaryColor,
+    };
+
+    drawFoot(silhouettes, x, top, options);
+    drawFootDetail(details, x, top, options);
+  }
+
+  // One fill for the whole set. Feet are the coat in shade — the same colour
+  // family, one step down, so they read as the underside of the creature.
+  silhouettes.fill({ color: darken(ramp.shade, 0.05) });
+  silhouettes.stroke({
+    color: ramp.line,
+    width: Math.max(1.5, proportions.footWidth * 0.03),
+    alpha: 0.35,
+    alignment: 1,
   });
+
+  group.addChild(silhouettes, details);
+  return group;
 }
 
 /* -------------------------------------------------------------------------- */
-/* Body                                                                       */
+/* Shading                                                                    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The bottom shade: one curved band across the lower body.
+ *
+ * It is drawn generously wide and clipped to the silhouette, so it follows
+ * whatever shape the body happens to be without any per-type maths.
+ */
+function bottomShade(proportions: PetProportions, ramp: ReturnType<typeof tones>): Graphics {
+  const rx = proportions.bodyWidth / 2;
+  const ry = proportions.bodyHeight / 2;
+  const g = new Graphics();
+
+  drawSmoothClosed(g, [
+    { x: -rx * 1.3, y: ry * 0.42 },
+    { x: -rx * 0.5, y: ry * 0.62 },
+    { x: 0, y: ry * 0.68 },
+    { x: rx * 0.5, y: ry * 0.6 },
+    { x: rx * 1.3, y: ry * 0.36 },
+    { x: rx * 1.3, y: ry * 1.4 },
+    { x: -rx * 1.3, y: ry * 1.4 },
+  ]);
+
+  g.fill({ color: ramp.deep, alpha: 0.2 });
+  return g;
+}
+
+/**
+ * The belly panel.
+ *
+ * Sized from the body's own width low down rather than from a fixed fraction,
+ * so a narrow creature gets a narrow belly instead of one that fills it.
+ */
+function bellyPanel(
+  proportions: PetProportions,
+  appearance: PetAppearance,
+): Graphics {
+  const ry = proportions.bodyHeight / 2;
+  const half = bodyHalfWidthAt(proportions, appearance, 0.7) * 0.66;
+  const top = ry * 0.05;
+  const bottom = ry * 0.95;
+
+  const g = new Graphics();
+
+  drawSmoothClosed(g, [
+    { x: 0, y: top },
+    { x: half * 0.86, y: top + (bottom - top) * 0.22 },
+    { x: half, y: top + (bottom - top) * 0.62 },
+    { x: half * 0.7, y: bottom },
+    { x: 0, y: bottom * 1.06 },
+    { x: -half * 0.7, y: bottom },
+    { x: -half, y: top + (bottom - top) * 0.62 },
+    { x: -half * 0.86, y: top + (bottom - top) * 0.22 },
+  ]);
+
+  g.fill({ color: appearance.secondaryColor, alpha: 0.5 });
+  return g;
+}
+
+/** One small flat patch where the light lands. Never a gradient, never gloss. */
+function lightPatch(proportions: PetProportions, appearance: PetAppearance): Graphics {
+  const rx = proportions.bodyWidth / 2;
+  const ry = proportions.bodyHeight / 2;
+  const g = new Graphics();
+
+  drawSmoothClosed(g, [
+    { x: -rx * 0.66, y: -ry * 0.32 },
+    { x: -rx * 0.58, y: -ry * 0.62 },
+    { x: -rx * 0.34, y: -ry * 0.76 },
+    { x: -rx * 0.28, y: -ry * 0.6 },
+    { x: -rx * 0.46, y: -ry * 0.42 },
+    { x: -rx * 0.5, y: -ry * 0.24 },
+  ]);
+
+  g.fill({ color: lighten(appearance.primaryColor, 0.3), alpha: 0.4 });
+  return g;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Assembly                                                                   */
 /* -------------------------------------------------------------------------- */
 
 export function createBody(
@@ -379,295 +208,71 @@ export function createBody(
   root.label = 'body-art';
 
   const ramp = tones(appearance.primaryColor);
-
   const rx = proportions.bodyWidth / 2;
-  const ry = proportions.bodyHeight / 2;
 
-  /* ---------------------------------------------------------------------- */
-  /* Feet                                                                     */
-  /* ---------------------------------------------------------------------- */
+  // --- Feet, behind the mass so it swallows the seam ------------------------
+  const feet = buildFeet(proportions, appearance);
+  if (feet) root.addChild(feet);
 
-  const foot = getFootShape(appearance.footType);
-
-  if (foot.count > 0 && proportions.footWidth > 0) {
-    const feet = new Graphics();
-    const toes = new Graphics();
-
-    /*
-     * Two-foot animals get the classic wide mascot stance.
-     * Four-foot animals use a tighter arrangement so the body remains
-     * visually dominant.
-     */
-    const offsets =
-      foot.count === 4
-        ? [-0.37, -0.13, 0.13, 0.37]
-        : [-0.30, 0.30];
-
-    const footY =
-      ry * 0.82 +
-      proportions.footHeight * 0.20;
-
-    const footColor = darken(ramp.deep, 0.08);
-
-    for (const offset of offsets) {
-      const fx = offset * proportions.bodyWidth;
-
-      drawFoot(
-        feet,
-        fx,
-        footY,
-        proportions.footWidth,
-        proportions.footHeight * 1.18,
-        footColor,
-      );
-
-      drawToeHints(
-        toes,
-        fx,
-        footY,
-        proportions.footWidth,
-        proportions.footHeight,
-        foot.toes,
-        darken(ramp.deep, 0.30),
-      );
-    }
-
-    root.addChild(feet);
-
-    if (foot.toes > 0) {
-      root.addChild(toes);
-    }
-  }
-
-  /* ---------------------------------------------------------------------- */
-  /* Main body                                                               */
-  /* ---------------------------------------------------------------------- */
-
+  // --- The coat -------------------------------------------------------------
   const silhouette = new Graphics();
-
-  drawPetSilhouette(
-    silhouette,
-    proportions,
-    appearance,
-  );
-
-  silhouette.fill({
-    color: ramp.base,
-  });
-
-  /*
-   * Extremely subtle outline.
-   *
-   * The reference does not use a cartoon-black outline. A slightly darker
-   * version of the body color gives separation without turning the character
-   * into a sticker.
-   */
+  drawPetSilhouette(silhouette, proportions, appearance);
+  silhouette.fill({ color: ramp.base });
   silhouette.stroke({
-    color: darken(ramp.base, 0.12),
-    width: Math.max(2, rx * 0.025),
+    // A darker version of the coat, never a black cartoon line.
+    color: ramp.line,
+    width: clamp(rx * 0.022, 1.5, 5),
     alignment: 1,
-    alpha: 0.72,
+    alpha: 0.55,
   });
-
   root.addChild(silhouette);
 
-  /* ---------------------------------------------------------------------- */
-  /* Clipped body details                                                    */
-  /* ---------------------------------------------------------------------- */
-
+  // --- Everything below is cut to the coat ----------------------------------
   const mask = new Graphics();
-
-  drawPetSilhouette(
-    mask,
-    proportions,
-    appearance,
-  );
-
-  mask.fill({
-    color: 0xffffff,
-  });
-
+  drawPetSilhouette(mask, proportions, appearance);
+  mask.fill({ color: 0xffffff });
   root.addChild(mask);
 
   const clipped = new Container();
   clipped.label = 'body-detail';
   clipped.mask = mask;
-
   root.addChild(clipped);
 
-  /* ---------------------------------------------------------------------- */
-  /* Lower body shadow                                                       */
-  /* ---------------------------------------------------------------------- */
-
-  /*
-   * Large soft-edged flat shape rather than a rectangular shadow.
-   * This gives the lower body the same dimensional treatment as the
-   * reference without looking like a gradient.
-   */
-  const lowerShadow = new Graphics();
-
-  lowerShadow.moveTo(
-    -rx * 1.05,
-    ry * 0.40,
-  );
-
-  lowerShadow.bezierCurveTo(
-    -rx * 0.72,
-    ry * 0.55,
-    -rx * 0.54,
-    ry * 0.88,
-    -rx * 0.20,
-    ry * 1.03,
-  );
-
-  lowerShadow.bezierCurveTo(
-    rx * 0.15,
-    ry * 1.08,
-    rx * 0.72,
-    ry * 0.88,
-    rx * 1.05,
-    ry * 0.43,
-  );
-
-  lowerShadow.lineTo(
-    rx * 1.15,
-    ry * 1.15,
-  );
-
-  lowerShadow.lineTo(
-    -rx * 1.15,
-    ry * 1.15,
-  );
-
-  lowerShadow.closePath();
-
-  lowerShadow.fill({
-    color: ramp.deep,
-    alpha: 0.22,
-  });
-
-  clipped.addChild(lowerShadow);
-
-  /* ---------------------------------------------------------------------- */
-  /* Belly panel                                                             */
-  /* ---------------------------------------------------------------------- */
-
-  /*
-   * The belly is not a giant obvious rectangle.
-   * It is a broad, low-contrast patch that follows the body language.
-   */
-  const belly = new Graphics();
-
-  const bellyWidth = rx * 0.92;
-  const bellyHeight = ry * 0.72;
-
-  belly.roundRect(
-    -bellyWidth / 2,
-    ry * 0.25,
-    bellyWidth,
-    bellyHeight,
-    bellyWidth * 0.28,
-  );
-
-  belly.fill({
-    color: appearance.secondaryColor,
-    alpha: 0.48,
-  });
-
-  clipped.addChild(belly);
-
-  /* ---------------------------------------------------------------------- */
-  /* Pattern                                                                  */
-  /* ---------------------------------------------------------------------- */
+  clipped.addChild(bottomShade(proportions, ramp));
+  clipped.addChild(bellyPanel(proportions, appearance));
 
   if (appearance.pattern !== 'none') {
     const marks = new Graphics();
-
     drawPattern(
       marks,
       appearance.pattern,
-      {
-        cx: 0,
-        cy: 0,
-        rx,
-        ry,
-      },
-      {
-        color: appearance.patternColor,
-        alpha: 0.38,
-        seed: appearance.seed,
-      },
+      { cx: 0, cy: 0, rx, ry: proportions.bodyHeight / 2 },
+      { color: appearance.patternColor, alpha: 0.42, seed: appearance.seed },
     );
-
     clipped.addChild(marks);
   }
 
-  /* ---------------------------------------------------------------------- */
-  /* Upper-left light patch                                                   */
-  /* ---------------------------------------------------------------------- */
+  clipped.addChild(lightPatch(proportions, appearance));
 
-  /*
-   * Instead of a glossy line, use two small irregular patches.
-   * This is much closer to the reference artwork.
-   */
-  const highlight = new Graphics();
+  // Where the feet meet the body: one soft dark shape per foot, inside the
+  // silhouette. This is what turns two adjacent shapes into one creature.
+  const shape = getFootShape(appearance.footType);
+  if (shape.count > 0 && proportions.footWidth > 0) {
+    const joins = new Graphics();
 
-  highlight.ellipse(
-    -rx * 0.56,
-    -ry * 0.55,
-    rx * 0.13,
-    ry * 0.10,
-  );
+    for (const x of footPositions(proportions, appearance)) {
+      const edgeY = bodyLowerEdgeAt(proportions, appearance, x);
+      joins.ellipse(
+        x,
+        edgeY - proportions.footHeight * 0.1,
+        proportions.footWidth * 0.55,
+        proportions.footHeight * 0.6,
+      );
+    }
 
-  highlight.ellipse(
-    -rx * 0.34,
-    -ry * 0.61,
-    rx * 0.10,
-    ry * 0.075,
-  );
-
-  highlight.fill({
-    color: lighten(appearance.primaryColor, 0.24),
-    alpha: 0.42,
-  });
-
-  clipped.addChild(highlight);
-
-  /* ---------------------------------------------------------------------- */
-  /* Small lower side shadows                                                 */
-  /* ---------------------------------------------------------------------- */
-
-  const leftShadow = new Graphics();
-
-  leftShadow.ellipse(
-    -rx * 0.82,
-    ry * 0.30,
-    rx * 0.16,
-    ry * 0.25,
-  );
-
-  leftShadow.fill({
-    color: ramp.deep,
-    alpha: 0.12,
-  });
-
-  clipped.addChild(leftShadow);
-
-  const rightShadow = new Graphics();
-
-  rightShadow.ellipse(
-    rx * 0.82,
-    ry * 0.30,
-    rx * 0.16,
-    ry * 0.25,
-  );
-
-  rightShadow.fill({
-    color: ramp.deep,
-    alpha: 0.12,
-  });
-
-  clipped.addChild(rightShadow);
+    joins.fill({ color: mix(ramp.deep, ramp.shade, 0.4), alpha: 0.3 });
+    clipped.addChild(joins);
+  }
 
   return root;
 }

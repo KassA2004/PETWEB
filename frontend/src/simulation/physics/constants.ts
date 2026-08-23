@@ -134,3 +134,12 @@ export const WAKE_SPEED = 25;
  * anger.
  */
 export const SPEED_LIMIT = 2600;
+
+/**
+ * How far above its support a static body may sit before it counts as floating.
+ *
+ * Generous enough to absorb the sub-pixel differences between a placement and
+ * the surface query that produced it, tight enough that a gap you can see is a
+ * gap that gets closed (`PhysicsWorld.settleUnsupported`).
+ */
+export const SETTLE_SLACK = 0.6;
