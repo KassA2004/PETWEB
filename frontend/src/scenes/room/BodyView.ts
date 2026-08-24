@@ -39,6 +39,13 @@ export function sortKeyOf(body: PhysicsBody, holder: PhysicsBody | null): number
   // floor as far as the eye is concerned and belong under everything.
   if (body.collider.height <= 0) return -8000 + body.position.z;
 
+  // Wall-mounted decor is part of the wall. It kept a floor-plane collider so
+  // that the wall grid could reuse the floor's columns, and sorting it by that
+  // collider made it compete for depth with whatever stood on the cell beneath
+  // it — which is how a plant on the clock's column could be drawn on the
+  // wrong side of the clock. It is background; it sorts as background.
+  if (body.anchored) return -4000 + body.position.z;
+
   if (holder && holder.collider.height > 0) {
     const base = holder.position.z + halfZ(holder.collider);
     return base + (holder.surface?.kind === 'container' ? -0.5 : 0.5);

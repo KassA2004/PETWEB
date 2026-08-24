@@ -63,6 +63,13 @@ export function findPairs(bodies: PhysicsBody[], out: Pair[] = []): Pair[] {
 
 /** Can this pair produce any motion at all? */
 function interesting(a: PhysicsBody, b: PhysicsBody): boolean {
+  // Anchored bodies are wall decor. They hold a floor-plane collider only so
+  // the wall grid can borrow the floor's columns, and a clock two hundred
+  // units up the plaster is not something a thrown ball should ricochet off.
+  // Nothing lands on one either — `PhysicsWorld.surfaceBodyAt` skips them —
+  // so leaving them in the narrowphase only ever produced invisible geometry.
+  if (a.anchored || b.anchored) return false;
+
   const aFixed = a.type === 'static' || a.held;
   const bFixed = b.type === 'static' || b.held;
   if (aFixed && bFixed) return false;

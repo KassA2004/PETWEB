@@ -240,11 +240,16 @@ The MVP should contain:
 * Mark goal as completed
 * Receive a reward
 
-### Inventory
+### Objects
 
-* Receive items
-* View items
-* Place items in the environment
+* Browse the object catalog
+* Place objects in the environment
+* Rearrange them, and remove them again
+
+*(Superseded the planned Inventory screen. A separate list of owned-but-unseen
+items turned out to hold only two kinds of thing — furniture, which belongs in
+the room, and wearables, which belong on the creature — so the Room panel became
+the object store and the Pet panel the wardrobe. See `room-and-objects.md` §7c.)*
 
 ### Memories
 

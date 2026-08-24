@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { sfx } from '../../lib/audio';
 import { cn } from '../../lib/utils';
 
 /**
@@ -16,7 +17,19 @@ import { cn } from '../../lib/utils';
  *
  *   the page behind it does not scroll while it is up
  *
- * Everything else is layout.
+ * Everything else is layout — and, now, motion.
+ *
+ * **The exit has to be real.** An entrance animation with an instant
+ * disappearance is worse than neither, because the asymmetry is exactly what
+ * makes an interface feel like it is skipping frames. So closing is a state of
+ * its own: the panel plays its way out, and only then does it unmount. The
+ * `onClose` the caller passed still fires immediately, so nothing about the
+ * application's state waits for an animation — the dialog is already logically
+ * closed while it is still visibly leaving.
+ *
+ * **Sound is part of the transition, not an extra.** A soft rising tone on the
+ * way in, its mirror on the way out, both on the UI channel and both under a
+ * fifth of a second (`lib/audio/voices.ts`).
  */
 
 interface DialogProps {
@@ -30,6 +43,9 @@ interface DialogProps {
   footer?: React.ReactNode;
   className?: string;
 }
+
+/** How long the leaving animation runs. Matches `.animate-pop-in` reversed. */
+const EXIT_MS = 140;
 
 const FOCUSABLE =
   'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
@@ -47,9 +63,44 @@ export function Dialog({
   const titleId = React.useId();
   const descriptionId = React.useId();
 
+  /**
+   * Three states, not one boolean.
+   *
+   * `open` is what the caller means; `phase` is what is on screen. The two
+   * differ for exactly one animation's length, and conflating them is what
+   * makes a modal blink out of existence instead of leaving.
+   *
+   * The transitions are made during render rather than in an effect, which is
+   * React's own answer for state derived from props: doing it in an effect
+   * would paint one frame of the wrong thing first, and that frame is the
+   * flicker this whole arrangement exists to remove.
+   */
+  const [phase, setPhase] = React.useState<'closed' | 'open' | 'leaving'>(
+    open ? 'open' : 'closed',
+  );
+
+  if (open && phase !== 'open') setPhase('open');
+  if (!open && phase === 'open') setPhase('leaving');
+
+  const leaving = phase === 'leaving';
+  const present = phase !== 'closed';
+
+  // The sound belongs to the transition, so it follows the phase rather than
+  // the prop — a dialog that never actually opened never makes a noise.
+  React.useEffect(() => {
+    if (phase === 'open') sfx.open();
+    else if (phase === 'leaving') sfx.close();
+  }, [phase]);
+
+  React.useEffect(() => {
+    if (phase !== 'leaving') return;
+    const timer = window.setTimeout(() => setPhase('closed'), EXIT_MS);
+    return () => window.clearTimeout(timer);
+  }, [phase]);
+
   // Send focus in on open, and put it back where it came from on close.
   React.useEffect(() => {
-    if (!open) return;
+    if (phase !== 'open') return;
 
     const opener = document.activeElement as HTMLElement | null;
     const panel = panelRef.current;
@@ -60,18 +111,18 @@ export function Dialog({
     (first ?? panel)?.focus();
 
     return () => opener?.focus?.();
-  }, [open]);
+  }, [phase]);
 
   // Nothing behind a modal should scroll under it.
   React.useEffect(() => {
-    if (!open) return;
+    if (!present) return;
 
     const previous = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     return () => {
       document.body.style.overflow = previous;
     };
-  }, [open]);
+  }, [present]);
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     if (event.key === 'Escape') {
@@ -102,7 +153,7 @@ export function Dialog({
     }
   };
 
-  if (!open) return null;
+  if (!present) return null;
 
   return (
     <div
@@ -112,7 +163,10 @@ export function Dialog({
       {/* The backdrop is its own element so a click on it closes, while a
           click inside the panel does not bubble out and close it too. */}
       <div
-        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+        className={cn(
+          'absolute inset-0 bg-black/60 backdrop-blur-sm transition-opacity duration-150',
+          leaving ? 'opacity-0' : 'animate-fade-in',
+        )}
         onClick={onClose}
         aria-hidden
       />
@@ -127,6 +181,9 @@ export function Dialog({
         className={cn(
           'relative w-full max-w-sm rounded-2xl border border-border bg-card p-6',
           'text-card-foreground shadow-2xl shadow-black/40 outline-none',
+          leaving
+            ? 'scale-97 opacity-0 transition-all duration-150'
+            : 'animate-pop-in',
           className,
         )}
       >

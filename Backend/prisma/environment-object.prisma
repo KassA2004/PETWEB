@@ -1,19 +1,54 @@
 // EnvironmentObject
 // Source: /Docs/InitialDB-plan.md - "EnvironmentObject"
-// Defines a specific instance of an object placed within an environment.
+// One thing the user has put in their room, and where they put it.
 
 model EnvironmentObject {
   id            String @id @default(uuid()) @db.Uuid
   environmentId String @db.Uuid
-  objectId      String @db.Uuid
-  x             Float
-  y             Float
-  rotation      Float
-  scale         Float
 
-  environment Environment      @relation(fields: [environmentId], references: [id])
-  object      ObjectDefinition @relation(fields: [objectId], references: [id])
+  /// The client's own id for this object in the room.
+  ///
+  /// The arrangement is edited entirely on the client — an object is dragged
+  /// around a PixiJS scene long before anything is written down — so the row
+  /// has to be findable by the key the scene already uses, or every save would
+  /// have to renumber the room. Unique within an environment, not globally.
+  key String
 
+  /// Catalog type: `chair`, `bed`, `lamp`... (frontend `ObjectCatalog.ts`).
+  ///
+  /// Authoritative, the same way `Pet.appearanceData` is authoritative over any
+  /// future appearance catalog. The catalog is procedural code, not rows
+  /// (AGENTS.md - Visual Rules), so the type key is the whole reference.
+  type String
+
+  /// Back-left cell of the object's footprint on the floor grid.
+  ///
+  /// Cells, not pixels, and that is the point: placement snaps to whole cells
+  /// (`frontend/src/world/FloorGrid.ts`), so the cell IS the user's decision
+  /// and a float would only record the rounding. It also survives a change to
+  /// the tile size, which a coordinate would not.
+  col Int
+  row Int
+
+  /// The serialisable half of the client's ObjectDefinition: `seed` and the
+  /// three colours. Deliberately NOT a scale — an object's size is its
+  /// footprint and nothing may author another one beside it (AGENTS.md - Room
+  /// Rules). Rotation is likewise absent: what an object does about its own
+  /// axis is physics wobble, not something the user chose.
+  definitionData Json @default("{}")
+
+  /// Reserved link to the ObjectDefinition catalog (05-object-endpoints.md),
+  /// which does not exist yet. Nullable so the arrangement can be persisted
+  /// now without inventing catalog rows to point at.
+  objectId String? @db.Uuid
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+
+  environment Environment       @relation(fields: [environmentId], references: [id], onDelete: Cascade)
+  object      ObjectDefinition? @relation(fields: [objectId], references: [id])
+
+  @@unique([environmentId, key])
   @@index([environmentId])
   @@index([objectId])
 }

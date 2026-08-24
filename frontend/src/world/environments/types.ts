@@ -16,7 +16,8 @@
  */
 
 import type { Container } from 'pixi.js';
-import type { RoomMood } from '../Ambience';
+import type { RoomStyle } from '../RoomStyle';
+import type { WallAnchor, WallFootprint } from '../WallGrid';
 import type { ObjectDefinition } from '../../assets/objects/ObjectRenderer';
 import type { RoomBounds } from '../../simulation/physics';
 
@@ -78,13 +79,25 @@ export interface EnvironmentDefinition {
   /** Ceiling of the airspace small flying things are willing to use. */
   ceiling: number;
 
+  /**
+   * Cells of the wall grid that are not hanging space.
+   *
+   * A hole in the wall is still on the wall grid — that is how the window
+   * lines up with the columns the furniture stands in — but it is not
+   * somewhere a painting may go, and nothing but the environment knows where
+   * its own holes are. Stated as areas rather than checked for by name, so a
+   * room with two windows and a door costs three entries here and no
+   * conditionals anywhere.
+   */
+  wallReserved: (WallAnchor & { footprint: WallFootprint })[];
+
   /** What the environment starts furnished with. */
   props: PlacedProp[];
 
   /**
    * Build the scenery.
    *
-   * Called once each time the environment is activated *or the mood changes*,
+   * Called once each time the environment is activated *or the style changes*,
    * and the containers it returns are destroyed when it is superseded. A room
    * is cheap enough to rebuild — a few dozen flat shapes — that redressing it
    * for a different hour of the day is a rebuild rather than a pile of
@@ -92,5 +105,11 @@ export interface EnvironmentDefinition {
    * the two, so an environment is free to be seeded differently every time it
    * is entered if it wants to be.
    */
-  createScenery(mood: RoomMood): SceneryLayers;
+  /**
+   * The room's own appearance is a saved document (`world/RoomStyle.ts`), not
+   * a set of arguments: the hour, the paint, the floor, the walls, the window
+   * and everything hanging up arrive as one value, so adding an axis to what
+   * the user can change never changes this signature.
+   */
+  createScenery(style: RoomStyle): SceneryLayers;
 }

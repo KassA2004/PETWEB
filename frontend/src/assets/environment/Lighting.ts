@@ -36,6 +36,16 @@ export interface LightingOptions {
   windowHalf: { w: number; h: number };
   /** Where the light lands on the floor, in room coordinates. */
   pool: { x: number; z: number };
+  /**
+   * Override the key light, for a window that is a light source in its own
+   * right.
+   *
+   * The lava dungeon is the reason this exists. Ambience answers "what hour is
+   * it"; a view answers "what is out there", and when what is out there is a
+   * lake of lava, the shafts through the glass and the pool on the floor go
+   * orange at midday and at midnight alike (see window/WindowViews.ts).
+   */
+  key?: { color: number; strength: number };
 }
 
 export interface LightingLayers {
@@ -92,8 +102,9 @@ function shaft(
 
 export function createLighting(options: LightingOptions): LightingLayers {
   const { width, height, ambience, window: win, windowHalf, pool } = options;
-  const strength = ambience.key.strength;
-  const key = ambience.key.color;
+  // The view's own light wins where it has one; otherwise the hour's.
+  const strength = options.key?.strength ?? ambience.key.strength;
+  const key = options.key?.color ?? ambience.key.color;
 
   // --- Haze: distance, painted -------------------------------------------
   // A band lying over the back of the room only, fading out by the middle

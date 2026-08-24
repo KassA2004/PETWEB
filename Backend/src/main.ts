@@ -7,6 +7,7 @@ import express from 'express';
 import { AppModule } from './app.module';
 import { auth } from './auth/auth';
 import { HttpExceptionFilter } from './common/http-exception.filter';
+import { MEDIA_URL_PREFIX, uploadRoot } from './media/media-paths';
 import { toValidationDetails, ValidationFailedException } from './common/validation.exception';
 
 async function bootstrap(): Promise<void> {
@@ -37,8 +38,28 @@ async function bootstrap(): Promise<void> {
   // `auth.ts` sets basePath: '/api/auth'.
   expressApp.all('/api/auth/{*path}', toNodeHandler(auth));
 
-  // Every other route gets normal JSON body parsing.
+  // Every other route gets normal JSON body parsing. Multipart is NOT handled
+  // here — the media package's FileInterceptor parses those requests itself,
+  // and a JSON parser in front of it would drain the stream first.
   app.use(express.json());
+
+  // Uploaded pictures, served from disk (09-media-endpoints.md §4). Registered
+  // on Express directly rather than through ServeStaticModule so that no new
+  // dependency is needed for one directory, and mounted BEFORE the global
+  // prefix so the path stays `/uploads/...` — that exact string is what is
+  // stored in `Memory.imageUrl`, and versioning it would date every row.
+  //
+  // Public, with unguessable filenames. That is not access control, and
+  // 09-media-endpoints.md says as much: before anything social ships this has
+  // to move behind a guarded streaming controller.
+  app.useStaticAssets(uploadRoot(), {
+    prefix: MEDIA_URL_PREFIX,
+    // Content at a given path never changes: the id is part of the name.
+    maxAge: '1y',
+    immutable: true,
+    index: false,
+    dotfiles: 'deny',
+  });
 
   // 00-conventions.md §1: app routes live under /api/v1/..., Better Auth and
   // /health are excluded from both the prefix and the version segment.

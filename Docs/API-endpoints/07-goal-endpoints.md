@@ -184,3 +184,68 @@ history, not to the goal.
 
 Deferred: streaks nudge toward daily-engagement pressure, which the product explicitly
 avoids. Build only if explicitly requested.
+
+---
+
+## Implementation notes
+
+**Module:** `Backend/src/goals/` · **Client:** `frontend/src/features/goals/`
+
+Implemented: `GET /goals`, `POST /goals`, `GET/PATCH/DELETE /goals/:goalId`,
+`POST /goals/:goalId/complete`, `POST /goals/:goalId/reopen`.
+Not implemented: `GET /goals/stats` (`[LATER]`).
+
+### Deviations from the spec above, and why
+
+**A maximum of six open goals.** Not in the original spec; it is the product
+saying "finish something" out loud. A list you can add to for ever becomes a
+place to put things you are avoiding, and the seventh goal is almost never the
+one that gets done — it is the one that makes the other six feel heavier.
+
+- Counted **inside the transaction that inserts**, so two tabs racing cannot
+  produce a seventh. Verified: two concurrent creates at six open leave six.
+- `409` with code `GOAL_LIMIT_REACHED` and the user-facing message from
+  `goals/goal-limit.ts`, so the wording lives in exactly one place.
+- Reopening is capped too — otherwise the cap is one "Undo" away from meaningless.
+
+**Completion produces a memory, not a reward.** The spec's three side effects
+(status, `InventoryItem`, `Memory`) require an `ObjectDefinition` catalog that
+does not exist (`05-object-endpoints.md`). What is implemented is the goal and
+the memory, in one transaction. The reward is still granted client-side from the
+mock pool in `lib/mock/world.ts` and is the last mock left in the dashboard.
+
+**The memory is optional at every level.** No body completes the goal; a
+`memory` with no `imageUrl` keeps a note; an `imageUrl` must be a path the media
+endpoints handed out (`media/media-paths.ts`), never a URL the client invented.
+
+**Completion is idempotent.** Completing an already-completed goal returns the
+first result rather than erroring, and `Memory.goalId` is `UNIQUE` — so a
+request the client retried after a timeout cannot produce a second memory.
+
+**Reopening keeps the memory, unlinked.** It is a record of a day, not a
+property of the task; quietly deleting somebody's picture because they unticked
+a checkbox would be the worst kind of tidy. It has to lose the link, because the
+unique constraint would otherwise stop the goal ever being completed again.
+
+**A goal being worked on right now cannot be finished, reopened or deleted.**
+`409 FOCUS_IN_PROGRESS`. Added with focus sessions (`12-focus-endpoints.md`),
+and not for tidiness: while a session runs, the room is dark and the creature
+asleep *because of that goal*, so deleting it would leave the user in a room
+they cannot turn the lights back on in. The check asks `FocusService`, whose
+`current` resolves sessions that expired while the app was closed — so a goal
+whose session ran out last night is not mid-session.
+
+**Completing a goal raises affection; reopening gives it back.** The largest
+single event in the affection system (`+0.09`), applied inside the same
+transaction that writes the status and the memory: a completion the creature did
+not notice is a completion the product did not record. Reopening applies the
+same delta backwards, because without it a checkbox pressed forty times is a
+creature that adores you for nothing. The two do not cancel exactly — gains are
+scaled by the room above and losses by the value below — so a complete/reopen
+cycle costs a fraction of a percent. Churning slowly loses; doing the thing
+wins.
+
+> **Finishing a session is not finishing a goal.** "I did the time" and "I am
+> done" are different sentences, and a goal may span many sessions. See
+> `12-focus-endpoints.md` §1.
+

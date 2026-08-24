@@ -10,3 +10,21 @@ export function cn(...inputs: ClassValue[]): string {
 export function toCssHex(color: number): string {
   return `#${color.toString(16).padStart(6, '0')}`;
 }
+
+/**
+ * Split a list into fixed-size pages.
+ *
+ * Always returns at least one page, so a caller can render `pages[0]` without
+ * checking — an empty category is an empty grid, not a crash.
+ */
+export function paginate<T>(items: readonly T[], perPage: number): T[][] {
+  if (perPage <= 0) return [[...items]];
+
+  const pages: T[][] = [];
+  for (let index = 0; index < items.length; index += perPage) {
+    pages.push(items.slice(index, index + perPage));
+  }
+
+  return pages.length > 0 ? pages : [[]];
+}
+

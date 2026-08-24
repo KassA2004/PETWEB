@@ -6,6 +6,26 @@ model Environment {
   ownerId String @db.Uuid
   name    String
 
+  /// Everything the user has decided about how the room LOOKS: the hour, the
+  /// paint colour, the floor and wall materials, what is outside the window,
+  /// and what is hanging on the walls.
+  ///
+  /// One JSON document rather than a column per setting, and deliberately so.
+  /// The room gained four customization axes in one change and will gain more;
+  /// a column each would mean a migration each, and none of these values is
+  /// ever queried or filtered on — they are read whole, by exactly one
+  /// consumer, to draw a picture. That is the same reasoning that keeps
+  /// `Pet.appearanceData` a JSON document (11-schema-additions.md §2), and the
+  /// same trust boundary applies: the shape is validated on the way in
+  /// (`src/environments/room-style.ts`) and again on the way out, in the
+  /// client, so a malformed document costs one setting rather than the room.
+  ///
+  /// Never contains code. Only configuration.
+  sceneData Json @default("{}")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+
   owner   User                @relation(fields: [ownerId], references: [id])
   pets    Pet[]
   objects EnvironmentObject[]

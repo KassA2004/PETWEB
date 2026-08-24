@@ -135,3 +135,26 @@ Optional AI enrichment (`project-overview.md` §11). Requirements when built:
   memory untouched. The application must work fully without it.
 - The generated text is a **suggestion** returned to the client; it is only persisted
   when the user saves it through `PATCH /memories/:memoryId`.
+
+---
+
+## Implementation notes
+
+**Module:** `Backend/src/memories/` · **Client:** `frontend/src/features/memories/`
+
+Implemented: `GET /memories`, `POST /memories`, `PATCH`/`DELETE /memories/:memoryId`.
+Not implemented: `POST /memories/:memoryId/image` (attaching to an existing
+memory), `generate-description` (`[LATER]`), cursor pagination (`limit` only).
+
+- `POST /memories` accepts only the **user-authored** types, `snapshot` and
+  `note`. `goal_completed` is written inside the completion transaction
+  (`GoalsService.complete`) and never by a client call, which is what keeps the
+  history trustworthy.
+- `petId` is now **nullable**. A memory made by finishing a goal belongs to the
+  user's day, and an account can complete a goal before it has ever named a
+  creature.
+- `goalId` is nullable and **UNIQUE** — see `07-goal-endpoints.md`.
+- Deleting a memory deletes its file. The row goes first: if the unlink then
+  fails the user still sees the memory gone, and the orphan sweep collects the
+  file later. The other order risks deleting a photograph and then failing to
+  delete the row that promises it exists.

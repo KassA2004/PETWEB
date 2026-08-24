@@ -14,9 +14,40 @@ model User {
   activePetId String? @db.Uuid
   activePet   Pet?    @relation("ActivePet", fields: [activePetId], references: [id], onDelete: SetNull)
 
+  /// How the creature feels about the user, 0..1.
+  ///
+  /// On the user rather than on the pet, which is a deviation from the brief
+  /// worth defending. `Pet` rows are saved *presets* — a library the creature
+  /// editor writes to (see `src/pets/pets.service.ts`), which a user may have
+  /// none of and may delete at will. Affection is not a fact about a rig; it is
+  /// the state of a relationship built out of goals kept and sessions served,
+  /// and hanging it off a preset would mean it reset when somebody re-saved
+  /// their creature with different ears.
+  ///
+  /// Never written directly from a request. `AffectionService` is the only
+  /// writer, and it only ever moves this by a few hundredths at a time.
+  affection Float @default(0.5)
+
+  /// When `affection` was last brought up to date.
+  ///
+  /// Decay is computed rather than ticked: nothing runs on a schedule, and the
+  /// value is settled lazily on the next read (`AffectionService.read`). This
+  /// is the column that makes that possible, and the reason no cron job exists.
+  affectionAt DateTime @default(now())
+
+  /// The last time the user actually followed through — finished a session or
+  /// finished a goal.
+  ///
+  /// Separate from `affectionAt` because they answer different questions.
+  /// `affectionAt` is bookkeeping; this is the one the product has an opinion
+  /// about, and the opinion is that a fortnight away is a break rather than
+  /// neglect (`affection.ts`, GRACE_DAYS).
+  lastFollowThroughAt DateTime?
+
   pets           Pet[]
   environments   Environment[]
   memories       Memory[]
   inventoryItems InventoryItem[]
   goals          Goal[]
+  focusSessions  FocusSession[]
 }

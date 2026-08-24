@@ -1,12 +1,43 @@
 // Goal
-// Source: /Docs/InitialDB-plan.md - "Goal" (inferred from the relationship map)
+// Source: /Docs/InitialDB-plan.md - "Goal", extended per
+// /Docs/API-endpoints/07-goal-endpoints.md §1 and 11-schema-additions.md.
+//
+// InitialDB-plan gives a Goal only `id`, `ownerId` and `description`. A list
+// that can be completed needs a title to show, a status to filter on and the
+// two timestamps that make "done today" answerable — 07-goal-endpoints.md says
+// as much, and endpoints 1, 6 and 7 cannot exist without them.
 
 model Goal {
-  id          String @id @default(uuid()) @db.Uuid
-  ownerId     String @db.Uuid
-  description String
+  id      String @id @default(uuid()) @db.Uuid
+  ownerId String @db.Uuid
 
-  owner User @relation(fields: [ownerId], references: [id])
+  /// The one line the user actually reads. 1-80 chars.
+  title String
+  /// Optional detail. Kept from the original model rather than renamed, so
+  /// nothing that already referred to it has to change.
+  description String @default("")
 
-  @@index([ownerId])
+  /// `open` or `completed`.
+  ///
+  /// A string rather than an enum because the set is two values today and the
+  /// migration cost of a Postgres enum is paid every time that changes. The
+  /// service is the trust boundary; nothing else writes this column.
+  status String @default("open")
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @default(now()) @updatedAt
+  completedAt DateTime?
+
+  owner User @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  /// What the user chose to remember about finishing it. At most one.
+  memory Memory?
+
+  /// Every stretch of time committed to it. A goal outlives any one of them —
+  /// "I did the time" and "I am done" are different sentences
+  /// (12-focus-endpoints.md §1).
+  focusSessions FocusSession[]
+
+  /// The index the six-goal cap is counted on, and the one the list reads.
+  @@index([ownerId, status])
 }

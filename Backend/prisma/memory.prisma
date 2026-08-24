@@ -1,20 +1,45 @@
 // Memory
-// Source: /Docs/InitialDB-plan.md - "Memory"
+// Source: /Docs/InitialDB-plan.md - "Memory", /Docs/API-endpoints/08-memory-endpoints.md
 
 model Memory {
-  id          String   @id @default(uuid()) @db.Uuid
-  ownerId     String   @db.Uuid
-  petId       String   @db.Uuid
+  id      String @id @default(uuid()) @db.Uuid
+  ownerId String @db.Uuid
+
+  /// Which pet was around when it happened. Optional: a memory made by
+  /// finishing a goal belongs to the *user's day*, and an account can complete
+  /// a goal before it has ever named a creature.
+  petId String? @db.Uuid
+
+  /// Which goal produced it, when one did.
+  ///
+  /// Unique, and that is the whole duplicate-memory defence: a completion that
+  /// is retried — a double-clicked button, a request the client repeated after
+  /// a timeout — cannot make a second memory, because the database will not
+  /// hold two rows for one goal (12-error-states: "prevent duplicate memory
+  /// creation"). Nulled rather than deleted if the goal goes away, so the
+  /// picture the user kept survives the task it came from.
+  goalId String? @unique @db.Uuid
+
+  /// `goal_completed` | `snapshot` | `note` | ... (08-memory-endpoints.md §2).
   type        String
   title       String
-  description String
-  imageUrl    String
-  createdAt   DateTime @default(now())
+  description String @default("")
 
-  owner User @relation(fields: [ownerId], references: [id])
+  /// Path to the stored image, e.g. `/uploads/memory/2026/08/<id>.png`.
+  ///
+  /// A reference, never the bytes: PostgreSQL stores the path and the file
+  /// lives on disk under the media package (09-media-endpoints.md,
+  /// techStack.md - Storage). Null for a memory kept without a picture, which
+  /// is the common case — adding one is optional at every step.
+  imageUrl String?
+
+  createdAt DateTime @default(now())
+
+  owner User  @relation(fields: [ownerId], references: [id], onDelete: Cascade)
   // Deleting a pet takes its memories with it (03-pet-endpoints.md §9).
-  pet   Pet  @relation(fields: [petId], references: [id], onDelete: Cascade)
+  pet   Pet?  @relation(fields: [petId], references: [id], onDelete: Cascade)
+  goal  Goal? @relation(fields: [goalId], references: [id], onDelete: SetNull)
 
-  @@index([ownerId])
+  @@index([ownerId, createdAt])
   @@index([petId])
 }

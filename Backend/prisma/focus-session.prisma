@@ -1,0 +1,52 @@
+// FocusSession
+// Source: /Docs/API-endpoints/12-focus-endpoints.md, /Docs/API-endpoints/11-schema-additions.md §6
+//
+// One stretch of time the user committed to, against one goal.
+//
+// Deliberately not a "task run" or a "pomodoro": there is no cycle, no break
+// counter and no streak. A row here says *I said I would spend this long on
+// this, and here is what happened* — which is the only fact the affection
+// system needs and the only one the room ever shows.
+
+model FocusSession {
+  id      String @id @default(uuid()) @db.Uuid
+  ownerId String @db.Uuid
+
+  /// What the session was for.
+  ///
+  /// Nullable, and for the same reason `Memory.goalId` is: a session is a
+  /// record of an hour of somebody's life, not a property of the task. Deleting
+  /// the goal unlinks it rather than erasing the afternoon that went into it.
+  /// An *active* session always has one — the service refuses to delete a goal
+  /// out from under a running session.
+  goalId String? @db.Uuid
+
+  /// What was committed to, in minutes. Not the elapsed time — see `startedAt`.
+  durationMinutes Int
+
+  /// `active` | `completed` | `aborted`.
+  ///
+  /// A string rather than a Postgres enum, matching `Goal.status`: the set is
+  /// small, the service is the only writer, and an enum's migration cost is
+  /// paid every time the set changes.
+  status String @default("active")
+
+  /// When the clock started. **This column plus `durationMinutes` is the
+  /// timer.** No countdown is ever stored, and the client's clock is never
+  /// asked: the server derives the remaining seconds on every read, so a
+  /// refresh, a closed laptop or a wrong system clock all resolve the same way.
+  startedAt DateTime @default(now())
+
+  /// When it stopped being active. For a completion this is
+  /// `startedAt + duration` — the moment the time was actually served, not the
+  /// moment the browser got round to saying so.
+  endedAt DateTime?
+
+  owner User  @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  goal  Goal? @relation(fields: [goalId], references: [id], onDelete: SetNull)
+
+  /// The index the "is one running?" question is answered on, every request.
+  @@index([ownerId, status])
+  /// And the one the affection system's "how has the last fortnight gone?" uses.
+  @@index([ownerId, startedAt])
+}

@@ -10,7 +10,21 @@
 - **TypeScript** - Primary frontend programming language.
 - **PixiJS** - 2D rendering engine for the interactive pet world, creatures, environments, animations, particles, and visual effects.
 - **Tailwind CSS** - Styling for the application's traditional UI.
-- **shadcn/ui** - Reusable UI components for menus, dialogs, forms, settings, inventory, goals, etc.
+- **shadcn/ui** - Reusable UI components for menus, dialogs, forms, settings, goals, etc.
+- **Splide** (`@splidejs/splide`) - Paging for large option grids in the customization panels.
+
+  Added on request, and deliberately the *vanilla* package rather than
+  `@splidejs/react-splide`: the React wrapper is built against React 18 and is
+  only a class component around the same library, so a thin `Carousel`
+  (`components/ui/carousel.tsx`) mounts it directly and avoids the peer-version
+  question entirely. Mounted with `type: 'slide'` and never `'loop'` — loop mode
+  clones slides into the DOM, and a cloned React-rendered node is one React does
+  not know it has: it never updates, and its handlers are frozen at the moment
+  the clone was taken.
+
+  Used only where a category has more options than a grid can hold (eyes has 22,
+  mouths 16, the object catalog 20). Categories that fit one page render as a
+  plain grid with no carousel chrome at all.
 - **Zustand** - Lightweight client-side state management.
 - **TanStack Query** - Server-state management, API fetching, caching, and mutations.
 - **Zod** - Runtime validation for API data, pet configurations, and structured data.

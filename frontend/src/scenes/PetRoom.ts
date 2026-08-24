@@ -34,14 +34,28 @@
  */
 
 import { Application, Container, Graphics } from 'pixi.js';
+import { PALETTE } from '../assets/shared/color';
 import { createAtmosphere } from '../assets/environment/Atmosphere';
 import type { AtmosphereView } from '../assets/environment/Atmosphere';
 import { applyShadowHeight } from '../assets/environment/Shadows';
 import { createCritters } from '../assets/environment/Critters';
 import type { CrittersView } from '../assets/environment/Critters';
-import { getObjectTraits, renderObject } from '../assets/objects/ObjectRenderer';
-import type { ObjectType } from '../assets/objects/ObjectRenderer';
+import {
+  acceptsPropsOn,
+  colliderFor,
+  getObjectTraits,
+  renderObject,
+} from '../assets/objects/ObjectRenderer';
+import type {
+  Affordance,
+  AffordanceKind,
+  ObjectDefinition,
+  ObjectTraits,
+  ObjectType,
+} from '../assets/objects/ObjectRenderer';
 import { updateLife } from '../assets/objects/ObjectLife';
+import { readState } from '../assets/objects/ObjectState';
+import type { SuppliedState } from '../assets/objects/ObjectState';
 import { PetRenderer } from '../assets/pets/PetRenderer';
 import type { PetAppearanceInput } from '../assets/pets/customization/PetAppearance';
 import { PetAnimationController } from '../animation/PetAnimationController';
@@ -52,13 +66,13 @@ import {
   createPounceClip,
   createShakeClip,
 } from '../animation/clips/Handling';
+import { createInteractionClip } from '../animation/clips/Interactions';
 import { PetBrain } from '../simulation/PetBrain';
 import type { Intent, PetBehavior, PerceivedObject } from '../simulation/PetBrain';
 import { NavGrid, Navigator } from '../simulation/navigation';
 import type { Destination, Walker } from '../simulation/navigation';
 import {
   PhysicsWorld,
-  clamp,
   createBody,
   halfX,
   halfZ,
@@ -66,45 +80,71 @@ import {
 } from '../simulation/physics';
 import type {
   CharacterController,
-  Collider,
   PhysicsBody,
   SurfaceSpec,
   Vec3,
 } from '../simulation/physics';
 import {
+  ROOM_WIDTH,
   SCREEN_HEIGHT,
   SCREEN_WIDTH,
+  farness,
   heightAt,
   project,
   scaleAt,
   screenVelocityX,
   unprojectGround,
+  unprojectWall,
   unprojectX,
 } from '../world/Projection';
 import {
   GRID_COLUMNS,
-  cellAt,
+  GRID_ROWS,
+  anchorCenter,
   cellCenter,
-  rowForBand,
-  snapToGrid,
+  snapFootprint,
 } from '../world/FloorGrid';
+import type { Footprint, GridAnchor, GridPlacement } from '../world/FloorGrid';
+import { rowForBand } from '../world/FloorGrid';
+import { snapWall, wallCellKey, wallCells, wallQuadAt } from '../world/WallGrid';
+import type { WallAnchor } from '../world/WallGrid';
 import { DEFAULT_ENVIRONMENT } from '../world/environments';
 import type { EnvironmentDefinition, PlacedProp } from '../world/environments';
-import {
-  DEFAULT_AMBIENCE,
-  DEFAULT_ROOM_TINT,
-  fieldColor,
-  getAmbience,
-} from '../world/Ambience';
+import { fieldColor, graded } from '../world/Ambience';
 import type { AmbienceId, RoomMood } from '../world/Ambience';
+import {
+  DEFAULT_ROOM_STYLE,
+  normalizeRoomStyle,
+  occupiedWallCells,
+  placeWallDecor,
+  resolveMood,
+  sameRoomStyle,
+} from '../world/RoomStyle';
+import type { RoomStyle, WallDecorPlacement } from '../world/RoomStyle';
+import { getWallDecor } from '../assets/environment/walls/WallDecor';
+import type { WallDecorKind } from '../assets/environment/walls/WallDecor';
 import { depthTintOf, pickAt, sortKeyOf } from './room/BodyView';
 import { createDepthGuide } from './room/DepthGuide';
 import { swipeImpulse } from './room/Swipe';
 import type { Blocker } from './room/Swipe';
 import type { DepthGuideView } from './room/DepthGuide';
+import type { RoomSound, RoomSoundKind } from './room/RoomSound';
+import { createWallGuide } from './room/WallGuide';
+import type { WallGuideView } from './room/WallGuide';
 import { PropMotion, motionStyleFor } from './room/PropMotion';
 
 const PET_SCALE = 0.8;
+
+/**
+ * How fast a contact has to be before the room reports it as a noise.
+ *
+ * Not a volume floor — a filter on what counts as an event at all. A ball
+ * resting against a chair leg generates a steady stream of contacts as the
+ * solver holds it there; they are physically real and acoustically nothing, and
+ * a mixer handed all of them has already lost. The threshold is set just above
+ * "settling" and well below "somebody threw that".
+ */
+const AUDIBLE_IMPACT_SPEED = 140;
 
 /**
  * Gravity, in px/s².
@@ -169,10 +209,27 @@ const OWN_SWIPE_TIME = 1.8;
  */
 const STUMBLE_SPEED = 110;
 
+/**
+ * How long a still cursor keeps the creature's attention, in seconds.
+ *
+ * A hand that has stopped moving is a hand that has stopped being about the
+ * creature — somebody is reading the panel beside the room. Treating a parked
+ * mouse as attention is how "occasionally follows the cursor" becomes "stares".
+ */
+const POINTER_ATTENTION = 2.5;
+
 /** One thing in the room: art, a body, and a shadow that stays on the floor. */
 interface Entity {
   id: string;
   type: ObjectType | 'pet';
+  /**
+   * The document this was drawn from: seed and colours.
+   *
+   * Kept so the arrangement can be written down without the scene having to
+   * reverse-engineer an object's colours out of its Graphics. Empty for the
+   * creature, which is saved by an entirely different route.
+   */
+  definition: Omit<ObjectDefinition, 'type'>;
   view: Container;
   /** Everything except the contact shadow, so the art can lift on its own. */
   art: Container;
@@ -182,26 +239,74 @@ interface Entity {
   isToy: boolean;
   /** Scenery: can be looked at and wondered about, never walked to. */
   reachable: boolean;
+  /**
+   * What the creature can do with this, if anything.
+   *
+   * Resolved once when the object enters the room rather than looked up every
+   * frame: an object's affordances are a property of its type and never change
+   * while it is standing there.
+   */
+  affordance: Affordance | null;
 }
+
+/**
+ * Something that happened on the page, as far as the creature is concerned.
+ *
+ * The room is a box on a page and most of the product happens outside it — a
+ * goal is finished in a panel, an hour is committed to in a dialog. These are
+ * the handful of those events the creature is entitled to know about.
+ */
+export type PetReaction =
+  /** Something good happened. */
+  | 'celebrate'
+  /** Something appeared over the world; look up, then carry on. */
+  | 'notice'
+  /** Something arrived at speed. */
+  | 'startle'
+  /** The lights went out for an hour. */
+  | 'settle'
+  /** They came back, and the creature has an opinion about how it has gone. */
+  | 'greet'
+  /** They said they would spend an hour and then did not. */
+  | 'sulk';
 
 export interface RoomStatus {
   mood: string;
   behavior: PetBehavior;
   lightsOn: boolean;
-  /** The hour of day the room is currently dressed for. */
-  ambience: AmbienceId;
-  /** The colour the room is currently built from. */
-  tint: number;
+  /** Everything the user has chosen about the room, for the interface. */
+  style: RoomStyle;
   /** What the pointer currently has hold of. */
   holding: 'pet' | 'prop' | null;
-  /** Which row of the room the held thing is over, for the interface. */
+  /** Whether the room is in its rearranging state. */
+  editing: boolean;
   /**
-   * Which tile of the floor grid the carried thing is over.
+   * Whether letting go right now would put the carried thing away.
    *
-   * Null when nothing is being carried, and null while something is being held
-   * above the back wall, where there is no floor under it to name.
+   * The interface draws the removal area from this, so the frame and the object
+   * in the user's hand agree about what is about to happen.
    */
-  holdingCell: { row: number; col: number } | null;
+  discarding: boolean;
+  /**
+   * Which cells of the floor grid the carried thing will land on.
+   *
+   * The snapped answer rather than the pointer's, so the words in the
+   * interface and the highlight on the floor can never disagree. Null when
+   * nothing is being carried, and null while something is held above the back
+   * wall, where there is no floor under it to name.
+   */
+  holdingCell: { row: number; col: number; footprint: Footprint } | null;
+}
+
+/** One object in the room, as something that can be written to a database. */
+export interface PlacedObjectSnapshot {
+  /** The scene's own id for it, stable across saves. */
+  key: string;
+  type: ObjectType;
+  /** Back-left cell of its footprint on the floor grid. */
+  col: number;
+  row: number;
+  definition: Omit<ObjectDefinition, 'type'>;
 }
 
 export interface PetRoomOptions {
@@ -210,10 +315,28 @@ export interface PetRoomOptions {
   onStatus?: (status: RoomStatus) => void;
   /** Which room the creature lives in. Defaults to the farmhouse. */
   environment?: EnvironmentDefinition;
-  /** What hour the room starts dressed for. */
-  ambience?: AmbienceId;
-  /** What colour the room is built from. */
-  tint?: number;
+  /** What the room looks like. Anything omitted falls back to the default. */
+  style?: Partial<RoomStyle>;
+  /** A wall-decor drag was just committed; the caller owns saving `RoomStyle`. */
+  onWallDecorChange?: (decor: WallDecorPlacement[]) => void;
+  /**
+   * Something was set down, added or taken away.
+   *
+   * Fires on settled placements only — not while a thing is being dragged and
+   * not while the creature is knocking a ball around. The caller decides what
+   * to do about it, and debounces (`features/habitat/useRoomObjects.ts`).
+   */
+  onArrangementChange?: () => void;
+  /**
+   * Something was dragged out of the room and put away.
+   *
+   * Reported rather than assumed, because the page holds its own list of what
+   * it has put in the room (`Dashboard.placements`) and a scene that quietly
+   * removed a row from under it would re-add the object on the next render.
+   */
+  onObjectRemoved?: (id: string) => void;
+  /** Somewhere for the room to send things worth hearing. */
+  onSound?: (event: RoomSound) => void;
 }
 
 /**
@@ -245,6 +368,10 @@ export class PetRoom {
   private tick: (ticker: { deltaMS: number }) => void;
   private fit: 'cover' | 'contain';
   private onStatus?: (status: RoomStatus) => void;
+  private onObjectRemoved?: (id: string) => void;
+  private onWallDecorChange?: (decor: WallDecorPlacement[]) => void;
+  private onArrangementChange?: () => void;
+  private onSound?: (event: RoomSound) => void;
 
   /**
    * The room the creature is currently living in, and the containers it built.
@@ -257,12 +384,18 @@ export class PetRoom {
   private environment: EnvironmentDefinition;
 
   /**
-   * What hour it is in the room and what the room is made of.
+   * Everything the user has decided about the room.
    *
-   * The environment says what is *there*; the mood says what light is on it
-   * and what colour it is painted (world/Ambience.ts). Keeping them apart is
-   * what lets one room be five rooms.
+   * The environment says what is *there*; the style says what light is on it,
+   * what it is painted, what the floor and walls are made of, what is outside
+   * the window and what is hanging up (world/RoomStyle.ts). Keeping them apart
+   * is what lets one room be a hundred rooms — and the style is a single
+   * serialisable value, which is what lets those hundred rooms survive a
+   * refresh.
    */
+  private style: RoomStyle;
+
+  /** The light and surface colours the current style resolves to. */
   private mood: RoomMood;
 
   /** The room as currently dressed, plus any generation still fading out. */
@@ -292,20 +425,74 @@ export class PetRoom {
   private navigator: Navigator;
   private critters!: CrittersView;
   private guide: DepthGuideView;
+  private wallGuide: WallGuideView;
+  /** A piece being dragged onto the wall grid, from the palette or off it. */
+  private wallDrag: {
+    kind: WallDecorKind;
+    existingId: string | null;
+    anchor: WallAnchor | null;
+    /** Over the window, or something else that is not hanging space. */
+    blocked: boolean;
+  } | null = null;
+  /** The environment's non-hanging cells, resolved once. */
+  private wallReserved: ReadonlySet<string> | null = null;
   private entities = new Map<string, Entity>();
   private petEntity!: Entity;
   /** Seconds since the room opened, for everything that ticks on its own. */
   private time = 0;
 
+  /**
+   * Whether the *user* has left a light on.
+   *
+   * Not the same question as whether the room is lit, and keeping the two apart
+   * is what stops a focus session from quietly rewriting somebody's room. A
+   * session dims the room; it does not change the choice they made about it, so
+   * when the hour is up the lamp is however they left it.
+   */
   private lightsOn = true;
+  /** True while a focus session owns the room. See `setFocus`. */
+  private focused = false;
+  /**
+   * True while the user is rearranging rather than playing.
+   *
+   * The room behaves the same in both states with one exception, and the
+   * exception is the whole reason the mode exists: a thing dragged out of the
+   * frame is put away rather than snapped back to where it came from. Outside
+   * editing, dragging a chair off the edge of the world is a slip; inside it,
+   * it is the way you throw the chair out.
+   */
+  private editing = false;
+  /** True while the carried thing is over the removal area. */
+  private discarding = false;
+  /** What `applyLights` last pushed out, so a no-op change stays a no-op. */
+  private wasLit = true;
   private nightAlpha = 0;
 
   /** Pointer drag state. */
   private grabbed: Entity | null = null;
+  /**
+   * The carried thing, while it is over somewhere it may not be set down.
+   *
+   * The floor guide already says so by turning red under it, but a marking on
+   * the floor is a caption and the thing the user is looking at is the object
+   * in their hand — so the object says it too (`syncEntity`). Held here rather
+   * than on the entity because it is a fact about the *drag*, not about the
+   * object, and it has to be forgotten the moment the drag ends.
+   */
+  private refusedDrop: string | null = null;
   private grabStart = { time: 0, moved: 0 };
   /** Where the grabbed thing was standing, so a click can put it back. */
   private grabOrigin: Vec3 = { x: 0, y: 0, z: 0 };
   private pointer = { x: 0, y: 0 };
+  /**
+   * Where the pointer last was over the room, and when — room-local, and
+   * independent of whether anything is being dragged.
+   *
+   * Null when it is somewhere else on the page. Fed to the brain by
+   * `pointerOnFloor`, which is what lets a fond creature come over and a wary
+   * one keep its distance.
+   */
+  private hover: { x: number; y: number; at: number } | null = null;
   /** Sideways pointer speed, for the shake test. */
   private swing = 0;
 
@@ -335,6 +522,9 @@ export class PetRoom {
   /** Climbing onto furniture. One jump at a time, with a breath in between. */
   private mountCooldown = 0;
 
+  /** Which interaction clip is running, so it is started and stopped once. */
+  private interaction: { kind: AffordanceKind | null } = { kind: null };
+
   /**
    * Seconds left of a stumble.
    *
@@ -360,11 +550,15 @@ export class PetRoom {
     this.app = app;
     this.fit = options.fit ?? 'cover';
     this.onStatus = options.onStatus;
+    this.onWallDecorChange = options.onWallDecorChange;
+    this.onArrangementChange = options.onArrangementChange;
+    this.onObjectRemoved = options.onObjectRemoved;
+    this.onSound = options.onSound;
     this.environment = options.environment ?? DEFAULT_ENVIRONMENT;
-    this.mood = {
-      ambience: getAmbience(options.ambience ?? DEFAULT_AMBIENCE),
-      tint: options.tint ?? DEFAULT_ROOM_TINT,
-    };
+    this.style = normalizeRoomStyle(options.style ?? DEFAULT_ROOM_STYLE);
+    this.mood = resolveMood(this.style);
+    this.lightsOn = this.style.lightsOn;
+    this.wasLit = this.style.lightsOn;
 
     this.root = new Container();
     this.root.label = 'pet-room';
@@ -419,6 +613,12 @@ export class PetRoom {
     this.overlayLayer = new Container();
     this.overlayLayer.label = 'scenery-overlay';
     this.root.addChild(this.overlayLayer);
+
+    // The wall drag preview sits above everything — furniture, the creature,
+    // the overlay — because it is telling the user about a piece that is
+    // about to hang in front of all of it.
+    this.wallGuide = createWallGuide();
+    this.root.addChild(this.wallGuide.root);
 
     // --- The creature ------------------------------------------------------
     this.pet = new PetRenderer(options.appearance ?? {});
@@ -512,7 +712,7 @@ export class PetRoom {
    * is the only thing that reads as a change of light rather than as a flash.
    */
   private dress(crossfade: boolean): void {
-    const scenery = this.environment.createScenery(this.mood);
+    const scenery = this.environment.createScenery(this.style);
 
     const ground = new Container();
     ground.label = 'scenery-ground';
@@ -606,32 +806,56 @@ export class PetRoom {
   }
 
   /**
-   * Change what hour it is in the room.
+   * Change the room's appearance.
+   *
+   * One entry point for every axis — the hour, the paint, the floor, the
+   * walls, the window, what is hanging up — because they are one value. A
+   * redress is a rebuild: the room is a few dozen flat shapes, so rebuilding
+   * it costs less than the bookkeeping of tweening every one of them would,
+   * and it means a change can alter *anything* rather than only the things
+   * somebody remembered to make tweenable. Two generations cross-fade.
    *
    * The furniture, the creature and everything it remembers stay exactly where
-   * they were — this is the light changing, not a new room (§17).
+   * they are — this is the room changing, not a new room (§17).
    */
-  setAmbience(id: AmbienceId): void {
-    if (this.mood.ambience.id === id) return;
-    this.mood = { ...this.mood, ambience: getAmbience(id) };
-    this.dress(true);
+  setStyle(next: Partial<RoomStyle>): void {
+    const merged = normalizeRoomStyle({ ...this.style, ...next });
+    if (sameRoomStyle(this.style, merged)) return;
+
+    // The light switch composes with the hour rather than being part of it, so
+    // it is applied through its own path and never triggers a rebuild.
+    const relit = merged.lightsOn !== this.style.lightsOn;
+    const redress = !sameRoomStyle({ ...this.style, lightsOn: merged.lightsOn }, merged);
+
+    this.style = merged;
+    this.mood = resolveMood(merged);
+
+    if (relit) this.setLights(merged.lightsOn);
+    if (redress) this.dress(true);
+
     this.emitStatus();
+  }
+
+  /** What the room currently looks like. Serialisable, and worth saving. */
+  get roomStyle(): RoomStyle {
+    return this.style;
+  }
+
+  setAmbience(id: AmbienceId): void {
+    this.setStyle({ ambience: id });
   }
 
   /** Change what the room is painted and built from. */
   setRoomTint(color: number): void {
-    if (this.mood.tint === color) return;
-    this.mood = { ...this.mood, tint: color };
-    this.dress(true);
-    this.emitStatus();
+    this.setStyle({ tint: color });
   }
 
   get ambienceId(): AmbienceId {
-    return this.mood.ambience.id;
+    return this.style.ambience;
   }
 
   get roomTint(): number {
-    return this.mood.tint;
+    return this.style.tint;
   }
 
   /**
@@ -646,6 +870,8 @@ export class PetRoom {
 
     this.leaveEnvironment();
     this.environment = environment;
+    // A different room has its holes in different places.
+    this.wallReserved = null;
 
     this.world.environment.bounds = environment.bounds;
     this.brain.setBounds(this.brainBounds());
@@ -689,6 +915,7 @@ export class PetRoom {
     this.petEntity = {
       id: 'pet',
       type: 'pet',
+      definition: {},
       view: this.pet.root,
       art,
       body,
@@ -696,6 +923,7 @@ export class PetRoom {
       motion: new PropMotion('tumble', this.petRadius()),
       isToy: false,
       reachable: true,
+      affordance: null,
     };
 
     this.entities.set('pet', this.petEntity);
@@ -745,45 +973,41 @@ export class PetRoom {
     });
   }
 
-  /** Scale a collider authored at scale 1 up to the size it is drawn at. */
-  private scaleCollider(collider: Collider, scale: number): Collider {
-    return collider.shape === 'cylinder'
-      ? {
-        shape: 'cylinder',
-        radius: collider.radius * scale,
-        height: collider.height * scale,
-      }
-      : {
-        shape: 'box',
-        halfX: collider.halfX * scale,
-        halfZ: collider.halfZ * scale,
-        height: collider.height * scale,
-      };
+  /**
+   * How many cells this type of thing takes up.
+   *
+   * Asked for by every part of placement — the snap, the drag guide and the
+   * status line all need the same answer, and it lives in exactly one place.
+   */
+  private footprintOfType(type: ObjectType): Footprint {
+    return getObjectTraits(type).footprint;
+  }
+
+  /**
+   * The one thing this object offers, or null.
+   *
+   * A type may declare several; the room takes the first, because nothing in
+   * the catalog needs two yet and a chooser with one option is a chooser
+   * nobody has thought about properly. When something does need two, this is
+   * where the choosing goes — not in the brain, which should keep asking
+   * "what can I do here" rather than "what kind of thing is that".
+   */
+  private pickAffordance(traits: ObjectTraits): Affordance | null {
+    return traits.affordances?.[0] ?? null;
   }
 
   private addProp(prop: PlacedProp): Entity {
     const traits = getObjectTraits(prop.definition.type);
-    const scale = (prop.definition.scale ?? 1) * 0.85;
 
-    const view = renderObject({
-      ...prop.definition,
-      scale,
-    });
+    const view = renderObject(prop.definition);
     const { art, shadow } = this.splitArt(view);
 
-    // The collision volume and the resting surface are authored at scale 1
-    // alongside the artwork, so both have to be scaled with it.
-    const collider = this.scaleCollider(traits.collider, scale);
-
-    const surface: SurfaceSpec | undefined = traits.surface
-      ? {
-        ...traits.surface,
-        rim: traits.surface.rim === undefined ? undefined : traits.surface.rim * scale,
-        inset:
-          traits.surface.inset === undefined ? undefined : traits.surface.inset * scale,
-        give: traits.surface.give === undefined ? undefined : traits.surface.give * scale,
-      }
-      : undefined;
+    // The collision volume comes from the same grid footprint the artwork was
+    // drawn to (`colliderFor`), so the space a thing occupies and the space it
+    // looks like it occupies are the same box by construction. Nothing here
+    // scales anything: an object is the size of its cells.
+    const collider = colliderFor(traits);
+    const surface: SurfaceSpec | undefined = traits.surface;
 
     const body = this.world.add(
       createBody({
@@ -792,11 +1016,11 @@ export class PetRoom {
         position: {
           x: prop.x,
           // Wall-hung decor never touches the floor.
-          y: traits.mount === undefined ? 0 : traits.mount * scale,
+          y: traits.mount ?? 0,
           z: prop.z,
         },
         collider,
-        mass: traits.mass * scale,
+        mass: traits.mass,
         restitution: traits.restitution,
         friction: traits.friction,
         drag: traits.drag,
@@ -815,6 +1039,12 @@ export class PetRoom {
     const entity: Entity = {
       id: prop.id,
       type: prop.definition.type,
+      definition: {
+        seed: prop.definition.seed,
+        color: prop.definition.color,
+        secondaryColor: prop.definition.secondaryColor,
+        accentColor: prop.definition.accentColor,
+      },
       view,
       art,
       body,
@@ -829,6 +1059,7 @@ export class PetRoom {
       ),
       isToy: traits.category === 'toy',
       reachable: traits.mount === undefined && collider.height > 6,
+      affordance: this.pickAffordance(traits),
     };
 
     this.entities.set(prop.id, entity);
@@ -838,46 +1069,219 @@ export class PetRoom {
     return entity;
   }
 
-  /** Drop a new object into the room, e.g. from the inventory. */
+  /**
+   * Drop an object into the room.
+   *
+   * Two callers, and the difference between them is the whole of why `cell`
+   * exists. The inventory puts something *new* down and does not care where —
+   * it gets the depth band its type prefers and a column across the middle,
+   * and it arrives from above so you can watch it land. A room being restored
+   * from the database knows exactly which cell every object was on, and has to
+   * get that cell back: `cell` is that answer, and an object given one is
+   * placed rather than dropped, because a room that rains furniture every time
+   * you sign in is a room that has forgotten where things were.
+   */
   placeObject(
     id: string,
     type: ObjectType,
-    options: { x?: number; z?: number } = {},
+    options: {
+      x?: number;
+      z?: number;
+      /** The saved cell. Anything with one skips the arrival animation. */
+      cell?: GridAnchor;
+      /** The saved seed and colours, for an object being restored. */
+      definition?: Omit<ObjectDefinition, 'type'>;
+    } = {},
   ): void {
-    if (this.entities.has(id)) return;
-
     const traits = getObjectTraits(type);
     const mounted = traits.mount !== undefined;
+    const footprint = traits.footprint;
 
-    // A new object lands on a tile: the row its type prefers, and a column
-    // somewhere across the middle of the room. Explicit coordinates from the
-    // caller win, and are snapped like any other placement.
-    const home = cellCenter(
-      Math.floor(GRID_COLUMNS * (0.3 + Math.random() * 0.4)),
-      rowForBand(traits.home ?? 'front'),
+    const existing = this.entities.get(id);
+    if (existing) {
+      // Already here. That is the ordinary case for a *restore*: the
+      // environment furnishes the room with its own starting props
+      // (`Farmhouse.ts`) before the saved arrangement arrives, so every one of
+      // them is already standing somewhere by the time the database answers.
+      //
+      // Bailing out here — which is what this used to do — meant the saved
+      // position of anything the room shipped with was silently discarded:
+      // move the bed, come back tomorrow, and the bed is where the product put
+      // it rather than where you did. A restore that only works for furniture
+      // the user added is not a restore.
+      if (options.cell && !mounted) {
+        const centre = anchorCenter(options.cell, footprint);
+        this.world.place(existing.body, { x: centre.x, z: centre.z });
+        this.settlePlacement(existing);
+      }
+      return;
+    }
+
+    // A new object arrives on whole cells: the row band its type prefers, and
+    // a column somewhere across the middle of the room. `rowForBand` is told
+    // how deep the thing is, so a two-row object asked for the front row is
+    // given the last row it actually fits in rather than one it overhangs.
+    const column = Math.floor(
+      (GRID_COLUMNS - footprint.cols) * (0.3 + Math.random() * 0.4),
+    );
+    const home = anchorCenter(
+      options.cell ?? {
+        col: column,
+        row: rowForBand(traits.home ?? 'front', footprint.rows),
+      },
+      footprint,
     );
 
     const entity = this.addProp({
       id,
-      definition: { type, seed: id.length * 7 + 3 },
+      definition: { type, seed: id.length * 7 + 3, ...options.definition },
       x: options.x ?? home.x,
       z: options.z ?? (mounted ? 8 : home.z),
     });
 
     if (mounted) return;
 
-    if (entity.body.type === 'static') {
+    if (entity.body.type === 'static' || options.cell) {
       // Furniture is never integrated, so dropping it from a height would
-      // leave it hanging there. It is placed instead.
+      // leave it hanging there. It is placed instead — and so is anything
+      // being restored to a cell it was already on.
       this.settlePlacement(entity);
+      this.arrangementChanged();
       return;
     }
 
     // Arrives from above, so you can see it land.
     this.world.place(entity.body, { y: 300 });
+    this.arrangementChanged();
+  }
+
+  /**
+   * Where everything in the room is, as saveable data.
+   *
+   * Cells rather than coordinates, and that is not a compression — the cell IS
+   * the user's decision (`world/FloorGrid.ts`), and a float would only record
+   * which way the physics happened to be rounding when the snapshot was taken.
+   * A ball that has rolled somewhere between two cells is snapped by the same
+   * `snapFootprint` a drop would use, so reloading puts it where letting go of
+   * it there would have.
+   *
+   * Wall decor is not here: it lives in `RoomStyle.decor` and is saved with the
+   * room's appearance, because a painting is something the room is wearing
+   * rather than something standing in it.
+   */
+  snapshotObjects(): PlacedObjectSnapshot[] {
+    const out: PlacedObjectSnapshot[] = [];
+
+    for (const entity of this.entities.values()) {
+      if (entity.id === 'pet') continue;
+
+      const definition = entity.definition;
+      const placement = snapFootprint(
+        entity.body.position.x,
+        entity.body.position.z,
+        this.footprintOfType(entity.type as ObjectType),
+      );
+
+      out.push({
+        key: entity.id,
+        type: entity.type as ObjectType,
+        col: placement.col,
+        row: placement.row,
+        definition: {
+          seed: definition.seed,
+          color: definition.color,
+          secondaryColor: definition.secondaryColor,
+          accentColor: definition.accentColor,
+        },
+      });
+    }
+
+    return out;
+  }
+
+  /**
+   * Report something worth hearing.
+   *
+   * One place that knows how to turn a position in the room into the stereo
+   * image and the falloff, so no caller ever has to. `ROOM_WIDTH / 2` is the
+   * centre line, and `farness` is the same depth term the aerial-perspective
+   * tint uses — a thing at the back of the room should sound as far away as it
+   * looks.
+   */
+  private emitSound(
+    kind: RoomSoundKind,
+    strength: number,
+    at: { x: number; z: number },
+    type?: ObjectType,
+  ): void {
+    if (!this.onSound) return;
+
+    this.onSound({
+      kind,
+      strength: Math.max(0, Math.min(1, strength)),
+      pan: Math.max(-1, Math.min(1, (at.x - ROOM_WIDTH / 2) / (ROOM_WIDTH / 2))),
+      distance: farness(at.z),
+      type,
+    });
+  }
+
+  /**
+   * Something about the arrangement changed and is worth writing down.
+   *
+   * Fired on a *settled* placement, never per frame: the creature nudges a ball
+   * across the floor for its own reasons all afternoon, and a save on every
+   * position change would be a request per frame for a room nobody is editing.
+   * The caller debounces on top of this (`features/habitat/useRoomObjects.ts`).
+   */
+  private arrangementChanged(): void {
+    this.onArrangementChange?.();
   }
 
   /** Take an object back out of the room. */
+  /**
+   * Put something away, with the small ceremony that makes it feel deliberate.
+   *
+   * The artwork shrinks and fades over a fifth of a second rather than
+   * vanishing on the frame the pointer came up. Nothing waits for it — the
+   * object is gone from the physics and from the arrangement immediately, and
+   * what is animating is a picture of something that has already left, which is
+   * the only way an exit animation can never gate a state change
+   * (`Docs/audio-and-feedback.md` §7).
+   */
+  private discardObject(entity: Entity): void {
+    const at = entity.body.position;
+    this.emitSound('prop-place', 0.55, at, entity.type as ObjectType);
+
+    const view = entity.view;
+    const id = entity.id;
+
+    // Out of the world first, so nothing can collide with a thing that is on
+    // its way out and no save can catch it half-removed.
+    this.world.remove(entity.body.id);
+    this.entities.delete(id);
+    if (this.grabbed?.id === id) this.grabbed = null;
+
+    const fade = { t: 0 };
+    const shrink = (ticker: { deltaMS: number }) => {
+      fade.t += ticker.deltaMS / 200;
+
+      if (fade.t >= 1 || view.destroyed) {
+        this.app.ticker.remove(shrink);
+        if (!view.destroyed) view.destroy({ children: true });
+        return;
+      }
+
+      const eased = 1 - (1 - fade.t) * (1 - fade.t);
+      view.alpha = 1 - eased;
+      view.scale.set(view.scale.x * (1 - eased * 0.12));
+    };
+
+    this.app.ticker.add(shrink);
+
+    this.onObjectRemoved?.(id);
+    this.arrangementChanged();
+  }
+
   removeObject(id: string): void {
     const entity = this.entities.get(id);
     if (!entity || entity.id === 'pet') return;
@@ -888,6 +1292,7 @@ export class PetRoom {
     this.world.remove(id);
     this.entities.delete(id);
     entity.view.destroy({ children: true });
+    this.arrangementChanged();
   }
 
   hasObject(id: string): boolean {
@@ -930,17 +1335,121 @@ export class PetRoom {
     if (old.held) this.world.grab(body);
   }
 
+  /**
+   * Whether the room is actually lit right now.
+   *
+   * The user's switch AND the absence of a session. Everything that draws,
+   * perceives or decides reads this; only the interface and the saved
+   * `RoomStyle` read `lightsOn`.
+   */
+  private get lit(): boolean {
+    return this.lightsOn && !this.focused;
+  }
+
+  /**
+   * A focus session took the room, or gave it back.
+   *
+   * Reuses the lighting the lamp already uses and the sleep the darkness
+   * already causes — there is no "focus mode" in the brain, and there must not
+   * be. The creature goes to bed because the lights went out, which is what it
+   * would have done anyway; the only new thing here is *who* turned them off
+   * and the fact that the room stops answering the pointer while they are.
+   */
+  setFocus(on: boolean): void {
+    if (this.focused === on) return;
+    this.focused = on;
+
+    if (on) {
+      // Whatever was in the user's hand is put down before the room locks, or
+      // it stays welded to the pointer for the next hour.
+      if (this.grabbed) this.pointerUp();
+      this.wallDragCancel();
+    }
+
+    this.applyLights();
+  }
+
+  /** True while the room is refusing to be handled. */
+  get isFocused(): boolean {
+    return this.focused;
+  }
+
+  /**
+   * Turn rearranging on or off.
+   *
+   * Everything that makes an object draggable was already true — the room has
+   * always let you pick a chair up. This adds one thing: somewhere to put it
+   * down that means "away".
+   */
+  setEditing(on: boolean): void {
+    if (this.editing === on) return;
+    this.editing = on;
+
+    if (!on && this.discarding) this.setDiscarding(false);
+    this.emitStatus();
+  }
+
+  get isEditing(): boolean {
+    return this.editing;
+  }
+
+  /**
+   * The carried thing is over the removal area, or has left it.
+   *
+   * The page owns the frame and therefore owns the question "is the pointer
+   * outside it" — the scene is told, rather than guessing from a coordinate it
+   * would have to un-project first.
+   *
+   * Says so on the object itself as well as in the interface around it: the
+   * thing the user is looking at is the object in their hand, and a caption
+   * somewhere else is a caption they are not reading (the same argument as the
+   * refused-drop tint, `refusedDrop`).
+   */
+  setDiscarding(over: boolean): void {
+    const next = over && this.editing && this.grabbed !== null && this.grabbed.id !== 'pet';
+    if (this.discarding === next) return;
+
+    this.discarding = next;
+    if (next) this.emitSound('prop-lift', 0.35, this.grabbed!.body.position);
+    this.emitStatus();
+  }
+
+  get isDiscarding(): boolean {
+    return this.discarding;
+  }
+
   setLights(on: boolean): void {
     if (this.lightsOn === on) return;
     this.lightsOn = on;
-    this.brain.lightsChanged(on);
+    this.style = { ...this.style, lightsOn: on };
+    this.applyLights();
+  }
+
+  /**
+   * Push the effective lighting into everything that cares.
+   *
+   * One path, called by both the switch and the session, so the two can never
+   * disagree about whether the lamps are on — which they did, briefly, when
+   * each owned its own copy of the answer.
+   */
+  private applyLights(): void {
+    const lit = this.lit;
+    if (this.wasLit === lit) return;
+    this.wasLit = lit;
+
+    this.brain.lightsChanged(lit);
+    this.emitSound('lights', 0.5, this.environment.light);
 
     // Every lamp in the room, whichever room it is. Deep search, because the
     // lamp's art was moved under its own container when the entity was split
     // from its shadow.
     for (const lamp of this.lamps()) {
-      const glow = lamp.view.getChildByLabel('lamp-glow', true);
-      if (glow) glow.visible = on;
+      // Every lamp draws more than one lit shape — the glow around the shade
+      // and the pool it throws on the floor — so all of them are switched, not
+      // the first one found.
+      for (const glow of lamp.view.getChildrenByLabel('lamp-glow', true)) {
+        glow.visible = lit;
+      }
     }
 
     this.emitStatus();
@@ -952,7 +1461,83 @@ export class PetRoom {
 
   /** Something good happened elsewhere in the app. */
   celebrate(): void {
-    this.brain.celebrate();
+    this.react('celebrate');
+  }
+
+  /**
+   * How the creature feels about the user, from the server.
+   *
+   * A pass-through, and it should stay one. Affection is made of goals kept and
+   * hours served — facts that live in a database and outlast any tab — so
+   * nothing in the room is allowed an opinion about what it should be, only
+   * about what it looks like.
+   */
+  setAffection(value: number): void {
+    this.brain.setAffection(value);
+  }
+
+  /**
+   * The creature notices something that happened on the page.
+   *
+   * The world is a box on a page, and the page is where most of the product
+   * actually happens — a goal is finished in a panel, not in the room. A
+   * creature that carries on chewing the rug while the user finishes something
+   * they have been working at for a fortnight is a creature that is not really
+   * there.
+   *
+   * Deliberately small. `notice` is the one used most often (a dialog opened),
+   * and all it does is give the brain something to be briefly curious about and
+   * flick the ears — the creature looks up, and then gets on with its
+   * afternoon. Anything more and a modal-heavy session becomes a creature
+   * having a nervous breakdown.
+   */
+  react(kind: PetReaction): void {
+    const at = this.petEntity.body.position;
+
+    switch (kind) {
+      case 'celebrate':
+        this.brain.celebrate();
+        this.animation.impulse(0.9);
+        this.emitSound('pet-happy', 0.9, at);
+        return;
+
+      case 'settle':
+        // Going to bed because the room went dark, which is what the brain
+        // already does about darkness — this only adds the yawn.
+        this.emitSound('pet-sleepy', 0.6, at);
+        return;
+
+      case 'greet': {
+        // The one reaction that is not the same every time. How pleased it is
+        // to see you is how it has been treated, and the brain owns that
+        // number; all the room does is scale the wobble to match.
+        this.brain.greet();
+        const warmth = this.brain.fondness;
+        this.animation.impulse(0.3 + warmth * 0.7);
+        this.emitSound(warmth > 0.45 ? 'pet-happy' : 'pet-glum', 0.4 + warmth * 0.5, at);
+        return;
+      }
+
+      case 'sulk':
+        this.brain.disappointed();
+        this.animation.impulse(0.2);
+        this.emitSound('pet-glum', 0.5, at);
+        return;
+
+      case 'startle':
+        this.brain.hitBy(320, false);
+        this.animation.impulse(0.7);
+        this.emitSound('pet-startled', 0.7, at);
+        return;
+
+      case 'notice':
+      default:
+        // Curious about the front of the room, which is where the viewer is —
+        // so it looks *out*, toward whatever just appeared over the world.
+        this.brain.noticeObject('pet', 0.3);
+        this.animation.impulse(0.28);
+        return;
+    }
   }
 
   // --- Pointer --------------------------------------------------------------
@@ -967,7 +1552,21 @@ export class PetRoom {
    * upward walks a thing away from you into the room, which is exactly what
    * the perspective has already told the eye that direction means.
    */
-  pointerDown(canvasX: number, canvasY: number): void {
+  /**
+   * @returns whether it actually took hold of something, so a caller that has
+   *   a second thing to try — the wall behind the room — knows the floor said
+   *   no first. The bookshelf stands 262 units tall against the back wall, so
+   *   its top overlaps the bottom row of the wall grid on screen; asking the
+   *   wall first meant clicking the top shelf could pick up the painting hung
+   *   behind it. Whatever is in front of the wall gets asked first.
+   */
+  pointerDown(canvasX: number, canvasY: number): boolean {
+    // The room is not available. Refused here rather than in the page, because
+    // this is the trust boundary: the habitat, the wall palette and the room's
+    // own canvas all arrive through these three methods, and a lock that lives
+    // in a React component is a lock the next entry point forgets about.
+    if (this.focused) return false;
+
     const point = this.root.toLocal({ x: canvasX, y: canvasY });
 
     const bodies = this.world.bodies;
@@ -976,10 +1575,10 @@ export class PetRoom {
       return entity !== undefined && entity.reachable;
     });
 
-    if (!body) return;
+    if (!body) return false;
 
     const entity = this.entities.get(body.id);
-    if (!entity) return;
+    if (!entity) return false;
 
     this.grabbed = entity;
     this.grabStart = { time: performance.now(), moved: 0 };
@@ -989,6 +1588,7 @@ export class PetRoom {
 
     this.world.grab(body);
     entity.motion.knock(0.3);
+    this.emitSound('prop-lift', 0.5, body.position, entity.type as ObjectType);
 
     if (entity.id === 'pet') {
       // Wherever it was walking, it is not walking there from here.
@@ -997,6 +1597,7 @@ export class PetRoom {
     }
 
     this.emitStatus();
+    return true;
   }
 
   pointerMove(canvasX: number, canvasY: number): void {
@@ -1069,6 +1670,17 @@ export class PetRoom {
 
     this.grabbed = null;
 
+    // Let go over the removal area: the thing is put away rather than dropped.
+    // Checked before anything else, because every branch below is about *where
+    // in the room* it lands, and this is the branch where it does not.
+    if (this.discarding && entity.id !== 'pet') {
+      this.discarding = false;
+      this.world.release();
+      this.discardObject(entity);
+      this.emitStatus();
+      return;
+    }
+
     const heldFor = performance.now() - this.grabStart.time;
     const wasClick = heldFor < CLICK_MS && this.grabStart.moved < CLICK_DISTANCE;
 
@@ -1096,7 +1708,7 @@ export class PetRoom {
     // left entirely alone, because a ball that snapped to a row mid-bounce
     // would look broken.
     if (speed < PLACE_SPEED || body.type === 'static') {
-      this.settlePlacement(entity);
+      this.settlePlacement(entity, this.grabOrigin);
     } else {
       entity.motion.fling((velocity.x / 260) * (Math.random() * 2 + 1));
       this.critters.disturb(body.position.x, body.position.z, speed / 700);
@@ -1111,51 +1723,159 @@ export class PetRoom {
     this.emitStatus();
   }
 
-  /** Put a set-down object where it belongs: on a row, on top of something. */
-  private settlePlacement(entity: Entity): void {
+  /**
+   * Would setting something down on this cell stand it on an object that does
+   * not accept things on top of it?
+   *
+   * `acceptsPropsOn` is the whole rule, and it is a property of the type: a
+   * tabletop or a shelf is a surface *for things*, so a plant pot may be put
+   * on the table. A lamp, a plant, a clock, a bed, a chair or a basket is not,
+   * so a prop set down over one is refused rather than balanced on it.
+   *
+   * Only objects with real height are asked about — a rug is a decal, not a
+   * surface, and blocking a placement over one would make the floor itself
+   * feel broken.
+   */
+  private cellBlocked(x: number, z: number, ignoreId: string): boolean {
+    const holder = this.world.surfaceBodyAt(x, z, ignoreId);
+    if (!holder || holder.type !== 'static' || holder.collider.height <= 4) return false;
+
+    const holderEntity = this.entities.get(holder.id);
+    if (!holderEntity || holderEntity.id === 'pet') return false;
+
+    return !acceptsPropsOn(getObjectTraits(holderEntity.type as ObjectType));
+  }
+
+  /**
+   * The nearest cell this footprint may actually be set down on.
+   *
+   * Searched outward from the one that was asked for, so an object arriving on
+   * an occupied tile ends up beside it rather than somewhere across the room.
+   * Returns the requested placement unchanged if nothing is free — a room with
+   * no legal cell left is a room where refusing to place the object at all
+   * would be worse than overlapping something.
+   */
+  private nearestFreeCell(placement: GridPlacement, ignoreId: string): GridPlacement {
+    if (!this.stackBlockedAt(placement, ignoreId)) return placement;
+
+    const { cols, rows } = placement.footprint;
+    const maxCol = GRID_COLUMNS - cols;
+    const maxRow = GRID_ROWS - rows;
+    let best: GridPlacement | null = null;
+    let bestDistance = Infinity;
+
+    for (let row = 0; row <= maxRow; row++) {
+      for (let col = 0; col <= maxCol; col++) {
+        const distance = Math.abs(col - placement.col) + Math.abs(row - placement.row);
+        if (distance >= bestDistance) continue;
+
+        const candidate: GridPlacement = {
+          col,
+          row,
+          footprint: placement.footprint,
+          ...anchorCenter({ col, row }, placement.footprint),
+        };
+
+        if (this.stackBlockedAt(candidate, ignoreId)) continue;
+
+        best = candidate;
+        bestDistance = distance;
+      }
+    }
+
+    return best ?? placement;
+  }
+
+  /**
+   * The same question, asked of every cell a placement would occupy.
+   *
+   * One point was not enough, and the case that proves it is a bed dropped
+   * across a lamp: an even-width footprint centres on the seam *between* its
+   * two cells, so the one point the check used to look at fell in the gap
+   * between the two things it was supposed to notice and the bed went straight
+   * through the lamp. A footprint claims whole cells — that is the entire
+   * premise of the grid — so what it has to be clear of is whole cells.
+   */
+  private stackBlockedAt(placement: GridPlacement, ignoreId: string): boolean {
+    for (let row = 0; row < placement.footprint.rows; row++) {
+      for (let col = 0; col < placement.footprint.cols; col++) {
+        const centre = cellCenter(placement.col + col, placement.row + row);
+        if (this.cellBlocked(centre.x, centre.z, ignoreId)) return true;
+      }
+    }
+
+    return false;
+  }
+
+  /**
+   * Put a set-down object where it belongs: on whole cells, on top of whatever
+   * is underneath it.
+   *
+   * The whole placement system, in four lines, and it is worth saying what is
+   * *not* here any more. There used to be a clamp: snap the centre to a tile,
+   * then pull the object back inside the room by its own half-extents. Those
+   * two steps disagreed — the clamp did not know about cells — so a bed set
+   * down in a corner snapped to the last column and was then shoved a hundred
+   * units back off it, and the corners of the room were unreachable by
+   * anything larger than a chair.
+   *
+   * `snapFootprint` cannot produce an illegal placement, so there is nothing
+   * left to correct. The grid is the authority on where things go.
+   */
+  /**
+   * @param handBackTo where a refused placement should return the object to.
+   *   The position it was picked up from, for a drag. **Omitted for anything
+   *   that was not being dragged**, and that distinction is load-bearing: this
+   *   used to read `this.grabOrigin` unconditionally, which is only meaningful
+   *   during a drag. An object *arriving* in the room — new from the inventory,
+   *   or restored from the database onto a cell something else now occupies —
+   *   was therefore teleported to whatever was dragged last, or to (0, 0, 0) if
+   *   nothing ever had been, which is not even inside the grid. An arrival has
+   *   nowhere to be handed back to; it needs somewhere to go instead.
+   */
+  private settlePlacement(entity: Entity, handBackTo?: Vec3): void {
     const body = entity.body;
     if (entity.id === 'pet') return;
 
-    // Clamped by the body's own footprint, not just its centre — a bed set
-    // down against the right wall should stop with its edge against it rather
-    // than with half of it through the plaster.
-    const bounds = this.world.bounds;
-    const spanX = halfX(body.collider);
-    const spanZ = halfZ(body.collider);
+    const snapped = snapFootprint(
+      body.position.x,
+      body.position.z,
+      this.footprintOfType(entity.type as ObjectType),
+    );
 
-    // Snapped to a tile of the floor grid in both axes, then clamped by the
-    // body's own footprint — a bed set down against the right wall should stop
-    // with its edge against it rather than with half of it through the plaster.
-    const snapped = snapToGrid(body.position.x, body.position.z);
+    if (handBackTo && this.stackBlockedAt(snapped, body.id)) {
+      // Not somewhere this can go. Hand it back rather than stacking it on
+      // something that does not want it stood on.
+      this.world.place(body, handBackTo);
+      this.world.setVelocity(body, { x: 0, y: 0, z: 0 });
+      entity.motion.knock(0.5, Math.random() < 0.5 ? -1 : 1);
+      this.emitSound('prop-refused', 0.8, body.position, entity.type as ObjectType);
+      return;
+    }
 
-    const inside = {
-      x: clamp(
-        snapped.x,
-        bounds.minX + spanX,
-        Math.max(bounds.minX + spanX, bounds.maxX - spanX),
-      ),
-      z: clamp(
-        snapped.z,
-        bounds.minZ + spanZ,
-        Math.max(bounds.minZ + spanZ, bounds.maxZ - spanZ),
-      ),
-    };
+    // An arrival takes the nearest cell it is allowed to have.
+    const placement = handBackTo ? snapped : this.nearestFreeCell(snapped, body.id);
 
-    const rest = this.world.surfaceHeightAt(inside.x, inside.z, body.id);
+    const rest = this.world.surfaceHeightAt(placement.x, placement.z, body.id);
 
     if (body.type === 'static') {
-      this.world.place(body, { x: inside.x, y: rest, z: inside.z });
+      this.world.place(body, { x: placement.x, y: rest, z: placement.z });
       this.world.setVelocity(body, { x: 0, y: 0, z: 0 });
     } else {
-      // Dynamic things are only nudged onto the row — they still have to fall
+      // Dynamic things are only nudged onto the cell — they still have to fall
       // the last few pixels themselves, which is how you can tell they are
       // objects and not stickers.
-      this.world.place(body, { x: inside.x, z: inside.z });
+      this.world.place(body, { x: placement.x, z: placement.z });
       this.world.setVelocity(body, { x: 0, z: 0 });
     }
 
+    this.emitSound('prop-place', 0.55, body.position, entity.type as ObjectType);
+
     // Anything that was resting on this needs to notice it moved.
     for (const rider of this.world.occupants(body.id)) this.world.wake(rider);
+
+    // The room is different now, and somebody may want to write that down.
+    this.arrangementChanged();
   }
 
   /** A press that never became a drag. */
@@ -1167,6 +1887,7 @@ export class PetRoom {
 
     if (entity.id === 'pet') {
       this.brain.poked();
+      this.emitSound('pet-poked', 0.7, entity.body.position);
       return;
     }
 
@@ -1176,6 +1897,131 @@ export class PetRoom {
       y: 240,
       x: (Math.random() - 0.5) * 140,
     });
+  }
+
+  // --- Wall decor -------------------------------------------------------------
+
+  /**
+   * Which hung piece, if any, sits under this canvas point.
+   *
+   * Screen-space only — the wall is one flat plane, so unlike a floor prop
+   * this never needs the physics world at all. Used so an already-hung piece
+   * can be picked up and redragged, not just a new one from the palette.
+   */
+  pickWallDecorAt(canvasX: number, canvasY: number): WallDecorPlacement | null {
+    if (this.focused) return null;
+
+    const point = this.root.toLocal({ x: canvasX, y: canvasY });
+
+    for (const placement of this.style.decor) {
+      const spec = getWallDecor(placement.kind);
+      const quad = wallQuadAt(placement, spec.footprint);
+      const xs = quad.map((corner) => corner.x);
+      const ys = quad.map((corner) => corner.y);
+
+      if (
+        point.x >= Math.min(...xs) &&
+        point.x <= Math.max(...xs) &&
+        point.y >= Math.min(...ys) &&
+        point.y <= Math.max(...ys)
+      ) {
+        return placement;
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * The cells of the wall that are not hanging space.
+   *
+   * The window, and whatever else the environment has cut into its plaster.
+   * Computed once per environment rather than per pointer move: the wall does
+   * not gain a window while you are dragging a painting across it.
+   */
+  private reservedWallCells(): ReadonlySet<string> {
+    if (!this.wallReserved) {
+      this.wallReserved = new Set(
+        this.environment.wallReserved.flatMap((area) =>
+          wallCells(area, area.footprint).map(wallCellKey),
+        ),
+      );
+    }
+
+    return this.wallReserved;
+  }
+
+  /** Start hanging a new piece, or picking up an already-hung one to move it. */
+  wallDragStart(kind: WallDecorKind, existingId?: string): void {
+    if (this.focused) return;
+
+    this.wallDrag = { kind, existingId: existingId ?? null, anchor: null, blocked: false };
+  }
+
+  /** Point the drag at a canvas position; snaps to the wall grid as it goes. */
+  wallDragMove(canvasX: number, canvasY: number): void {
+    const drag = this.wallDrag;
+    if (!drag) return;
+
+    const point = this.root.toLocal({ x: canvasX, y: canvasY });
+    const wall = unprojectWall(point.x, point.y);
+    const spec = getWallDecor(drag.kind);
+    const snapped = snapWall(wall.x, wall.y, spec.footprint);
+    drag.anchor = { col: snapped.col, row: snapped.row };
+
+    const reserved = this.reservedWallCells();
+    const cells = wallCells(drag.anchor, snapped.footprint).map(wallCellKey);
+    drag.blocked = cells.some((key) => reserved.has(key));
+
+    const wallColor = graded(this.mood.tint, this.mood.ambience);
+
+    this.wallGuide.update({
+      anchor: drag.anchor,
+      footprint: snapped.footprint,
+      kind: drag.kind,
+      seed: this.wallDragSeed(drag.kind, drag.existingId),
+      palette: { wall: wallColor, tint: this.style.tint, accent: PALETTE.punch },
+      // The pieces this one would take down are shown as taken rather than
+      // hidden: the drop resolves the clash by removing them (`placeWallDecor`),
+      // and that is easier to accept when you could see it coming.
+      occupied: new Set(
+        occupiedWallCells(this.style.decor, drag.existingId ?? undefined).keys(),
+      ),
+      reserved,
+      blocked: drag.blocked,
+    });
+  }
+
+  /** Commit the drag to the room's style, or drop it if it never landed anywhere. */
+  wallDragEnd(): void {
+    const drag = this.wallDrag;
+    this.wallDrag = null;
+    this.wallGuide.update(null);
+    // Never landed on the wall at all, or landed on the window: either way
+    // nothing changes, which is what the red said would happen.
+    if (!drag || !drag.anchor || drag.blocked) return;
+
+    const next = placeWallDecor(
+      this.style.decor,
+      drag.kind,
+      drag.anchor,
+      drag.existingId ?? undefined,
+    );
+    this.onWallDecorChange?.(next);
+  }
+
+  /** Abandon the drag without changing anything — released off the wall entirely. */
+  wallDragCancel(): void {
+    this.wallDrag = null;
+    this.wallGuide.update(null);
+  }
+
+  /** A stable-enough seed for the live preview; the committed piece gets its own. */
+  private wallDragSeed(kind: WallDecorKind, existingId: string | null): number {
+    const source = existingId ?? kind;
+    let hash = 0;
+    for (let i = 0; i < source.length; i++) hash = (hash * 31 + source.charCodeAt(i)) | 0;
+    return Math.abs(hash) % 1000;
   }
 
   // --- The loop -------------------------------------------------------------
@@ -1188,7 +2034,7 @@ export class PetRoom {
 
     // Objects that move on their own: the clock's hands and pendulum, the
     // plant's sway, the lamp's flicker. Some of them have things to say.
-    const life = { time: this.time, lightsOn: this.lightsOn, now: new Date() };
+    const life = { time: this.time, lightsOn: this.lit, now: new Date() };
 
     for (const entity of this.entities.values()) {
       for (const event of updateLife(entity.view, dt, life)) {
@@ -1211,6 +2057,23 @@ export class PetRoom {
       const hitB = this.entities.get(impact.b.id);
       hitA?.motion.knock(Math.min(1.6, impact.speed / 500), -1);
       hitB?.motion.knock(Math.min(1.6, impact.speed / 500), 1);
+
+      // A knock only counts as a noise if it was one. Below this the solver is
+      // still resolving a resting contact — a ball settling against a chair
+      // leg produces a stream of tiny impacts that are physically real and
+      // acoustically nothing, and reporting them would make the mixer's job
+      // impossible however good its throttling was.
+      if (impact.speed >= AUDIBLE_IMPACT_SPEED) {
+        const source = hitA?.isToy ? hitA : (hitB?.isToy ? hitB : (hitA ?? hitB));
+        if (source && source.id !== 'pet') {
+          this.emitSound(
+            'prop-bump',
+            impact.speed / 900,
+            source.body.position,
+            source.type as ObjectType,
+          );
+        }
+      }
 
       const other =
         impact.a.id === 'pet' ? impact.b : impact.b.id === 'pet' ? impact.a : null;
@@ -1250,6 +2113,19 @@ export class PetRoom {
       if (!ricochet) this.brain.hitBy(impact.speed, isToy);
     }
 
+    for (const wall of walls) {
+      if (wall.speed < AUDIBLE_IMPACT_SPEED || wall.body.id === 'pet') continue;
+      const entity = this.entities.get(wall.body.id);
+      if (!entity) continue;
+
+      this.emitSound(
+        'prop-wall',
+        wall.speed / 900,
+        wall.body.position,
+        entity.type as ObjectType,
+      );
+    }
+
     for (const landing of ground) {
       // Anything landing hard enough scatters whatever was sitting near it.
       if (landing.speed >= 500) {
@@ -1261,7 +2137,17 @@ export class PetRoom {
       }
 
       if (landing.body.id !== 'pet') {
-        this.entities.get(landing.body.id)?.motion.knock(landing.speed / 900);
+        const entity = this.entities.get(landing.body.id);
+        entity?.motion.knock(landing.speed / 900);
+
+        if (entity && landing.speed >= AUDIBLE_IMPACT_SPEED) {
+          this.emitSound(
+            'prop-land',
+            landing.speed / 800,
+            landing.body.position,
+            entity.type as ObjectType,
+          );
+        }
         continue;
       }
 
@@ -1300,7 +2186,7 @@ export class PetRoom {
     // where the beetle is now rather than where it was last frame.
     const lamp = this.lamps()[0];
     this.critters.update(dt, {
-      lightsOn: this.lightsOn,
+      lightsOn: this.lit,
       lampX: lamp?.body.position.x ?? this.environment.light.x,
       lampY: lamp ? topOf(lamp.body) * 0.9 : this.environment.light.y,
       petX: petBody.position.x,
@@ -1346,6 +2232,7 @@ export class PetRoom {
     });
 
     this.updatePounce(dt, intent.behavior);
+    this.updateInteraction(dt, intent);
 
     if (intent.lookAt) {
       const at = project(intent.lookAt.x, intent.lookAt.y, intent.lookAt.z);
@@ -1368,7 +2255,7 @@ export class PetRoom {
     // Night fades rather than snaps: the switch is instant, the room settling
     // into the dark is not.
     const dusk = this.environment.night.alpha;
-    const target = this.lightsOn ? 0 : dusk;
+    const target = this.lit ? 0 : dusk;
     this.nightAlpha += (target - this.nightAlpha) * Math.min(1, dt * 3.5);
     this.nightOverlay.alpha = this.nightAlpha;
 
@@ -1406,6 +2293,11 @@ export class PetRoom {
         restHeight: surface ? topOf(body) : null,
         comfort: surface?.comfort ?? 0,
         reachable: entity.reachable,
+        // What this thing offers the creature to do, and how much of it is
+        // left. Supply is the part the catalog cannot know: a bowl empties.
+        affordance: entity.affordance
+          ? { ...entity.affordance, supply: this.supplyOf(entity) }
+          : null,
       });
     }
 
@@ -1422,6 +2314,7 @@ export class PetRoom {
         restHeight: null,
         comfort: 0,
         reachable: true,
+        affordance: null,
       });
     }
 
@@ -1441,8 +2334,119 @@ export class PetRoom {
         supportId: body.support?.id ?? null,
       },
       objects,
-      lightsOn: this.lightsOn,
+      lightsOn: this.lit,
+      pointer: this.pointerOnFloor(),
     };
+  }
+
+  /**
+   * Where the user's hand is, on the floor of the room.
+   *
+   * Null unless the pointer is genuinely over the world and has moved recently.
+   * Both halves matter: a cursor parked on the canvas while somebody reads the
+   * panel next to it is not attention, and a creature that treated it as
+   * attention would spend the afternoon staring at an abandoned mouse.
+   *
+   * Projected through `unprojectGround`, so "where the hand is" is a place in
+   * the room rather than a place on the screen — which is what lets the
+   * creature walk to it, and lets "too close" mean the same thing at the back
+   * of the room as at the front.
+   */
+  private pointerOnFloor(): { x: number; z: number } | null {
+    const hover = this.hover;
+    if (!hover || this.focused) return null;
+    if (this.time - hover.at > POINTER_ATTENTION) return null;
+
+    const ground = unprojectGround(hover.x, hover.y);
+    const bounds = this.world.bounds;
+
+    if (
+      ground.x < bounds.minX ||
+      ground.x > bounds.maxX ||
+      ground.z < bounds.minZ ||
+      ground.z > bounds.maxZ
+    ) {
+      return null;
+    }
+
+    return { x: ground.x, z: ground.z };
+  }
+
+  /**
+   * The pointer moved over the room, dragging something or not.
+   *
+   * Separate from `pointerMove`, which is the *drag*: this fires whether or not
+   * anything is in hand, because a creature noticing your cursor is something
+   * that happens while you are simply looking at it. Stored in room-local
+   * coordinates and stamped, so `pointerOnFloor` can forget a hand that has
+   * stopped moving.
+   */
+  pointerHover(canvasX: number, canvasY: number): void {
+    const point = this.root.toLocal({ x: canvasX, y: canvasY });
+    this.hover = { x: point.x, y: point.y, at: this.time };
+  }
+
+  /** The pointer left the room. The creature stops having an opinion about it. */
+  pointerLeft(): void {
+    this.hover = null;
+  }
+
+  /**
+   * How much of an object's offer is left, 0..1.
+   *
+   * Objects that run down carry a `SuppliedState`; everything else is
+   * inexhaustible. Asked for by shape rather than by type, so the room never
+   * has to know which of its contents happens to be a bowl.
+   */
+  private supplyOf(entity: Entity): number {
+    const state = readState<SuppliedState>(entity.view);
+    return state ? Math.max(0, Math.min(1, state.level)) : 1;
+  }
+
+  /**
+   * Start, continue or stop an interaction.
+   *
+   * The clip is looping and lives for exactly as long as the brain says the
+   * creature is using something, which is why this is three lines rather than
+   * a state machine: the animation layer already knows how to blend a looping
+   * clip in and out (`animation/core/Clip.ts`).
+   */
+  private updateInteraction(dt: number, intent: Intent): void {
+    const kind = intent.behavior === 'use' ? intent.useKind : null;
+
+    if (kind !== this.interaction.kind) {
+      // By name, never bare: `stopClip()` with no argument would also cancel
+      // a landing or a pounce that happened to be running.
+      if (this.interaction.kind) this.animation.stopClip(this.interaction.kind);
+      this.interaction.kind = kind;
+    }
+
+    if (!kind) return;
+
+    // Re-request the clip whenever it is not the one playing, rather than only
+    // when the interaction starts.
+    //
+    // Interaction clips sit below impacts on purpose — walking into the
+    // scratching post hard enough still knocks the creature about — but the
+    // first version started the clip once and never looked again, so a single
+    // bump meant the creature spent the rest of its supper standing perfectly
+    // still. `play` declines while something higher-priority is running, so
+    // asking every frame costs nothing and picks the interaction back up the
+    // moment the impact is over.
+    if (this.animation.playingClip !== kind) {
+      this.animation.play(createInteractionClip(kind));
+    }
+
+    // Using something up. Eating is the only affordance that consumes
+    // anything so far, and the room finds out by asking the object for a
+    // supply rather than by knowing what a bowl is.
+    const target = intent.useTargetId
+      ? this.entities.get(intent.useTargetId)
+      : undefined;
+    if (!target) return;
+
+    const state = readState<SuppliedState>(target.view);
+    if (state && kind === 'eat') state.take(dt / 6);
   }
 
   private footprintOf(body: PhysicsBody): number {
@@ -1452,6 +2456,8 @@ export class PetRoom {
   /** Something in the room announced itself — currently, the clock striking. */
   private onObjectEvent(entity: Entity, event: string): void {
     if (event !== 'chime') return;
+
+    this.emitSound('chime', 0.7, entity.body.position, entity.type as ObjectType);
 
     // Not an emergency: a creature looks up when the clock strikes, and then
     // gets on with its afternoon.
@@ -1940,6 +2946,11 @@ export class PetRoom {
         return 'sit';
       case 'play':
         return 'play';
+      // Using something is carried entirely by its clip; underneath it the
+      // creature is simply standing there, which is what a clip needs to blend
+      // out onto.
+      case 'use':
+        return 'idle';
       case 'investigate':
         return 'discover';
       case 'chase':
@@ -1977,7 +2988,16 @@ export class PetRoom {
     view.position.set(base.x, base.y);
     view.scale.set(scale * unit);
 
-    const tint = depthTintOf(body.position.z);
+    // Aerial perspective, unless the thing is being held somewhere it may not
+    // be put down — in which case it goes red, because the object in the
+    // user's hand is what they are looking at while they decide, not the
+    // marking on the floor underneath it.
+    //
+    // The whole tint, not a blend with the depth tint: a tint multiplies, so
+    // half a punch over a pink plush is still a pink plush. `punch` is the
+    // same "no" the drop guide draws in, so the two read as one answer.
+    const tint =
+      entity.id === this.refusedDrop ? PALETTE.punch : depthTintOf(body.position.z);
     if (view.tint !== tint) view.tint = tint;
 
     const holder = body.support?.id ? (this.world.get(body.support.id) ?? null) : null;
@@ -1985,9 +3005,23 @@ export class PetRoom {
 
     // Artwork is anchored at the floor contact point, so lifting it is just
     // its height.
+    //
+    // The pivot is what a tumble rotates about — four tenths of the way up the
+    // body, not its feet — and moving a pivot moves the content with it unless
+    // the position pays it back. It did not, so every object was drawn
+    // `height * 0.4` *below* its own contact point: the shadow and the drop
+    // guide sat on the cell the grid had chosen while the artwork stood a row
+    // or more in front of it, and nothing tall could be seen to reach the back
+    // wall however honestly it had been placed there. The taller the thing the
+    // worse it was, which is why it read as "the lamp and the shelf ignore the
+    // grid" rather than as one drawing bug.
     const sink = holder?.surface?.give ?? 0;
-    art.position.set(0, (-body.position.y + Math.min(sink, body.position.y)) / unit);
-    art.pivot.set(0, (-body.collider.height * 0.4) / unit);
+    const pivotY = (-body.collider.height * 0.4) / unit;
+    art.pivot.set(0, pivotY);
+    art.position.set(
+      0,
+      (-body.position.y + Math.min(sink, body.position.y)) / unit + pivotY,
+    );
 
     if (entity.id === 'pet') {
       // The creature's lean is the animation layer's business while it is on
@@ -2010,36 +3044,70 @@ export class PetRoom {
     }
   }
 
-  /** Show where a carried thing will land, and in which row. */
+  /**
+   * Show where a carried thing will land, and on which cells.
+   *
+   * Note what is passed: the *snapped* placement, not the pointer's own
+   * position. The guide is a promise about where the object is going, and the
+   * only way to keep that promise is to run the same snap the drop will run.
+   */
   private updateGuide(dt: number): void {
     const drop = this.world.manipulator.dropPoint();
     const body = this.world.manipulator.held;
+    const entity = body ? this.entities.get(body.id) : undefined;
+
+    if (!drop || !body || !entity || entity.id === 'pet') {
+      this.refusedDrop = null;
+      this.guide.update(null, dt);
+      return;
+    }
+
+    const placement = snapFootprint(
+      drop.x,
+      drop.z,
+      this.footprintOfType(entity.type as ObjectType),
+    );
+
+    const refused = this.stackBlockedAt(placement, body.id);
+    this.refusedDrop = refused ? entity.id : null;
 
     this.guide.update(
-      drop && body
-        ? {
-          x: drop.x,
-          z: drop.z,
-          surfaceY: drop.y,
-          bodyY: body.position.y,
-          radius: this.footprintOf(body),
-        }
-        : null,
+      {
+        anchor: { col: placement.col, row: placement.row },
+        footprint: placement.footprint,
+        x: placement.x,
+        z: placement.z,
+        surfaceY: this.world.surfaceHeightAt(placement.x, placement.z, body.id),
+        bodyY: body.position.y,
+        radius: this.footprintOf(body),
+        invalid: refused,
+      },
       dt,
     );
   }
 
   /**
-   * Which tile a carried body is over.
+   * Which cells a carried body will land on.
    *
-   * Nothing while it is lifted past the back wall: at that point the pointer is
-   * choosing a height rather than a place on the floor, and naming a tile there
-   * would be inventing an answer.
+   * The snapped answer, again — the status line and the floor guide have to
+   * agree, and they agree by asking the same function. Nothing while the thing
+   * is lifted past the back wall: at that point the pointer is choosing a
+   * height rather than a place on the floor, and naming cells there would be
+   * inventing an answer.
    */
-  private holdingCell(body: PhysicsBody): { row: number; col: number } | null {
+  private holdingCell(body: PhysicsBody): (GridAnchor & { footprint: Footprint }) | null {
     if (body.position.z <= this.world.bounds.minZ + 1) return null;
-    const cell = cellAt(body.position.x, body.position.z);
-    return { row: cell.row, col: cell.col };
+
+    const entity = this.entities.get(body.id);
+    if (!entity || entity.id === 'pet') return null;
+
+    const placement = snapFootprint(
+      body.position.x,
+      body.position.z,
+      this.footprintOfType(entity.type as ObjectType),
+    );
+
+    return { col: placement.col, row: placement.row, footprint: placement.footprint };
   }
 
   private emitStatus(mood?: string, behavior?: PetBehavior): void {
@@ -2051,10 +3119,11 @@ export class PetRoom {
       mood: mood ?? this.lastStatus?.mood ?? 'settling in',
       behavior: behavior ?? this.lastStatus?.behavior ?? 'idle',
       lightsOn: this.lightsOn,
-      ambience: this.mood.ambience.id,
-      tint: this.mood.tint,
+      style: this.style,
       holding: this.grabbed ? (this.grabbed.id === 'pet' ? 'pet' : 'prop') : null,
       holdingCell: held ? this.holdingCell(held) : null,
+      editing: this.editing,
+      discarding: this.discarding,
     };
 
     const previous = this.lastStatus;
@@ -2063,11 +3132,14 @@ export class PetRoom {
       previous.mood === next.mood &&
       previous.behavior === next.behavior &&
       previous.lightsOn === next.lightsOn &&
-      previous.ambience === next.ambience &&
-      previous.tint === next.tint &&
+      sameRoomStyle(previous.style, next.style) &&
       previous.holding === next.holding &&
+      previous.editing === next.editing &&
+      previous.discarding === next.discarding &&
       previous.holdingCell?.row === next.holdingCell?.row &&
-      previous.holdingCell?.col === next.holdingCell?.col
+      previous.holdingCell?.col === next.holdingCell?.col &&
+      previous.holdingCell?.footprint.cols === next.holdingCell?.footprint.cols &&
+      previous.holdingCell?.footprint.rows === next.holdingCell?.footprint.rows
     ) {
       return;
     }

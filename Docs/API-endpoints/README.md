@@ -34,6 +34,7 @@ Each package maps 1:1 to a **NestJS module** and owns a single resource group.
 | 09 | [Media](./09-media-endpoints.md) | `/api/v1/media` | `MediaModule` | file storage |
 | 10 | [Realtime](./10-realtime-events.md) | `ws://…/world` | `RealtimeModule` | — (future) |
 | 11 | [Schema additions](./11-schema-additions.md) | — | — | proposed DB deltas |
+| 12 | [Focus](./12-focus-endpoints.md) | `/api/v1/focus` | `FocusModule` | `FocusSession`, `User.affection` |
 
 ---
 
@@ -61,6 +62,11 @@ Auth → User(me) → Pet(create/customize/state) → Environment(scene/objects)
      → Inventory → Goal(create/complete) → Memory
 ```
 
+Focus (12) sits inside that loop rather than beside it: a session is committed
+to a `Goal` and moves `User.affection`, and finishing a goal still runs through
+`Goal`+`Memory` exactly as before. "I did the time" and "I am done" are
+different sentences — see `12-focus-endpoints.md` §1.
+
 ---
 
 ## 4. Endpoint count
@@ -76,4 +82,5 @@ Auth → User(me) → Pet(create/customize/state) → Environment(scene/objects)
 | Goal | 7 | 1 | 8 |
 | Memory | 6 | 1 | 7 |
 | Media | 3 | 0 | 3 |
-| **Total** | **50** | **16** | **66** |
+| Focus | 4 | 0 | 4 |
+| **Total** | **54** | **16** | **70** |

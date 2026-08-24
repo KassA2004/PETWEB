@@ -40,7 +40,11 @@ export function Tabs<T extends string>({
       role="tablist"
       aria-orientation="horizontal"
       className={cn(
-        'flex gap-1 rounded-xl bg-muted/70 p-1 text-sm font-medium',
+        // Scrolls rather than overflows. Five tabs fit a sidebar comfortably
+        // and do not fit a 375-pixel phone: the strip was pushing the whole
+        // page eleven pixels wide, which is the kind of horizontal scroll
+        // nobody reports and everybody feels.
+        'no-scrollbar flex gap-1 overflow-x-auto rounded-xl bg-muted/70 p-1 text-sm font-medium',
         className,
       )}
       onKeyDown={(event) => {
@@ -70,7 +74,10 @@ export function Tabs<T extends string>({
             tabIndex={selected ? 0 : -1}
             onClick={() => onValueChange(item.value)}
             className={cn(
-              'flex flex-1 items-center justify-center gap-1.5 rounded-lg px-3 py-2 transition-colors outline-none',
+              // `flex-1` to share the width when there is enough of it,
+              // `shrink-0` so they keep their labels when there is not and the
+              // strip scrolls instead of squeezing "Inventory" into six pixels.
+              'flex flex-1 shrink-0 items-center justify-center gap-1.5 rounded-lg px-3 py-2 transition-colors outline-none',
               'focus-visible:ring-2 focus-visible:ring-ring',
               selected
                 ? 'bg-card text-foreground shadow-sm'

@@ -199,23 +199,41 @@ export class PhysicsWorld {
   // --- Queries --------------------------------------------------------------
 
   /**
+   * The body a thing dropped at this point would come to rest on, or null for
+   * the bare floor.
+   *
+   * Anchored bodies (wall-mounted decor, e.g. the clock) are excluded: they
+   * have a floor-plane footprint for the wall grid's sake, but they are
+   * background, not furniture, and nothing should ever land on top of one.
+   */
+  surfaceBodyAt(x: number, z: number, ignoreId?: string): PhysicsBody | null {
+    let best: PhysicsBody | null = null;
+    let bestClearance = 0;
+
+    for (const body of this.bodies) {
+      if (body.id === ignoreId || body.held || body.anchored) continue;
+      if (body.type === 'character') continue;
+      if (!footprintContains(body, x, z)) continue;
+
+      const clearance = clearanceOf(body);
+      if (!best || clearance > bestClearance) {
+        best = body;
+        bestClearance = clearance;
+      }
+    }
+
+    return best;
+  }
+
+  /**
    * Height of the highest thing a body would come to rest on at this point.
    *
    * The floor is 0, so this always has an answer. Used to work out how high a
    * carried object should hover, and where the drop marker goes.
    */
   surfaceHeightAt(x: number, z: number, ignoreId?: string): number {
-    let best = 0;
-
-    for (const body of this.bodies) {
-      if (body.id === ignoreId || body.held) continue;
-      if (body.type === 'character') continue;
-      if (!footprintContains(body, x, z)) continue;
-
-      best = Math.max(best, clearanceOf(body));
-    }
-
-    return best;
+    const body = this.surfaceBodyAt(x, z, ignoreId);
+    return body ? clearanceOf(body) : 0;
   }
 
   /** What is standing on this body right now. */

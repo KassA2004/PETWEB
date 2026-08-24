@@ -52,9 +52,16 @@ export class HttpExceptionFilter implements ExceptionFilter {
           ? body
           : ((body as { message?: string | string[] }).message ?? exception.message);
 
+      // An AppException names its own code; everything else takes the
+      // status's default (see common/app.exception.ts).
+      const named =
+        typeof body === 'object' && body !== null && typeof (body as { code?: unknown }).code === 'string'
+          ? (body as { code: string }).code
+          : null;
+
       response.status(status).json({
         error: {
-          code: defaultCodeForStatus(status),
+          code: named ?? defaultCodeForStatus(status),
           message: Array.isArray(message) ? message.join('; ') : message,
           requestId,
         },

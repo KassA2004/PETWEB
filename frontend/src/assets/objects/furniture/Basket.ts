@@ -1,75 +1,91 @@
 /**
- * Basket — a wicker bowl, and the pet's favourite place to sit.
+ * Basket — a wicker bowl, and the creature's favourite place to sit.
  *
- * Drawn as an open bowl with the rim on top: place it at a slightly larger y
- * than the pet and the depth sort puts it in front, so the creature reads as
- * sitting inside it rather than behind it.
+ * The one object whose artwork is taller than its collider, and deliberately:
+ * the collider is the *inside floor* the creature settles onto, while the rim
+ * it has to climb over is `surface.rim` in the catalog. The renderer reads that
+ * rim rather than inventing a height, so the thing you can see and the thing
+ * you have to clear are the same number.
+ *
+ * Drawn as an open bowl with the rim in front, so a creature sitting in it is
+ * sorted behind the near lip and reads as *inside* rather than *behind*.
  *
  * Anchored at its floor contact point.
  */
 
 import { Container, Graphics } from 'pixi.js';
-import { darken, lighten, outline } from '../../shared/color';
-import { createRng, curveBetween, rngRange } from '../../shared/shapes';
-import { createContactShadow } from '../../environment/Shadows';
+import { darken, lighten, tones } from '../../shared/color';
+import { createRng, rngRange } from '../../shared/shapes';
+import {
+  FLOOR_SQUASH,
+  edge,
+  floorOval,
+  formFill,
+  groundShadow,
+  weave,
+} from '../shared/Surface';
 import type { ObjectRenderContext } from '../ObjectRenderer';
 
 export function createBasket(ctx: ObjectRenderContext): Container {
+  const { width, depth } = ctx;
+  const rim = ctx.traits.surface?.rim ?? 58;
   const rng = createRng(ctx.seed + 91);
+
   const root = new Container();
   root.label = 'basket';
 
-  const width = 216 * ctx.scale;
-  const height = 70 * ctx.scale;
-  const w = width / 2;
+  root.addChild(groundShadow(width, depth, 0.28));
 
-  root.addChild(createContactShadow({ width: width * 0.95, strength: 0.28 }));
+  const ramp = tones(ctx.color);
+  const half = width / 2;
+  const rimDepth = (depth / 2) * FLOOR_SQUASH;
 
   // --- Bowl ----------------------------------------------------------------
+  // Wider at the rim than at the base, which is what a basket does and what
+  // stops it reading as a bucket.
   const bowl = new Graphics();
-  bowl.moveTo(-w, -height);
-  bowl.lineTo(w, -height);
-  bowl.quadraticCurveTo(w * 0.9, -height * 0.12, w * 0.58, 0);
-  bowl.quadraticCurveTo(0, height * 0.14, -w * 0.58, 0);
-  bowl.quadraticCurveTo(-w * 0.9, -height * 0.12, -w, -height);
+  bowl.moveTo(-half, -rim);
+  bowl.lineTo(half, -rim);
+  bowl.quadraticCurveTo(half * 0.94, -rim * 0.28, half * 0.62, 0);
+  bowl.quadraticCurveTo(0, rimDepth * 0.7, -half * 0.62, 0);
+  bowl.quadraticCurveTo(-half * 0.94, -rim * 0.28, -half, -rim);
   bowl.closePath();
-  bowl.fill({ color: ctx.color });
-  bowl.stroke({ color: outline(ctx.color), width: 3, alpha: 0.5 });
+  bowl.fill(formFill(ramp, 0.5));
   root.addChild(bowl);
 
-  // --- Weave ---------------------------------------------------------------
-  // Three sagging rows plus short verticals. Enough to read as wicker without
-  // turning into texture noise.
-  const weave = new Graphics();
-  for (const t of [0.72, 0.46, 0.2]) {
-    const y = -height * t;
-    const spread = w * (0.6 + t * 0.4);
-    curveBetween(weave, { x: -spread, y }, { x: spread, y }, height * 0.05);
-  }
-  weave.stroke({ color: darken(ctx.color, 0.34), width: 4, alpha: 0.55 });
-
-  const ticks = new Graphics();
-  for (let i = -3; i <= 3; i++) {
-    const x = (i / 3) * w * 0.72 + rngRange(rng, -3, 3);
-    ticks.moveTo(x, -height * 0.82);
-    ticks.lineTo(x * 0.78, -height * 0.06);
-  }
-  ticks.stroke({ color: darken(ctx.color, 0.28), width: 3, alpha: 0.35 });
-  root.addChild(weave);
-  root.addChild(ticks);
+  const texture = weave(width * 0.92, rim * 0.9, ctx.color, 4);
+  texture.y = -rim * 0.52;
+  root.addChild(texture);
 
   // --- Rim -----------------------------------------------------------------
-  const rim = new Graphics();
-  rim.ellipse(0, -height, w, height * 0.17);
-  rim.fill({ color: lighten(ctx.color, 0.22) });
-  rim.stroke({ color: outline(ctx.color), width: 3, alpha: 0.5 });
-  root.addChild(rim);
+  // Outer lip first, then the hole cut into it by drawing the inside on top.
+  // Two filled ovals rather than a boolean path op: the same picture, and it
+  // survives a Graphics API that has no opinion about holes.
+  const lip = new Graphics();
+  floorOval(lip, 0, -rim, width, depth);
+  lip.fill({ color: lighten(ramp.base, 0.2) });
+  floorOval(lip, 0, -rim, width, depth);
+  edge(lip, ctx.color, 3, 0.42);
+  root.addChild(lip);
 
-  // Inside of the rim, one shade darker so the bowl reads as open.
-  const inner = new Graphics();
-  inner.ellipse(0, -height * 0.99, w * 0.86, height * 0.12);
-  inner.fill({ color: darken(ctx.color, 0.34) });
-  root.addChild(inner);
+  const inside = new Graphics();
+  floorOval(inside, 0, -rim, width * 0.84, depth * 0.84);
+  inside.fill({ color: ramp.deep });
+  floorOval(inside, 0, -rim + rimDepth * 0.3, width * 0.68, depth * 0.68);
+  inside.fill({ color: darken(ctx.secondaryColor, 0.12), alpha: 0.55 });
+  root.addChild(inside);
+
+  // A handful of ends poking out of the weave. Three, never more — this is
+  // designed imperfection, not fraying (§14).
+  const strays = new Graphics();
+  for (let i = 0; i < 3; i++) {
+    const x = rngRange(rng, -half * 0.8, half * 0.8);
+    const y = -rim + rngRange(rng, -2, 3);
+    strays.moveTo(x, y);
+    strays.quadraticCurveTo(x + rngRange(rng, -6, 6), y - 7, x + rngRange(rng, -10, 10), y - 12);
+  }
+  strays.stroke({ color: ramp.line, width: 2, alpha: 0.5 });
+  root.addChild(strays);
 
   return root;
 }

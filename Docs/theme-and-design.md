@@ -285,13 +285,29 @@ floor seams          converging lines the eye can measure depth against, even
 ## Depth has to be sayable, not only visible
 
 A pointer has two axes. When something is being carried, the floor is marked
-where it will land — the row it is over is brightened, an ellipse sits flat on
-the floor at the landing point, and a dashed tether joins the two. Objects set
-down snap to a row.
+where it will land — the **cells** it will occupy are filled in perspective, the
+depth rows they sit in are brightened much more faintly, an ellipse sits flat on
+the floor at the landing point, and a dashed tether joins the two.
+
+What is drawn is the *snapped* result, not the pointer's own position. A guide
+that shows where the cursor is rather than where the object will land is a lie,
+and it is the lie users notice first.
 
 None of it is visible when nothing is being moved. Affordances belong to the
 moment a decision is being made, and this room is meant to be looked at the
 rest of the time.
+
+## The room is measured
+
+The floor is a grid of square 120-unit cells, ten across and five deep, and an
+object's size **is** its footprint on that grid: a chair is one cell, a bed is
+two, a rug is six. The back wall has its own grid sharing the floor's columns,
+so a painting hangs above the bookshelf rather than approximately above it.
+
+That is a large enough subject to have its own document. See
+**`room-and-objects.md`** for the grid, the placement rules, the object catalog,
+the object surface language, affordances, and how the user's choices about the
+room are saved.
 
 ---
 
@@ -371,6 +387,18 @@ Furniture and environmental objects should have:
 * Simple but expressive forms
 
 Objects should feel designed rather than generated from generic UI components.
+
+Since the room gained a grid, this is enforced rather than hoped for. Every
+object is drawn to the world-space box its grid footprint gives it, and every
+object is shaded through one shared surface language
+(`assets/objects/shared/Surface.ts`) that applies the same rules §9 sets out for
+the creature: one base colour in, a five-step tone ramp out, one gloss shape,
+one shade shape, one contact shadow. A third flat shape on a form means the form
+is not reading and should be redrawn.
+
+See `room-and-objects.md` §5 for the helpers and for the traps that have already
+cost time — chief among them that an `ellipse()` call starts a new subpath, so a
+hand-built outline that ends in one never closes.
 
 ---
 
@@ -922,6 +950,32 @@ The hour and the paint are separate axes. `ROOM_TINTS` is what the room is
 (§16) — and every one of them is then graded by whatever hour it is. A sage
 room at midnight and an ember room at midnight are the same midnight.
 
+## And four more axes besides
+
+Light sets the *time*; it cannot set the *vibe*. A painting, a shelf of
+oddments, ivy coming through the plaster and a hole with something living behind
+it are four different rooms at the same hour in the same colour. So the room also
+carries a floor material, a wall material, a window view and a list of things
+hung on the wall.
+
+All six axes are one saved record — `world/RoomStyle.ts` — and that is the
+important part rather than the count. The hour and the paint used to live in
+React state, so every refresh put the room back to a sunny ember afternoon and
+threw away whatever the user had chosen. A room you have decorated and cannot get
+back to is worse than a room with no decoration at all, because the second one
+never promised anything.
+
+The window is the piece that changes most. It is no longer four shapes saying
+what time it is; it is a hole in something thick — a reveal, a sill, light
+spilling onto the plaster — with a *view* behind it that the user picks. A view
+never hard-codes a sky: it is handed the hour's own and paints its land against
+it, so a mountain range at midnight is the same range in the dark. The one
+exception is a view that supplies its own light, and the lava dungeon says so
+outright so the shafts through the glass go orange at noon and at midnight
+alike.
+
+See `room-and-objects.md` §7 and §8.
+
 ## Changing the mood is a rebuild
 
 A room is a few dozen flat shapes, so redressing it costs less than the
@@ -1006,6 +1060,102 @@ Preferred characteristics:
 * Minimal visual clutter
 
 The interface should disappear when the user is simply spending time with the pet.
+
+---
+
+## 20.1 Choosing things: show the thing
+
+**A customization option is shown as the thing it makes, never as its name.**
+
+"Ears Type 2" tells the user nothing they can act on. The rule is absolute
+across the product: every option in the creature editor and every object in the
+room panel is a picture, drawn by the same procedural code that draws it in the
+world.
+
+```text
+  your appearance + { earType: 'floppy' }  ──→  PetRenderer  ──→  crop to head
+  renderObject({ type: 'lamp' })           ──→  the lamp
+  createFloor({ pattern: 'tiles' })        ──→  a patch of tiled floor
+```
+
+There is no icon set, and there must never be one — an icon is a second copy of
+a design that silently stops matching the first. `lib/preview.ts` owns the
+single offscreen `Application` every thumbnail is drawn by (one WebGL context,
+not one per tile: the browser drops the oldest at about sixteen, which looks
+exactly like a rendering bug and is not one) and caches by key.
+
+**Previews crop to the part being chosen.** Drawn whole, a creature is mostly
+body, and two ear options differ by a dozen pixels in a 76-pixel tile. Each
+category names the joints its choice shows up in and the preview frames on
+those, squared and padded (`features/customization/previews.ts`).
+
+> A framing trap worth knowing: expressing the crop as "how much of the tile the
+> subject fills" runs backwards — a *smaller* fill makes the visible window
+> *bigger*. Dialling a face down to 0.64 to "give it air" opened the window
+> wider than the whole creature, and every face option rendered uncropped. The
+> tiles looked plausible; it took a contact sheet to see. The crop is expressed
+> as padding around the part instead, which cannot invert.
+
+## 20.2 The option grid
+
+Every category uses one control (`components/ui/option-grid.tsx`), and it makes
+four failures structurally impossible rather than merely discouraged:
+
+```text
+  stretched     tiles are a fixed square; nothing is sized by its content, so a
+                long label cannot pull a tile out of shape
+  deformed      previews are object-contain inside that square, so a wide asset
+                letterboxes instead of squashing
+  overcrowded   a page holds columns x rows and no more. The eleventh option
+                starts page two rather than shrinking the other ten
+  inconsistent  every category gets the same tile, gap and column count,
+                because they all get the same component
+```
+
+Captions are one line and clipped: a caption that wraps makes its tile taller
+than its neighbours, and a grid at two heights is what "visually broken" looks
+like.
+
+Categories longer than one page become a Splide carousel (see `TECH_STACK.md`).
+The last page is padded with invisible blanks — without them a page of three
+tiles centres its three across the full width while the page before shows eight
+in columns, so sliding between them moves every tile sideways and reads as the
+grid rearranging itself rather than as a page turning.
+
+Motion is a lift on hover and a squash on press, both transforms, so neither
+costs a layout.
+
+## 20.3 The page does not scroll
+
+The shell is exactly one viewport tall, and **the only scrollable region in the
+product is the tools column.** The world is a fixed object you look into; a page
+that could scroll it out of view is a page where the main thing can be lost by
+touching the wheel.
+
+Every ancestor of that column carries `min-h-0`. Without it a flex child refuses
+to shrink below its content height, the column grows past the viewport, and the
+`overflow-hidden` at the top clips the bottom of it — which looks like the panel
+is broken rather than like the page is fixed.
+
+## 20.4 The frame is the room's shape
+
+The habitat frame is sized by measurement to the room's own 16:9
+(`PetHabitat`'s `ResizeObserver`), never by a CSS ratio and never by the
+column's width.
+
+`fit: 'contain'` means a frame of the wrong shape never *stretches* the room —
+it pads it, and two grey bands are what the eye reads as the room having been
+pulled wide. Matching the ratio removes the bands instead of disguising them.
+
+CSS alone cannot do this: the frame wants its width from its height while a
+`w-fit` card wants its height from its content's width, which is a genuine
+circular dependency the browser resolves by giving the canvas an intrinsic width
+of nearly zero. Two multiplications in a `ResizeObserver` have no such problem.
+
+Anything that is not the room is kept out of that frame — the creature's name
+and mood sit above it, and messages float over it — because every pixel of
+chrome inside the frame is a pixel off the room twice: once for the chrome, and
+again for refitting the room into a box whose shape the chrome changed.
 
 ---
 

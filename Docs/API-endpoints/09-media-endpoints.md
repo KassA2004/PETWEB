@@ -96,3 +96,54 @@ scheduled job — no new infrastructure, no queue.
 `techStack.md` allows MinIO as an alternative to local disk. Keep all filesystem access
 behind a `StorageService` interface (`put`, `get`, `delete`, `url`) so swapping the
 implementation touches one file and no endpoint contract changes.
+
+---
+
+## Implementation notes
+
+**Module:** `Backend/src/media/` · **Client:** `frontend/src/features/media/api.ts`
+
+Implemented: `POST /media/uploads`, `DELETE /media/uploads`, static serving of
+`/uploads/*`, and the orphan sweep.
+
+```text
+  bytes ─→ size check ─→ magic-byte sniff ─→ metadata strip ─→ disk
+                                                                 ↓
+   PostgreSQL stores  "/uploads/memory/2026/08/<32 hex>.png"  ←──┘
+```
+
+- **Held in memory, not streamed to a temp file.** The cap is 5 MB and the bytes
+  have to be inspected before they are trusted anyway; a file that turns out not
+  to be an image should never have touched the disk.
+- **Type comes from the first bytes**, never from `Content-Type` or the
+  extension. Verified: an HTML file offered as `cat.png` is refused `415`.
+- **`DELETE` takes the path in a body**, not an id in the URL — the one
+  deviation from §3. Looking a file up by a bare id means taking a
+  caller-supplied fragment and searching a filesystem with it, which is how
+  traversal bugs are born. `storedFilePath()` returns `null` for anything that
+  is not a path this service issued, and `..` cannot match `[0-9a-f]{32}`.
+- **Orphan sweep** is an hourly `setInterval` cleared on module destroy, rather
+  than a scheduled-job package, for a job that runs hourly and does not care
+  exactly when.
+
+### What is NOT implemented, and what it needs
+
+The processing steps in §2 that require an image codec:
+
+| Step | Status |
+|---|---|
+| 1. real MIME by magic bytes | **done** |
+| 2. strip EXIF | **done for JPEG** — APPn/COM segments removed in pure Node (`image-bytes.ts`). Verified against a real JPEG: GPS and JFIF records gone, output decodes pixel-identical. **PNG/WebP metadata chunks are not stripped.** |
+| 3. re-encode to WebP, max 1920 px | **not done** — needs `sharp` |
+| 4. store under `<purpose>/<yyyy>/<mm>/…` | **done** |
+| 5. `-thumb` variant at 320 px | **not done** — needs `sharp` |
+
+`sharp` is not in `techStack.md`, so adding it is an approval, not a decision.
+Until then an upload is stored at its original size and the memory book renders
+it with `loading="lazy"` and a CSS cap. The integration point is one function —
+`MediaService.store` already owns the whole pipeline, and steps 3 and 5 go
+between `cleanImage` and `writeFile`.
+
+**The access-control posture is unchanged and still not access control.** Files
+are served publicly from unguessable paths (§4). Before anything social ships
+this must move behind a guarded streaming controller.

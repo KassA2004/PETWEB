@@ -16,26 +16,19 @@ import {
   WING_TYPES,
   WING_TYPE_KEYS,
 } from '../../assets/pets/customization/AppendageTypes';
-import type {
-  TailType,
-  WingType,
-} from '../../assets/pets/customization/AppendageTypes';
 import {
   EAR_TYPES,
   EAR_TYPE_KEYS,
 } from '../../assets/pets/customization/EarTypes';
-import type { EarType } from '../../assets/pets/customization/EarTypes';
 import {
   FOOT_TYPES,
   FOOT_TYPE_KEYS,
 } from '../../assets/pets/customization/FootTypes';
-import type { FootType } from '../../assets/pets/customization/FootTypes';
 import { ARCHETYPES, randomAppearance } from '../../assets/pets/customization/Archetypes';
 import {
   BODY_TYPES,
   BODY_TYPE_KEYS,
 } from '../../assets/pets/customization/BodyTypes';
-import type { BodyType } from '../../assets/pets/customization/BodyTypes';
 import {
   BROW_TYPES,
   BROW_TYPE_KEYS,
@@ -50,14 +43,6 @@ import {
   TEETH_TYPES,
   TEETH_TYPE_KEYS,
 } from '../../assets/pets/customization/FaceTypes';
-import type {
-  BrowType,
-  CheekType,
-  EyeType,
-  MouthType,
-  SnoutType,
-  TeethType,
-} from '../../assets/pets/customization/FaceTypes';
 import { getRange } from '../../assets/pets/customization/PetConstraints';
 import type { RangedField } from '../../assets/pets/customization/PetConstraints';
 import { PATTERN_KEYS, PATTERN_LABELS } from '../../assets/pets/customization/Patterns';
@@ -66,10 +51,10 @@ import {
   TOPPER_TYPES,
   TOPPER_TYPE_KEYS,
 } from '../../assets/pets/customization/TopperTypes';
-import type { TopperType } from '../../assets/pets/customization/TopperTypes';
 import type { PetAppearance } from '../../assets/pets/customization/PetAppearance';
 import { Button } from '../../components/ui/button';
-import { ChipRow, Section, SliderRow, SwatchRow } from '../../components/ui/controls';
+import { Section, SliderRow, SwatchRow } from '../../components/ui/controls';
+import { PartGrid } from './PartGrid';
 import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
 import { Tabs } from '../../components/ui/tabs';
@@ -121,28 +106,47 @@ const TABS = [
   { value: 'extras', label: 'Extras' },
 ] as const satisfies readonly { value: EditorTab; label: string }[];
 
-/** Turn a type library into chips, carrying each entry's own one-line hint. */
-const options = <T extends string>(
-  keys: readonly T[],
-  table: Record<T, { label: string; hint?: string }>,
-) => keys.map((key) => ({ value: key, label: table[key].label, hint: table[key].hint }));
+/**
+ * Every part category, as pictures rather than as words.
+ *
+ * `PartGrid` takes the type library, what choosing an option does, and which
+ * part of the resulting creature is worth looking at. Nothing here needs a
+ * label list any more — the libraries already carry one, and the picture is
+ * doing the work the label used to.
+ */
+const patternTable = Object.fromEntries(
+  PATTERN_KEYS.map((key) => [key, { label: PATTERN_LABELS[key] }]),
+) as Record<PatternType, { label: string }>;
 
-const bodyOptions = options(BODY_TYPE_KEYS, BODY_TYPES);
-const footOptions = options(FOOT_TYPE_KEYS, FOOT_TYPES);
-const earOptions = options(EAR_TYPE_KEYS, EAR_TYPES);
-const wingOptions = options(WING_TYPE_KEYS, WING_TYPES);
-const tailOptions = options(TAIL_TYPE_KEYS, TAIL_TYPES);
-const topperOptions = options(TOPPER_TYPE_KEYS, TOPPER_TYPES);
-const eyeOptions = options(EYE_TYPE_KEYS, EYE_TYPES);
-const browOptions = options(BROW_TYPE_KEYS, BROW_TYPES);
-const mouthOptions = options(MOUTH_TYPE_KEYS, MOUTH_TYPES);
-const teethOptions = options(TEETH_TYPE_KEYS, TEETH_TYPES);
-const cheekOptions = options(CHEEK_TYPE_KEYS, CHEEK_TYPES);
-const snoutOptions = options(SNOUT_TYPE_KEYS, SNOUT_TYPES);
-const patternOptions = PATTERN_KEYS.map((key) => ({
-  value: key,
-  label: PATTERN_LABELS[key],
-}));
+/**
+ * What wearing (or removing) an accessory does to an appearance.
+ *
+ * Shared by the preview and the actual change, which is the point: a tile that
+ * previewed one thing and applied another would be a lie the user only finds
+ * out about after clicking. The colour and size the wearer already chose for
+ * the slot are kept when swapping items — changing hat *shape* should not
+ * silently reset the hat's colour.
+ */
+function accessoryPatch(
+  appearance: PetAppearance,
+  slot: AccessorySlot,
+  value: AccessoryType | 'none',
+): Partial<PetAppearance> {
+  const next = { ...appearance.accessories };
+
+  if (value === 'none') {
+    delete next[slot];
+    return { accessories: next };
+  }
+
+  const current = next[slot];
+  next[slot] = createAccessoryConfig(value, {
+    color: current?.color,
+    scale: current?.scale,
+  });
+
+  return { accessories: next };
+}
 
 const percent = (value: number) => `${Math.round(value * 100)}%`;
 const degrees = (value: number) => `${Math.round(value * 57)}°`;
@@ -173,21 +177,7 @@ export function CustomizerPanel({
   );
 
   const setAccessory = (slot: AccessorySlot, value: AccessoryType | 'none') => {
-    const next = { ...appearance.accessories };
-
-    if (value === 'none') {
-      delete next[slot];
-    } else {
-      // Keep the colour the wearer already chose for this slot when swapping
-      // items — changing hat shape should not silently reset the colour.
-      const current = next[slot];
-      next[slot] = createAccessoryConfig(value, {
-        color: current?.color,
-        scale: current?.scale,
-      });
-    }
-
-    onChange({ accessories: next });
+    onChange(accessoryPatch(appearance, slot, value));
   };
 
   const patchAccessory = (
@@ -284,11 +274,15 @@ export function CustomizerPanel({
           title="The mass"
           description="One soft silhouette. Everything else grows out of it."
         >
-          <ChipRow
+          <PartGrid
             label="Shape"
-            options={bodyOptions}
+            keys={BODY_TYPE_KEYS}
+            table={BODY_TYPES}
+            patch={(bodyType) => ({ bodyType })}
+            focus="whole"
             value={appearance.bodyType}
-            onChange={(value) => onChange({ bodyType: value as BodyType })}
+            onChange={(bodyType) => onChange({ bodyType })}
+            appearance={appearance}
           />
           {dial('bodyScale', 'Size')}
           {dial('bodyWidth', 'Width')}
@@ -300,10 +294,14 @@ export function CustomizerPanel({
       {tab === 'ears' && (
         <>
           <Section title="Ears" description="Or horns, or antennae, or fins.">
-            <ChipRow
-              options={earOptions}
+            <PartGrid
+              keys={EAR_TYPE_KEYS}
+              table={EAR_TYPES}
+              patch={(earType) => ({ earType })}
+              focus="ears"
               value={appearance.earType}
-              onChange={(value) => onChange({ earType: value as EarType })}
+              onChange={(earType) => onChange({ earType })}
+              appearance={appearance}
             />
             {dial('earScale', 'Size')}
             {dial('earSpread', 'Spacing', percent)}
@@ -314,10 +312,14 @@ export function CustomizerPanel({
             title="Feet"
             description="Drawn into the bottom of the body, never hung off it."
           >
-            <ChipRow
-              options={footOptions}
+            <PartGrid
+              keys={FOOT_TYPE_KEYS}
+              table={FOOT_TYPES}
+              patch={(footType) => ({ footType })}
+              focus="feet"
               value={appearance.footType}
-              onChange={(value) => onChange({ footType: value as FootType })}
+              onChange={(footType) => onChange({ footType })}
+              appearance={appearance}
             />
             {dial('footScale', 'Size')}
           </Section>
@@ -330,10 +332,14 @@ export function CustomizerPanel({
             title="Eyes"
             description="The biggest single decision about who this creature is."
           >
-            <ChipRow
-              options={eyeOptions}
+            <PartGrid
+              keys={EYE_TYPE_KEYS}
+              table={EYE_TYPES}
+              patch={(eyeType) => ({ eyeType })}
+              focus="face"
               value={appearance.eyeType}
-              onChange={(value) => onChange({ eyeType: value as EyeType })}
+              onChange={(eyeType) => onChange({ eyeType })}
+              appearance={appearance}
             />
             {dial('eyeScale', 'Size')}
             {dial('eyeSpacing', 'Spacing', percent)}
@@ -343,10 +349,14 @@ export function CustomizerPanel({
           </Section>
 
           <Section title="Brows">
-            <ChipRow
-              options={browOptions}
+            <PartGrid
+              keys={BROW_TYPE_KEYS}
+              table={BROW_TYPES}
+              patch={(browType) => ({ browType })}
+              focus="face"
               value={appearance.browType}
-              onChange={(value) => onChange({ browType: value as BrowType })}
+              onChange={(browType) => onChange({ browType })}
+              appearance={appearance}
             />
             {dial('browScale', 'Size')}
           </Section>
@@ -355,35 +365,51 @@ export function CustomizerPanel({
             title="Mouth"
             description="A shape language, not a mood. The creature still expresses everything."
           >
-            <ChipRow
-              options={mouthOptions}
+            <PartGrid
+              keys={MOUTH_TYPE_KEYS}
+              table={MOUTH_TYPES}
+              patch={(mouthType) => ({ mouthType })}
+              focus="face"
               value={appearance.mouthType}
-              onChange={(value) => onChange({ mouthType: value as MouthType })}
+              onChange={(mouthType) => onChange({ mouthType })}
+              appearance={appearance}
             />
             {dial('mouthWidth', 'Width')}
             {dial('mouthWeight', 'Line weight')}
-            <ChipRow
+            <PartGrid
               label="Teeth"
-              options={teethOptions}
+              keys={TEETH_TYPE_KEYS}
+              table={TEETH_TYPES}
+              patch={(teethType) => ({ teethType })}
+              focus="face"
               value={appearance.teethType}
-              onChange={(value) => onChange({ teethType: value as TeethType })}
+              onChange={(teethType) => onChange({ teethType })}
+              appearance={appearance}
             />
             {appearance.teethType !== 'none' && dial('fangs', 'Tooth size', percent)}
           </Section>
 
           <Section title="Nose and cheeks">
-            <ChipRow
+            <PartGrid
               label="Snout"
-              options={snoutOptions}
+              keys={SNOUT_TYPE_KEYS}
+              table={SNOUT_TYPES}
+              patch={(snoutType) => ({ snoutType })}
+              focus="face"
               value={appearance.snoutType}
-              onChange={(value) => onChange({ snoutType: value as SnoutType })}
+              onChange={(snoutType) => onChange({ snoutType })}
+              appearance={appearance}
             />
             {dial('snoutScale', 'Snout size')}
-            <ChipRow
+            <PartGrid
               label="Cheeks"
-              options={cheekOptions}
+              keys={CHEEK_TYPE_KEYS}
+              table={CHEEK_TYPES}
+              patch={(cheekType) => ({ cheekType })}
+              focus="face"
               value={appearance.cheekType}
-              onChange={(value) => onChange({ cheekType: value as CheekType })}
+              onChange={(cheekType) => onChange({ cheekType })}
+              appearance={appearance}
             />
             {appearance.cheekType !== 'none' && dial('blush', 'Blush', percent)}
           </Section>
@@ -416,11 +442,15 @@ export function CustomizerPanel({
             value={appearance.eyeColor}
             onChange={(eyeColor) => onChange({ eyeColor })}
           />
-          <ChipRow
+          <PartGrid
             label="Markings"
-            options={patternOptions}
+            keys={PATTERN_KEYS}
+            table={patternTable}
+            patch={(pattern) => ({ pattern })}
+            focus="whole"
             value={appearance.pattern}
-            onChange={(value) => onChange({ pattern: value as PatternType })}
+            onChange={(pattern) => onChange({ pattern })}
+            appearance={appearance}
           />
           {appearance.pattern !== 'none' && (
             <SwatchRow
@@ -436,50 +466,69 @@ export function CustomizerPanel({
       {tab === 'extras' && (
         <>
           <Section title="Wings">
-            <ChipRow
-              options={wingOptions}
+            <PartGrid
+              keys={WING_TYPE_KEYS}
+              table={WING_TYPES}
+              patch={(wingType) => ({ wingType })}
+              focus="wings"
               value={appearance.wingType}
-              onChange={(value) => onChange({ wingType: value as WingType })}
+              onChange={(wingType) => onChange({ wingType })}
+              appearance={appearance}
             />
             {dial('wingScale', 'Size')}
           </Section>
 
           <Section title="Tail">
-            <ChipRow
-              options={tailOptions}
+            <PartGrid
+              keys={TAIL_TYPE_KEYS}
+              table={TAIL_TYPES}
+              patch={(tailType) => ({ tailType })}
+              focus="tail"
               value={appearance.tailType}
-              onChange={(value) => onChange({ tailType: value as TailType })}
+              onChange={(tailType) => onChange({ tailType })}
+              appearance={appearance}
             />
             {dial('tailScale', 'Size')}
           </Section>
 
           <Section title="Topper" description="The thing growing out of the top.">
-            <ChipRow
-              options={topperOptions}
+            <PartGrid
+              keys={TOPPER_TYPE_KEYS}
+              table={TOPPER_TYPES}
+              patch={(topperType) => ({ topperType })}
+              focus="topper"
               value={appearance.topperType}
-              onChange={(value) => onChange({ topperType: value as TopperType })}
+              onChange={(topperType) => onChange({ topperType })}
+              appearance={appearance}
             />
             {dial('topperScale', 'Size')}
           </Section>
 
           {ACCESSORY_SLOTS.map((slot) => {
             const worn = appearance.accessories[slot];
-            const slotOptions = [
-              { value: 'none' as const, label: 'None' },
-              ...accessoriesForSlot(slot).map((type) => ({
-                value: type,
-                label: ACCESSORY_TYPES[type].label,
-              })),
-            ];
+
+            // "None" is an option like any other, so it gets a tile like any
+            // other — a picture of the creature without one. A bare list that
+            // silently omits the way back is a customizer you can put a hat on
+            // and not take it off.
+            const slotKeys = ['none' as const, ...accessoriesForSlot(slot)];
+            const slotTable = {
+              none: { label: 'None' },
+              ...Object.fromEntries(
+                accessoriesForSlot(slot).map((type) => [type, ACCESSORY_TYPES[type]]),
+              ),
+            } as Record<AccessoryType | 'none', { label: string; hint?: string }>;
 
             return (
               <Section key={slot} title={`${ACCESSORY_SLOT_LABELS[slot]} accessory`}>
-                <ChipRow
-                  options={slotOptions}
+                <PartGrid
+                  keys={slotKeys}
+                  table={slotTable}
+                  patch={(value) => accessoryPatch(appearance, slot, value)}
+                  focus={slot === 'neck' ? 'whole' : 'head'}
                   value={worn?.type ?? 'none'}
-                  onChange={(value) =>
-                    setAccessory(slot, value as AccessoryType | 'none')
-                  }
+                  onChange={(value) => setAccessory(slot, value)}
+                  appearance={appearance}
                 />
                 {worn && (
                   <>

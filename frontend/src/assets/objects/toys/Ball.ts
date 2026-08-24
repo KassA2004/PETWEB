@@ -1,50 +1,61 @@
 /**
- * Ball — the simplest object in the set.
+ * Ball — the simplest object in the set, and the one the room is really about.
  *
- * A circle, one painted stripe, one glint. Anchored at its floor contact point.
+ * A sphere, one painted band, one glint. It is the toy the creature chases, so
+ * it has to read at a glance from anywhere in the room and it has to have an
+ * orientation, or rolling would be invisible.
+ *
+ * Anchored at its floor contact point.
  */
 
 import { Container, Graphics } from 'pixi.js';
-import { outline } from '../../shared/color';
-import { createContactShadow } from '../../environment/Shadows';
+import { lighten, tones } from '../../shared/color';
+import { drawSquircle } from '../../shared/shapes';
+import { edge, formFill, groundShadow } from '../shared/Surface';
 import type { ObjectRenderContext } from '../ObjectRenderer';
 
 export function createBall(ctx: ObjectRenderContext): Container {
   const root = new Container();
   root.label = 'ball';
 
-  const radius = 30 * ctx.scale;
+  const radius = Math.min(ctx.width, ctx.height) / 2;
+  const ramp = tones(ctx.color);
 
-  root.addChild(createContactShadow({ width: radius * 2, strength: 0.26 }));
+  root.addChild(groundShadow(radius * 2, ctx.depth, 0.26));
 
   const body = new Container();
   body.position.set(0, -radius);
 
   const art = new Graphics();
   art.circle(0, 0, radius);
-  art.fill({ color: ctx.color });
-  art.stroke({ color: outline(ctx.color), width: 3, alpha: 0.45 });
+  // A sphere is the one shape a flat gradient genuinely helps: light at the
+  // crown, base through the middle, the underside in shade.
+  art.fill(formFill(ramp, 0.8));
+  art.circle(0, 0, radius);
+  edge(art, ctx.color, 3, 0.45);
   body.addChild(art);
 
-  // A painted stripe, so the ball has an orientation and reads as a toy.
+  // The painted band, clipped to the ball so it cannot leave the silhouette
+  // however the toy tumbles.
+  const clip = new Graphics();
+  clip.circle(0, 0, radius);
+  clip.fill({ color: 0xffffff });
+  body.addChild(clip);
+
   const stripe = new Graphics();
-  stripe.moveTo(-radius * 0.94, -radius * 0.2);
-  stripe.quadraticCurveTo(0, radius * 0.42, radius * 0.94, -radius * 0.2);
-  stripe.quadraticCurveTo(0, radius * 0.08, -radius * 0.94, -radius * 0.2);
+  stripe.moveTo(-radius * 1.1, -radius * 0.2);
+  stripe.quadraticCurveTo(0, radius * 0.46, radius * 1.1, -radius * 0.2);
+  stripe.quadraticCurveTo(0, radius * 0.1, -radius * 1.1, -radius * 0.2);
   stripe.closePath();
   stripe.fill({ color: ctx.accentColor });
-  stripe.mask = (() => {
-    const clip = new Graphics();
-    clip.circle(0, 0, radius);
-    clip.fill({ color: 0xffffff });
-    body.addChild(clip);
-    return clip;
-  })();
+  stripe.mask = clip;
   body.addChild(stripe);
 
   const glint = new Graphics();
-  glint.ellipse(-radius * 0.36, -radius * 0.42, radius * 0.22, radius * 0.15);
-  glint.fill({ color: 0xffffff, alpha: 0.7 });
+  drawSquircle(glint, -radius * 0.36, -radius * 0.42, radius * 0.24, radius * 0.16, {
+    roundness: 0.9,
+  });
+  glint.fill({ color: lighten(ramp.light, 0.55), alpha: 0.7 });
   body.addChild(glint);
 
   root.addChild(body);

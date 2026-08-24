@@ -17,53 +17,107 @@ import { Container } from 'pixi.js';
 import { createBackground } from '../../assets/environment/Background';
 import { createFloor } from '../../assets/environment/Floor';
 import { createLighting, poolFor } from '../../assets/environment/Lighting';
-import { createWalls, WINDOW_HALF } from '../../assets/environment/Walls';
-import { darken } from '../../assets/shared/color';
+import { createWalls, WINDOW_FOOTPRINT, WINDOW_HALF } from '../../assets/environment/Walls';
+import { getWindowView } from '../../assets/environment/window/WindowViews';
+import { PALETTE, darken } from '../../assets/shared/color';
 import { floorColor, graded } from '../Ambience';
-import type { RoomMood } from '../Ambience';
-import { ROOM_DEPTH, ROOM_WIDTH, SCREEN_HEIGHT, SCREEN_WIDTH } from '../Projection';
+import { resolveMood } from '../RoomStyle';
+import type { RoomStyle } from '../RoomStyle';
+import { ROOM_WIDTH, SCREEN_HEIGHT, SCREEN_WIDTH } from '../Projection';
+import { GRID_BOUNDS, anchorCenter } from '../FloorGrid';
+import { wallCenter } from '../WallGrid';
+import { getObjectTraits } from '../../assets/objects/ObjectRenderer';
+import type { ObjectType } from '../../assets/objects/ObjectRenderer';
 import type { EnvironmentDefinition, PlacedProp } from './types';
 
-/** Centre of the window on the back wall, in room coordinates. */
-const WINDOW = { x: ROOM_WIDTH * 0.28, y: 330, z: 0 };
+/**
+ * Centre of the window on the back wall, taken from the wall grid rather than
+ * from a fraction of the room's width.
+ *
+ * Two cells in from the left, filling the wall's full height of hanging space.
+ * Everything else on this wall is placed the same way, which is the whole
+ * reason the back wall now reads as one composition instead of three things
+ * that happen to be on it.
+ */
+const WINDOW_CELL = { col: 1, row: 0 };
+const WINDOW = { ...wallCenter(WINDOW_CELL, WINDOW_FOOTPRINT), z: 0 };
 
 /**
- * The furniture, spread across the room's three depth rows.
+ * The furniture the room starts with, placed by grid cell rather than by
+ * coordinate.
+ *
+ * `at(col, row, type)` looks the type's footprint up and returns the world
+ * centre of the cells it would occupy, so a starting arrangement is written in
+ * the same units the user places things in. Typing coordinates by hand is how
+ * the old starting room ended up with three pieces of furniture sitting
+ * between cells before anybody had touched anything.
  *
  * Composition matters more here than it looks. Everything used to be strung
  * along one line because depth was only a draw order, and the room read as
  * crowded no matter how few things were in it. With real depth the back row
  * can be full without the front row noticing.
  */
-const PROPS: PlacedProp[] = [
-  // Back row, against the wall.
-  { id: 'prop-plant', definition: { type: 'plant', seed: 77, scale: 1.15 }, x: 130, z: 105 },
-  { id: 'prop-lamp', definition: { type: 'lamp', seed: 88 }, x: 1140, z: 110 },
-  // The clock keeps the user's real time, which is the one thing in the room
-  // that is not make-believe. It hangs on the back wall itself.
-  { id: 'prop-clock', definition: { type: 'clock', seed: 7, scale: 0.92 }, x: 800, z: 8 },
+function at(col: number, row: number, type: ObjectType, seed: number): PlacedProp {
+  const traits = getObjectTraits(type);
+  const centre = anchorCenter({ col, row }, traits.footprint);
 
-  // Middle row: the furniture you live around.
-  { id: 'prop-table', definition: { type: 'table', seed: 101, scale: 1.05 }, x: 420, z: 295 },
-  { id: 'prop-chair', definition: { type: 'chair', seed: 102 }, x: 630, z: 310 },
-  { id: 'prop-bed', definition: { type: 'bed', seed: 24, scale: 1.05 }, x: 1000, z: 305 },
+  return {
+    id: `prop-${type}`,
+    definition: { type, seed },
+    x: centre.x,
+    z: centre.z,
+  };
+}
+
+const PROPS: PlacedProp[] = [
+  // Back row, against the wall: the tall things, so the room has a skyline.
+  at(0, 0, 'plant', 77),
+  at(2, 0, 'bookshelf', 211),
+  at(9, 0, 'lamp', 88),
+
+  // Second row: the fish, where the creature can stand and look at them.
+  at(8, 1, 'aquarium', 509),
+
+  // Middle: the furniture you live around.
+  at(1, 2, 'table', 101),
+  at(4, 2, 'chair', 102),
+  at(6, 2, 'bed', 24),
+
+  // The rug sits under the front half of the room. It has no collision at all
+  // (see the catalog), so it is free to overlap whatever stands on it.
+  at(3, 3, 'rug', 44),
 
   // Front row: the basket, and whatever is lying about near it.
-  { id: 'prop-basket', definition: { type: 'basket', seed: 19, scale: 1.05 }, x: 240, z: 505 },
-  { id: 'prop-plush', definition: { type: 'plush', seed: 55 }, x: 780, z: 520 },
-  { id: 'prop-ball', definition: { type: 'ball', seed: 12 }, x: 520, z: 535 },
+  at(0, 4, 'basket', 19),
+  at(4, 4, 'ball', 12),
+  at(6, 4, 'plush', 55),
+  at(9, 4, 'bowl', 601),
+];
+
+/**
+ * The clock is the one prop that does not stand on the floor, so it does not
+ * get a cell — it hangs on the back wall at the height its traits ask for.
+ */
+const WALL_PROPS: PlacedProp[] = [
+  // On the wall grid too, six columns across: clear of the window, and above
+  // the gap between the bookshelf and the bed.
+  {
+    id: 'prop-clock',
+    definition: { type: 'clock', seed: 7 },
+    x: wallCenter({ col: 6, row: 1 }).x,
+    z: 8,
+  },
 ];
 
 export const farmhouse: EnvironmentDefinition = {
   id: 'farmhouse',
   label: 'Farmhouse',
 
-  bounds: {
-    minX: 40,
-    maxX: ROOM_WIDTH - 40,
-    minZ: 40,
-    maxZ: ROOM_DEPTH - 20,
-  },
+  // The room and the grid are the same rectangle, deliberately. They used to
+  // be two, which is exactly how an object could be legally placed somewhere
+  // the grid had no cell for it — and then be pulled off its cell by a clamp
+  // that knew about the other rectangle. One authority, one answer.
+  bounds: GRID_BOUNDS,
 
   // On the floor in the middle of the room, clear of every piece of furniture.
   petStart: { x: ROOM_WIDTH * 0.5, z: 500 },
@@ -72,10 +126,15 @@ export const farmhouse: EnvironmentDefinition = {
   night: { color: 0x241636, alpha: 0.62 },
   ceiling: 430,
 
-  props: PROPS,
+  // The window is a hole, not hanging space: the wall guide strikes these
+  // cells out and a drop over them is refused, so a painting can never end up
+  // hung across the glass.
+  wallReserved: [{ ...WINDOW_CELL, footprint: WINDOW_FOOTPRINT }],
 
-  createScenery(mood: RoomMood) {
-    const { ambience, tint } = mood;
+  props: [...PROPS, ...WALL_PROPS],
+
+  createScenery(style: RoomStyle) {
+    const { ambience, tint } = resolveMood(style);
 
     const walls = graded(tint, ambience);
     const boards = floorColor(tint, ambience);
@@ -88,6 +147,9 @@ export const farmhouse: EnvironmentDefinition = {
       window: WINDOW,
       windowHalf: WINDOW_HALF,
       pool,
+      // A window onto a lava dungeon lights the room orange whatever the clock
+      // says, so the view gets to override the key light (see WindowViews).
+      key: getWindowView(style.window).selfLit ?? undefined,
     });
 
     const ground: Container[] = [
@@ -101,11 +163,16 @@ export const farmhouse: EnvironmentDefinition = {
       }),
       createWalls({
         color: walls,
+        texture: style.wall,
+        view: style.window,
         sky: ambience.sky,
         windowX: WINDOW.x,
         windowY: WINDOW.y,
+        decor: style.decor,
+        tint,
+        accent: PALETTE.punch,
       }),
-      createFloor({ color: boards }),
+      createFloor({ color: boards, pattern: style.floor }),
     ];
 
     return {

@@ -90,20 +90,56 @@ gameplay logic is both slow and untypeable. `appearanceData` stays purely visual
 
 ---
 
-## 3. `Environment` — required for the MVP
+## 3. `Environment` — required for the MVP, **implemented (revised)**
 
 | Column | Type | Default | Needed by |
 |--------|------|---------|-----------|
-| `backgroundKey` | String | `"default_room"` | `GET /environments/:id/scene` |
-| `width` | Int | `1920` | placement bounds |
-| `height` | Int | `1080` | placement bounds |
-| `floorY` | Int | `760` | pet pathing, object anchoring |
+| `sceneData` | Json | `{}` | `GET /environments/current`, `PUT /environments/:id/scene` |
 | `createdAt` | DateTime | `now()` | ordering |
+| `updatedAt` | DateTime | `now()` `@updatedAt` | "saved a moment ago" |
 
-Without bounds the backend cannot validate that a placed object is inside the room, and
-placement validation would have to move to the client.
+**This replaces the `backgroundKey` / `width` / `height` / `floorY` proposal
+that was originally in this section.** The deviation is deliberate and is
+recorded here rather than made silently, per `AGENTS.md`.
 
-**Severity: blocking** for placement validation.
+Why the original four columns were dropped:
+
+- `width`, `height`, `floorY` — the room's dimensions are a property of the
+  *camera*, not of the data. Every room is the same box seen from the same place
+  (`frontend/src/world/Projection.ts`); an environment is allowed to vary what is
+  in it and what it is made of, never where the viewer stands. Storing bounds
+  per-environment would let the database contradict the renderer, and the
+  renderer would win.
+- `backgroundKey` — one string cannot express an hour, a paint colour, a floor
+  material, a wall material, a window view and a list of wall decorations. The
+  room gained four customization axes in one change and will gain more.
+
+Why one JSON column rather than a column per setting: none of these values is
+ever queried, filtered or sorted on. They are read whole, by exactly one
+consumer, to draw a picture. That is the same reasoning that keeps
+`Pet.appearanceData` a JSON document (§2 above, on what belongs *outside*
+`appearanceData`), and the same trust boundary applies:
+
+```text
+client  ->  assertStorableRoomStyle()  ->  column  ->  normalizeRoomStyle()  ->  render
+            Backend/src/environments/       Json      frontend/src/world/
+            room-style.ts                             RoomStyle.ts
+```
+
+The backend checks that the document is *storable* — a JSON object, named
+fields only, right primitive types, under 4 KB, at most 12 wall decorations. It
+deliberately does **not** check that `wall` names a texture that exists: the
+renderer owns that list, the renderer is in the frontend, and the client
+normalizes again on the way in so an unknown value costs one setting rather than
+the room. A backend that policed the catalog would need redeploying every time
+somebody drew a new wallpaper.
+
+The column never contains code. Only configuration — the same guarantee
+`ObjectDefinition` gives.
+
+**Severity: blocking** for room persistence, which is why it is implemented. See
+`Backend/prisma/environment.prisma` and migration
+`20260823134915_environment_scene_data`.
 
 ---
 
@@ -162,3 +198,107 @@ approved separately when social features are actually requested.
 
 Once approved, `InitialDB-plan.md` should be updated in the same change so the two
 documents do not diverge.
+
+---
+
+## Applied: `20260824120000_goals_memories_and_placed_objects`
+
+Three tables that existed as placeholders became tables the product writes to.
+All three held **zero rows** when the migration was written — verified against
+the database, not assumed — which is what makes the `NOT NULL` columns added
+without defaults and the four dropped columns safe here and only here. Any later
+change to these must backfill instead.
+
+### `Goal`
+
+| Column | Change | Why |
+|---|---|---|
+| `title` | added, `TEXT NOT NULL` | `InitialDB-plan.md` gave a goal only `description`; a list you can complete needs a line to show |
+| `status` | added, default `'open'` | a string, not a Postgres enum: the set is two values today and an enum costs a migration every time that changes |
+| `createdAt`, `updatedAt` | added | ordering, and "done today" |
+| `completedAt` | added, nullable | |
+| `description` | default `''` | kept rather than renamed, so nothing referring to it had to change |
+| index | `(ownerId, status)` replaces `(ownerId)` | the index the six-goal cap is counted on |
+
+### `Memory`
+
+| Column | Change | Why |
+|---|---|---|
+| `goalId` | added, nullable, **UNIQUE**, `ON DELETE SET NULL` | the duplicate-memory defence: a retried completion cannot make a second one, because the database will not hold two rows for one goal |
+| `petId` | now nullable | a memory of finishing a goal belongs to the user's day; an account can complete one before naming a creature |
+| `imageUrl` | now nullable | keeping a picture is optional at every step |
+| index | `(ownerId, createdAt)` replaces `(ownerId)` | the memory book is newest-first |
+
+### `EnvironmentObject`
+
+Restructured. It was shaped for a catalog that was never built, and it now
+records what the user actually decided.
+
+| Column | Change | Why |
+|---|---|---|
+| `key` | added, `@@unique([environmentId, key])` | the client's own id for the object in the scene. A save has to find the row a dragged object belongs to without renumbering the room |
+| `type` | added | the catalog is procedural code (`ObjectCatalog.ts`), not rows, so the type key is the whole reference — as `Pet.appearanceData` is authoritative over any future appearance catalog |
+| `col`, `row` | added | **cells, not pixels.** Placement snaps to whole cells, so the cell *is* the decision and a float would only record the rounding. It also survives a change to the tile size |
+| `definitionData` | added, `Json` | seed and three colours. Validated by `environments/object-definition.ts` |
+| `x`, `y`, `rotation`, `scale` | **dropped** | superseded by `col`/`row`; and a per-instance `scale` is exactly the thing `AGENTS.md` (Room Rules) forbids — an object's size is its footprint |
+| `objectId` | now **nullable** | reserved for the `ObjectDefinition` catalog (`05-object-endpoints.md`), which does not exist yet. Nullable so the arrangement can be saved now without inventing catalog rows to point at |
+| `environmentId` FK | now `ON DELETE CASCADE` | deleting a room takes its contents |
+
+`Goal.ownerId` and `Memory.ownerId` also gained `ON DELETE CASCADE`, matching
+`Pet`.
+
+---
+
+## 6. `FocusSession` and `User.affection` — required for focus sessions
+
+`InitialDB-plan.md` has no table for "an hour somebody committed to", and no
+column for how the creature feels about the person watching. Both are needed by
+`12-focus-endpoints.md`.
+
+**Severity: blocking for package 12.** Implemented —
+`Backend/prisma/focus-session.prisma`, migration
+`20260824155651_focus_sessions_and_affection`.
+
+### `FocusSession` (new table)
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | UUID | |
+| `ownerId` | UUID → `User`, `ON DELETE CASCADE` | never taken from a request body |
+| `goalId` | UUID? → `Goal`, **`ON DELETE SET NULL`** | an afternoon somebody spent survives the task it was spent on — the same argument as `Memory.goalId`. An *active* session always has one; the service refuses to delete a goal out from under a running session |
+| `durationMinutes` | Int | what was committed to, not what elapsed |
+| `status` | String, default `'active'` | `active` \| `completed` \| `aborted`. A string, not a Postgres enum, matching `Goal.status` |
+| `startedAt` | DateTime, default `now()` | **this column plus `durationMinutes` is the timer.** No countdown is stored and no client clock is consulted |
+| `endedAt` | DateTime? | for a completion this is `startedAt + duration` — the moment the time was served, not the moment the browser said so |
+
+Indexes: `(ownerId, status)` answers "is one running?" on every request;
+`(ownerId, startedAt)` is what the affection system's abort window reads.
+
+**No partial unique index enforcing one active session per user**, deliberately.
+Postgres would express it in a line, and Prisma cannot declare it — so the next
+`prisma migrate dev` would generate a migration dropping it again. The rule is
+counted inside the transaction that inserts instead, exactly like the six-goal
+cap.
+
+### `User` — three added columns
+
+| Column | Type | Default | Why |
+|---|---|---|---|
+| `affection` | Float | `0.5` | 0..1. Neutral is where a relationship that has not happened yet honestly sits |
+| `affectionAt` | DateTime | `now()` | when the value was last settled. Decay is *computed*, not ticked — this is why no scheduled job exists |
+| `lastFollowThroughAt` | DateTime? | `null` | the last session served or goal finished. NULL reads as "nothing to decay from", not "never turned up" |
+
+All three are additive and defaulted, so existing rows need no backfill.
+
+**On `User`, not on `Pet` — a deviation from the obvious place, recorded here
+because it is deliberate.** `Pet` rows are saved *presets* the creature editor
+writes to (`pets.service.ts` documents that deviation too): a user may have none
+of them, may keep several, and may delete any of them. Affection is not a fact
+about a rig. It is the state of a relationship built out of goals kept and hours
+served, and hanging it off a preset would mean it reset when somebody re-saved
+their creature with different ears — or had nowhere to live at all for the very
+common case of an account that has never pressed Save.
+
+`AffectionService` is the only writer, and it only ever moves the value by a few
+hundredths at a time inside somebody else's transaction. No route accepts an
+affection value.

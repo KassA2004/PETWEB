@@ -18,9 +18,10 @@
  */
 
 import { Container, Graphics } from 'pixi.js';
-import { PALETTE, darken, lighten, outline } from '../../shared/color';
+import { PALETTE, darken, lighten, outline, tones } from '../../shared/color';
 import { drawCapsule, drawSquircle } from '../../shared/shapes';
 import { attachLife } from '../ObjectLife';
+import { formFill } from '../shared/Surface';
 import type { ObjectRenderContext } from '../ObjectRenderer';
 
 /** One full swing, there and back. A slow tock reads calmer than a fast one. */
@@ -30,10 +31,12 @@ export function createClock(ctx: ObjectRenderContext): Container {
   const root = new Container();
   root.label = 'clock';
 
-  const scale = ctx.scale;
-  const faceRadius = 46 * scale;
-  const caseWidth = 116 * scale;
-  const caseHeight = 214 * scale;
+  // Everything is a fraction of the box the catalog handed it, so the clock is
+  // exactly as wide as the wall cell it hangs in and its details scale with it.
+  const caseWidth = ctx.width;
+  const caseHeight = ctx.height;
+  const scale = caseWidth / 116;
+  const faceRadius = caseWidth * 0.4;
   const faceY = -caseHeight + faceRadius + 22 * scale;
 
   // The whole clock rocks a little when it strikes, so everything lives under
@@ -47,7 +50,7 @@ export function createClock(ctx: ObjectRenderContext): Container {
   drawSquircle(shell, 0, -caseHeight / 2, caseWidth / 2, caseHeight / 2, {
     roundness: 0.42,
   });
-  shell.fill({ color: ctx.secondaryColor });
+  shell.fill(formFill(tones(ctx.secondaryColor), 0.55));
   shell.stroke({ color: outline(ctx.secondaryColor, 0.4), width: 4, alpha: 0.5 });
   hanging.addChild(shell);
 

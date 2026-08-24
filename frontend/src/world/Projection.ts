@@ -147,6 +147,22 @@ export function unprojectX(screenX: number, z: number): number {
 }
 
 /**
+ * Screen point to a point on the back wall (the plane at `z = 0`).
+ *
+ * The wall sits at one depth, so `scaleAt(0)` is a constant rather than
+ * something that has to be solved for the way `unprojectGround` solves for
+ * depth — this is `project(x, y, 0)` inverted in closed form, the same way
+ * `unprojectX`/`heightAt` invert the ground projection.
+ */
+export function unprojectWall(screenX: number, screenY: number): { x: number; y: number } {
+  const s = scaleAt(0);
+  return {
+    x: VP_X + (screenX - VP_X) / s,
+    y: EYE - (screenY - HORIZON) / s,
+  };
+}
+
+/**
  * How fast something is crossing the screen, given how fast it is moving in
  * the room.
  *

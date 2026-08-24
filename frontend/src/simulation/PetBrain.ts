@@ -22,6 +22,8 @@
  */
 
 import type { Emotion } from '../animation/expression/Expression';
+import { appetiteFor } from './Affordances';
+import type { AffordanceKind, PerceivedAffordance } from './Affordances';
 
 export type PetBehavior =
   | 'idle'
@@ -31,6 +33,17 @@ export type PetBehavior =
   | 'investigate'
   | 'chase'
   | 'play'
+  /**
+   * Using something the room offers: eating, scratching, dancing, watching
+   * the fish, hiding in the tunnel.
+   *
+   * One behaviour for all of them, because the *decision* is the same decision
+   * every time — is there something here that answers what I want, and can I
+   * get to it. What differs is only which clip plays, and that is
+   * `Intent.useKind`. Adding an interactive object therefore adds no branch
+   * here (see ./Affordances.ts).
+   */
+  | 'use'
   | 'sleep'
   | 'scared'
   | 'angry'
@@ -64,6 +77,20 @@ export interface PerceivedObject {
   comfort: number;
   /** Scenery can be looked at, but never walked to or knocked about. */
   reachable: boolean;
+  /**
+   * What this thing offers the creature to do, if anything.
+   *
+   * Everything the brain knows about supper bowls and scratching posts is on
+   * this one field. It has never heard of either.
+   */
+  affordance: PerceivedAffordance | null;
+}
+
+/** Where the user's hand is, when it is anywhere. */
+export interface PerceivedPointer {
+  /** Room coordinates, projected onto the floor. */
+  x: number;
+  z: number;
 }
 
 export interface Perception {
@@ -81,6 +108,15 @@ export interface Perception {
   };
   objects: PerceivedObject[];
   lightsOn: boolean;
+  /**
+   * The cursor, on the floor, or null when it is not over the room.
+   *
+   * The one piece of perception that is not a fact about the world — it is a
+   * fact about *you*, which is exactly why a creature's response to it reads as
+   * a response to you. A fond one comes over; a wary one keeps its distance.
+   * Neither happens at all when the pointer is somewhere else on the page.
+   */
+  pointer: PerceivedPointer | null;
 }
 
 export interface Intent {
@@ -118,6 +154,22 @@ export interface Intent {
   /** One word for the interface. */
   mood: string;
   /**
+   * Which interaction is running, for the animation layer to pick a clip.
+   *
+   * Only ever set while the behaviour is `use`, and it is the whole of the
+   * coupling between "the creature is eating" and "the creature looks like it
+   * is eating".
+   */
+  useKind: AffordanceKind | null;
+  /**
+   * What it is using, if anything.
+   *
+   * Separate from `moveTargetId`, which is cleared the moment the creature
+   * stops walking: the room still needs to know *which* bowl is being emptied
+   * after the creature has arrived at it and stood still.
+   */
+  useTargetId: string | null;
+  /**
    * How the creature feels, for the face.
    *
    * The simulation decides emotion; the animation layer only renders it. A
@@ -149,6 +201,9 @@ const MOODS: Record<PetBehavior, string> = {
   investigate: 'curious',
   chase: 'chasing a toy',
   play: 'playing',
+  // Overwritten every tick by the affordance's own line, so the interface can
+  // say "having its supper" rather than "using something".
+  use: 'busy',
   sleep: 'fast asleep',
   scared: 'frightened',
   angry: 'cross with you',
@@ -223,6 +278,71 @@ const MOUNT_RANGE = 70;
 
 /** A critter further away than this is somebody else's problem. */
 const CRITTER_RANGE = 260;
+
+/* -------------------------------------------------------------------------- */
+/* How it feels about you                                                     */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Affection at or above which the creature comes over of its own accord.
+ *
+ * Not a switch that turns on a "friendly mode": above it the creature *may*
+ * cross the room to where your hand is, on a cooldown, at the same point in the
+ * tick where it would otherwise have decided to wander. That it is one option
+ * among several is what stops it becoming a loop — the difference between a pet
+ * that likes you and a cursor-following toy.
+ */
+const FOND = 0.7;
+
+/**
+ * Affection at or below which it keeps its distance.
+ *
+ * The low end has to read as *sad*, never as hostile: the creature moves away
+ * and declines to start games. It does not hide, hiss, or refuse to be picked
+ * up — a creature that punished you would be a creature you would stop opening.
+ */
+const WARY = 0.32;
+
+/** How near the cursor gets before a wary creature drifts off, in room units. */
+const PERSONAL_SPACE = 200;
+
+/** How long between voluntary trips to the cursor, in seconds. */
+const POINTER_COOLDOWN = 15;
+
+/** How far away from the cursor a wary creature aims to be. */
+const RETREAT_DISTANCE = 240;
+
+/** How long a creature stays visibly put out after a session is abandoned. */
+const SULK_SECONDS = 9;
+
+/**
+ * How close, edge to edge, the creature has to be before it can use something.
+ *
+ * Generous, because the navigator already stops it a hand's breadth outside
+ * whatever it walked to (`APPROACH_GAP` in the room) and a second threshold
+ * tighter than the first would leave the creature standing next to its supper
+ * looking at it.
+ */
+const USE_RANGE = 78;
+
+/**
+ * How long an object stays boring after the creature has used it, in seconds.
+ *
+ * Long enough that the room does not become a circuit of feeding stations,
+ * short enough that a creature that got frightened can hide again if the thing
+ * that frightened it happens twice.
+ */
+const USE_COOLDOWN = 40;
+
+/**
+ * How much a creature has to want something before crossing the room for it.
+ *
+ * The single number that decides whether the room feels lived in or needy. Too
+ * low and the creature never stops using things; too high and the objects may
+ * as well be scenery. It is a *product* of appeal and appetite, so a low-appeal
+ * object still gets used when the need is strong.
+ */
+const USE_THRESHOLD = 0.22;
 
 export interface PetBrainOptions {
   /** The patch of floor the creature is allowed to wander over. */
@@ -299,6 +419,43 @@ export class PetBrain {
   /** Stops a hopeless chase after a moth from becoming the creature's life. */
   private critterFatigue = 0;
 
+  /**
+   * How it feels about you, 0..1. Persisted; set by the room, never by the tick.
+   *
+   * Not a need. Needs swing about over seconds and are the creature reacting to
+   * its afternoon; this moves over days and is the creature's opinion of the
+   * person watching. It never *causes* a behaviour on its own — it weights the
+   * ones already there, which is the difference between a personality and a
+   * mode (§29: behaviours are weighted, never scripted).
+   */
+  private affection = 0.5;
+
+  /** Earliest it will next come over to the cursor, or move away from it. */
+  private pointerAfter = 0;
+
+  /** Seconds left of visibly having its feelings hurt. See `disappointed`. */
+  private sulking = 0;
+
+  /**
+   * The interaction currently running, and what it is feeding.
+   *
+   * Held rather than recomputed, because the object it belongs to may stop
+   * offering it half-way through — an emptied bowl, a music box that has wound
+   * down — and a creature that stopped eating the instant the bowl emptied
+   * would snap out of the animation mid-mouthful. It finishes what it started.
+   */
+  private using: { id: string; affordance: PerceivedAffordance } | null = null;
+
+  /**
+   * When each object becomes interesting again after being used.
+   *
+   * Without it a creature that has just eaten immediately wants to eat again,
+   * because the thing that made it want to eat is the thing eating fixed and
+   * appetites take time to come back (§32 — appetites have to be able to run
+   * out).
+   */
+  private usedAt = new Map<string, number>();
+
   constructor(options: PetBrainOptions) {
     this.minX = options.minX;
     this.maxX = options.maxX;
@@ -309,6 +466,22 @@ export class PetBrain {
 
   get currentBehavior(): PetBehavior {
     return this.behavior;
+  }
+
+  /**
+   * How the creature feels about the user.
+   *
+   * Pushed in from outside because it is not the simulation's to decide: it is
+   * made of goals kept and sessions served, which happen on a server and
+   * outlive every session of this brain. All the brain does is act like it.
+   */
+  setAffection(value: number): void {
+    if (!Number.isFinite(value)) return;
+    this.affection = Math.max(0, Math.min(1, value));
+  }
+
+  get fondness(): number {
+    return this.affection;
   }
 
   /**
@@ -463,6 +636,58 @@ export class PetBrain {
     this.thinkAt = 0;
   }
 
+  /**
+   * The lights came back on and you are still there.
+   *
+   * The end of a focus session, and the one moment where affection is visible
+   * as a *difference* rather than as a tendency: the same event produces a
+   * creature bounding over, a creature having a look, or a creature sitting up
+   * and going back to what it was doing. Nothing here is scripted beyond
+   * choosing which of three ordinary behaviours to be in.
+   */
+  greet(): void {
+    const warmth = this.affection;
+
+    this.sulking = 0;
+    this.needs.fear = Math.max(0, this.needs.fear - 0.25);
+    this.needs.anger = Math.max(0, this.needs.anger - 0.25);
+    this.needs.joy = Math.min(1, this.needs.joy + 0.15 + warmth * 0.45);
+    // Waking up properly, so it does not immediately go back to bed.
+    this.needs.energy = Math.max(this.needs.energy, RESTED);
+    this.restAfter = this.time + REST_COOLDOWN;
+
+    if (warmth >= FOND) {
+      this.needs.playfulness = Math.min(1, this.needs.playfulness + 0.45);
+      this.setBehavior('play', 2.6);
+      return;
+    }
+
+    if (warmth > WARY) {
+      this.needs.curiosity = Math.min(1, this.needs.curiosity + 0.3);
+      this.setBehavior('investigate', 1.8);
+      return;
+    }
+
+    // Awake, and unimpressed. It will come round.
+    this.setBehavior('sit', 2);
+  }
+
+  /**
+   * You said you would do the thing, and then you did not.
+   *
+   * Mild, brief and cartoon: it sits down, turns away from wherever you are,
+   * and is over it in about nine seconds. It is not angry — `anger` is what
+   * being thrown across the room produces, and being let down is not that.
+   */
+  disappointed(): void {
+    this.sulking = SULK_SECONDS;
+    this.needs.joy = Math.max(0, this.needs.joy - 0.25);
+    this.needs.playfulness = Math.max(0, this.needs.playfulness - 0.3);
+    // It is not going to come and see you for a little while.
+    this.pointerAfter = this.time + POINTER_COOLDOWN;
+    this.setBehavior('sit', 2.4);
+  }
+
   /** Something good happened elsewhere in the app. */
   celebrate(): void {
     this.needs.playfulness = Math.min(1, this.needs.playfulness + 0.4);
@@ -494,14 +719,44 @@ export class PetBrain {
       moveTargetId: this.moveTargetId,
       mountId: this.mountId,
       lookAt: this.lookTarget(perception),
-      mood: MOODS[behavior],
+      // An interaction gets to name the mood itself, so the interface says
+      // "having its supper" rather than "busy".
+      mood: this.moodLine(behavior),
+      useKind: behavior === 'use' && this.using ? this.using.affordance.kind : null,
+      useTargetId: behavior === 'use' && this.using ? this.using.id : null,
       emotion: feeling.emotion,
       emotionStrength: feeling.strength,
     };
   }
 
+  /**
+   * The one line the interface prints under the creature's name.
+   *
+   * An interaction names itself, so the panel says "having its supper" rather
+   * than "busy". Everything else takes the behaviour's word for it — except a
+   * creature that has just been let down, which is doing something ordinary and
+   * plainly not enjoying it.
+   */
+  private moodLine(behavior: PetBehavior): string {
+    if (behavior === 'use' && this.using) return this.using.affordance.mood;
+    if (this.sulking > 0) return 'keeping to itself';
+    if (behavior === 'idle' && this.affection < WARY) return 'a bit glum';
+    return MOODS[behavior];
+  }
+
   private decay(dt: number, perception: Perception): void {
     const needs = this.needs;
+
+    // Whatever the creature is in the middle of doing pays out while it does
+    // it, rather than in a lump at the end. A reward that arrives all at once
+    // is a reward you can miss; this way a creature visibly cheers up over the
+    // four seconds it spends at the scratching post.
+    if (this.behavior === 'use' && this.using) {
+      for (const [need, rate] of Object.entries(this.using.affordance.feeds)) {
+        const key = need as keyof PetNeeds;
+        needs[key] = Math.max(0, Math.min(1, needs[key] + rate * dt));
+      }
+    }
 
     // Fear passes quickly; being cross about it lasts.
     needs.fear = Math.max(0, needs.fear - dt * 0.28);
@@ -556,6 +811,11 @@ export class PetBrain {
       this.wasHeld = true;
     }
 
+    // Having its feelings hurt wears off on its own, and quickly. "Recovers
+    // shortly" is the brief; a creature still sulking ten minutes later would
+    // have stopped being cute several minutes ago.
+    this.sulking = Math.max(0, this.sulking - dt);
+
     this.interests = this.interests.filter((item) => item.until > this.time);
     this.unreachable = this.unreachable.filter((item) => item.until > this.time);
   }
@@ -579,7 +839,36 @@ export class PetBrain {
     // --- Interrupts (§33) --------------------------------------------------
     if (perception.pet.held) return 'held';
     if (perception.pet.airborne) return 'scared';
-    if (this.needs.fear > 0.34) return 'scared';
+
+    if (this.needs.fear > 0.34) {
+      // Somewhere to hide beats running about being frightened, and this is
+      // the reason the tunnel is worth having in the room at all. It sits
+      // inside the interrupt rather than below it because being frightened
+      // outranks deliberation: the creature is not *deciding* to hide, it is
+      // bolting for the nearest hole.
+      const refuge = this.pickAffordance(perception, 'hide');
+
+      if (refuge) {
+        this.focusIsCritter = false;
+        this.focusId = refuge.object.id;
+        const gap =
+          planarDistance(perception.pet, refuge.object) -
+          refuge.object.radius -
+          perception.pet.radius;
+
+        if (gap <= USE_RANGE) {
+          this.stay();
+          this.beginUsing(refuge.object.id, refuge.affordance);
+          return 'use';
+        }
+
+        this.walkToObject(refuge.object);
+        this.setHold(0.5);
+        return 'scared';
+      }
+
+      return 'scared';
+    }
     // Dizziness outranks anger: you cannot be properly cross while the room
     // is still going round.
     if (this.needs.dizziness > 0.45) return 'dizzy';
@@ -597,6 +886,65 @@ export class PetBrain {
       this.behavior === 'sleep' || this.behavior === 'rest'
         ? this.needs.energy < RESTED
         : this.needs.energy < TIRED && this.time >= this.restAfter;
+
+    // --- Something in the room that answers what it wants ------------------
+    // Checked *before* the nap, and this ordering is the whole reason hunger
+    // works: low energy is what makes the creature both tired and hungry, so a
+    // sleep gate in front of the supper bowl means it never eats — it goes to
+    // bed, wakes up restored, and the bowl is decoration for ever.
+    //
+    // A sleepy creature is a harder sell, though, or it would stand watching
+    // the fish until it fell over. Two ways past that gate, and the first one
+    // is the important one:
+    //
+    //   restorative   the offer feeds energy — it is food. Food is what a
+    //                 tired creature actually needs, and eating is what stops
+    //                 it being tired, so supper always beats bed.
+    //   compelling    anything else has to be worth roughly twice as much as
+    //                 it would have to be worth when the creature was rested.
+    const offer = this.pickAffordance(perception);
+    const restorative = (offer?.affordance.feeds.energy ?? 0) > 0;
+
+    // ...but only while there is light to do it by. Darkness outranks appetite:
+    // a creature that got up in the pitch dark to visit the scratching post
+    // would not read as hungry, it would read as not having noticed the room.
+    //
+    // This costs nothing the exception above was protecting. That exception
+    // exists so a permanently tired creature can still reach its supper, and
+    // sleeping is what stops it being tired — so the bowl is waiting when the
+    // lights come back on. It also matters rather more now than it did: the
+    // lights going out is how a focus session begins, and somebody who comes
+    // back after an hour is owed a sleeping creature rather than one that has
+    // been rummaging about in the dark.
+    // And not while its feelings are hurt. Nine seconds of not fancying the
+    // supper bowl is the whole of the sulk being *visible*: this branch sits
+    // above the behaviour hold, so without the guard a peckish creature goes
+    // straight back to its bowl and the reaction the user was owed lasts one
+    // frame. Hiding is unaffected — that is the fear interrupt further up, and
+    // a frightened creature must always be able to reach a hole.
+    if (
+      offer &&
+      perception.lightsOn &&
+      this.sulking <= 0 &&
+      (!sleepy || restorative || offer.score > USE_THRESHOLD * 2.2)
+    ) {
+      this.focusIsCritter = false;
+      this.focusId = offer.object.id;
+      const gap =
+        planarDistance(perception.pet, offer.object) -
+        offer.object.radius -
+        perception.pet.radius;
+
+      if (gap > USE_RANGE) {
+        this.walkToObject(offer.object);
+        this.setHold(1.2);
+        return 'chase';
+      }
+
+      this.stay();
+      this.beginUsing(offer.object.id, offer.affordance);
+      return 'use';
+    }
 
     if (!perception.lightsOn || sleepy) {
       return this.settleDown(perception);
@@ -623,6 +971,13 @@ export class PetBrain {
       this.setHold(1.4);
       return 'play';
     }
+
+    // --- Keeping your distance --------------------------------------------
+    // A reaction rather than an idea, so it sits above the think interval: a
+    // creature that only noticed your hand every couple of seconds would let it
+    // arrive, and then edge away from where it used to be.
+    const retreat = this.avoidPointer(perception);
+    if (retreat) return retreat;
 
     // Held behaviours run to completion unless something above interrupts.
     if (this.time < this.holdUntil) return this.behavior;
@@ -671,6 +1026,12 @@ export class PetBrain {
       return 'play';
     }
 
+    // --- Coming over to see you --------------------------------------------
+    // Below the toys, above the pottering: a fond creature would still rather
+    // chase a ball, which is what keeps this from being the only thing it does.
+    const approach = this.approachPointer(perception);
+    if (approach) return approach;
+
     // --- Something moved, but it is not a toy ------------------------------
     const moved = perception.objects.find(
       (object) =>
@@ -689,6 +1050,166 @@ export class PetBrain {
   }
 
   /**
+   * Moving away from the cursor, if it has come too close and it is not welcome.
+   *
+   * The visible half of low affection, and the half that had to be got right or
+   * the whole idea reads as the creature being broken rather than sad. Three
+   * rules, all of them about *not* overdoing it:
+   *
+   *   it only happens when the hand is genuinely near — a creature that fled
+   *   the far side of the room would be frightened, which is a different thing
+   *
+   *   it walks, it does not bolt. `wander` rather than `scared`, so the gait,
+   *   the face and the mood line all stay ordinary
+   *
+   *   it has a cooldown, so a cursor left resting on the room does not produce
+   *   a creature endlessly backing into the corners
+   */
+  private avoidPointer(perception: Perception): PetBehavior | null {
+    const pointer = perception.pointer;
+    if (!pointer) return null;
+    if (this.affection > WARY && this.sulking <= 0) return null;
+    if (this.time < this.pointerAfter) return null;
+    if (perception.pet.held) return null;
+
+    const gap = planarDistance(perception.pet, pointer);
+    if (gap > PERSONAL_SPACE) return null;
+
+    // Directly away, and far enough that it is out of reach rather than merely
+    // further off. Clamped to the room, because a corner is still somewhere.
+    const dx = perception.pet.x - pointer.x;
+    const dz = perception.pet.z - pointer.z;
+    const length = Math.hypot(dx, dz) || 1;
+
+    this.walkTo(
+      clampTo(perception.pet.x + (dx / length) * RETREAT_DISTANCE, this.minX, this.maxX),
+      clampTo(perception.pet.z + (dz / length) * RETREAT_DISTANCE, this.minZ, this.maxZ),
+    );
+
+    this.focusId = null;
+    this.focusIsCritter = false;
+    this.pointerAfter = this.time + POINTER_COOLDOWN * 0.5;
+    this.setHold(2.2);
+    this.lastAmbient = 'wander';
+
+    return 'wander';
+  }
+
+  /**
+   * Going over to where your hand is, because it feels like it.
+   *
+   * The other half, and deliberately the *less* frequent one. It is gated on a
+   * cooldown, on the creature being in the mood, and on a coin flip on top of
+   * both — a pet that came to the cursor every time it was free would be a
+   * cursor-follower, and the point of affection is that it reads as a
+   * disposition rather than as a mechanic (§29, §44).
+   */
+  private approachPointer(perception: Perception): PetBehavior | null {
+    const pointer = perception.pointer;
+    if (!pointer) return null;
+    if (this.affection < FOND || this.sulking > 0) return null;
+    if (this.time < this.pointerAfter) return null;
+
+    // Already there. Sitting next to your hand is its own answer.
+    const gap = planarDistance(perception.pet, pointer);
+    if (gap < PLAY_RANGE * 0.7) return null;
+
+    // Fondness buys the odds, and nothing else does: at the top of the scale it
+    // is about even, at the threshold it is roughly one time in five.
+    const eagerness = (this.affection - FOND) / (1 - FOND);
+    if (this.random() > 0.2 + eagerness * 0.35) {
+      // Not this time — but do not ask again immediately, or "occasionally"
+      // becomes "on the next tick".
+      this.pointerAfter = this.time + POINTER_COOLDOWN * 0.4;
+      return null;
+    }
+
+    this.walkTo(
+      clampTo(pointer.x, this.minX, this.maxX),
+      clampTo(pointer.z, this.minZ, this.maxZ),
+    );
+
+    this.focusId = null;
+    this.focusIsCritter = false;
+    this.needs.curiosity = Math.max(0, this.needs.curiosity - 0.15);
+    this.pointerAfter = this.time + POINTER_COOLDOWN;
+    this.setHold(3 + this.random() * 2);
+    this.lastAmbient = 'wander';
+
+    return 'wander';
+  }
+
+  /**
+   * The thing in the room most worth going and doing something with, or null.
+   *
+   * The entire decision-making cost of the affordance system, and it is
+   * deliberately one function that knows nothing about any particular object:
+   *
+   *     score = appeal x appetite x supply / distance-ish
+   *
+   * `appetite` comes from the needs (see ./Affordances.ts), `appeal` and
+   * `supply` from the object. A scratching post with a high appeal is ignored
+   * by a contented creature; an empty bowl is ignored by a hungry one; a full
+   * bowl on the far side of the room loses to a nearer one. None of those
+   * three sentences required a branch.
+   */
+  private pickAffordance(
+    perception: Perception,
+    only?: AffordanceKind,
+  ): { object: PerceivedObject; affordance: PerceivedAffordance; score: number } | null {
+    // Mid-interaction: keep going with what it is already doing, even if the
+    // object has stopped offering it. Stopping dead when a bowl empties looks
+    // like a bug, not like finishing.
+    if (!only && this.behavior === 'use' && this.using && this.time < this.holdUntil) {
+      const object = perception.objects.find((item) => item.id === this.using?.id);
+      if (object) {
+        return { object, affordance: this.using.affordance, score: Infinity };
+      }
+    }
+
+    let best: {
+      object: PerceivedObject;
+      affordance: PerceivedAffordance;
+      score: number;
+    } | null = null;
+    let bestScore = USE_THRESHOLD;
+
+    for (const object of perception.objects) {
+      const affordance = object.affordance;
+      if (!affordance || !object.reachable) continue;
+      if (only && affordance.kind !== only) continue;
+      if (this.givenUpOn(object.id)) continue;
+
+      // The cooldown exists to stop *appetites* looping: a creature that has
+      // just eaten should not immediately want to eat again. A targeted
+      // lookup is not an appetite — it is the fear branch asking for a hole to
+      // hide in — and a creature frightened twice must be able to hide twice.
+      if (!only) {
+        const used = this.usedAt.get(object.id);
+        if (used !== undefined && this.time - used < USE_COOLDOWN) continue;
+      }
+
+      const appetite = appetiteFor(affordance.kind, this.needs);
+      if (appetite <= 0.01 || affordance.supply <= 0.05) continue;
+
+      // Distance costs, but only mildly: the room is twelve hundred units
+      // across, and a creature that would not cross it for its supper is not a
+      // creature, it is a fixture. The constant is deliberately larger than
+      // the room, so the far corner is a discount rather than a refusal.
+      const reach = planarDistance(perception.pet, object);
+      const score =
+        affordance.appeal * appetite * affordance.supply * (900 / (900 + reach));
+
+      if (score > bestScore) {
+        best = { object, affordance, score };
+        bestScore = score;
+      }
+    }
+
+    return best;
+  }
+
+  /**
    * The most interesting toy right now, or null for "I do not care".
    *
    * Two tiers, and the distinction is the whole personality of the thing. A
@@ -702,7 +1223,18 @@ export class PetBrain {
   private pickToy(
     perception: Perception,
   ): { object: PerceivedObject; stirred: boolean } | null {
-    if (this.needs.playfulness < 0.3) return null;
+    // Just been let down: it does not start games. Note *start* — this is the
+    // deliberate branch, the one where a creature decides to go and find
+    // something to play with. A ball actually thrown at it is the interrupt
+    // above (§33) and still lands, because a creature that ignored a ball
+    // bouncing off its head would be sulking *at* the user, which is precisely
+    // what the low end of this must never be.
+    if (this.sulking > 0) return null;
+
+    // Below that, fondness is a thumb on the scale rather than a gate. A
+    // neglected creature needs more of an excuse to start something; it never
+    // needs an impossible one.
+    if (this.needs.playfulness < 0.3 + (0.5 - this.affection) * 0.3) return null;
 
     const toys = perception.objects.filter(
       (object) => object.isToy && object.reachable && !this.givenUpOn(object.id),
@@ -831,11 +1363,18 @@ export class PetBrain {
     // because a creature that inspects the furniture only when the furniture
     // moves is not curious, it is startled. Going over to have a look at the
     // lamp for no reason is most of what makes the room feel occupied.
+    // Affection tilts the same four options rather than adding a fifth. A fond
+    // creature is *busier* — it wanders and investigates more, and sits less —
+    // and a wary one is quieter and keeps to itself. Neither ever loses an
+    // option entirely, because a creature that cannot potter is not sad, it is
+    // switched off.
+    const fondness = (this.affection - 0.5) * 2;
+
     const weights: [PetBehavior, number][] = [
       ['idle', 1],
-      ['wander', 0.3 + curiosity * 1.2 + energy * 0.6],
-      ['sit', 0.25 + (1 - energy) * 1.4],
-      ['investigate', 0.3 + curiosity * 1.0],
+      ['wander', Math.max(0.15, 0.3 + curiosity * 1.2 + energy * 0.6 + fondness * 0.5)],
+      ['sit', Math.max(0.15, 0.25 + (1 - energy) * 1.4 - fondness * 0.4)],
+      ['investigate', Math.max(0.12, 0.3 + curiosity * 1.0 + fondness * 0.4)],
     ];
 
     // Never do the same ambient thing twice in a row (§30).
@@ -955,17 +1494,48 @@ export class PetBrain {
     if (dizziness > 0.4) return { emotion: 'dizzy', strength: Math.min(1, dizziness) };
     if (anger > 0.4) return { emotion: 'anger', strength: Math.min(1, anger * 1.3) };
     if (behavior === 'sleep') return { emotion: 'sleepy', strength: 1 };
-    if (behavior === 'play' || behavior === 'chase') {
-      return { emotion: 'joy', strength: Math.min(1, 0.6 + joy * 0.5) };
+
+    // Just been let down. Above play, because a creature that had its feelings
+    // hurt and then grinned through a game of fetch did not have them hurt.
+    // `disappointed`, never `anger` — being let down is not being thrown.
+    if (this.sulking > 0) {
+      return { emotion: 'disappointed', strength: Math.min(1, 0.5 + this.sulking / SULK_SECONDS * 0.4) };
     }
+
+    if (behavior === 'play' || behavior === 'chase') {
+      // Doing the same thing with somebody it is devoted to looks different
+      // from doing it alone, and one emotion is the whole of the difference.
+      const emotion: Emotion = this.affection > 0.9 && joy > 0.5 ? 'love' : 'joy';
+      return { emotion, strength: Math.min(1, 0.6 + joy * 0.5) };
+    }
+
     if (joy > 0.55) return { emotion: 'joy', strength: (joy - 0.55) * 1.6 };
     if (energy < 0.3) return { emotion: 'sleepy', strength: (0.3 - energy) * 2 };
+
+    // The resting face of a neglected creature. Weak on purpose — it is a
+    // slight droop somebody notices after a moment, not a crying pet.
+    if (this.affection < WARY) {
+      return { emotion: 'sad', strength: Math.min(0.55, (WARY - this.affection) * 2) };
+    }
 
     return { emotion: 'neutral', strength: 1 };
   }
 
   private lookTarget(perception: Perception): { x: number; y: number; z: number } | null {
     if (this.behavior === 'sleep' || this.behavior === 'held') return null;
+
+    const pointer = perception.pointer;
+
+    // Turning away is the cheapest and clearest way to say "not just now", and
+    // it costs one look target rather than a pose: the gaze layer already leans
+    // the head and the body after it (`layers/Ambient.ts`).
+    if (pointer && this.sulking > 0) {
+      return {
+        x: perception.pet.x * 2 - pointer.x,
+        y: perception.pet.height + 20,
+        z: perception.pet.z * 2 - pointer.z,
+      };
+    }
 
     const focus =
       this.behavior === 'chase' || this.behavior === 'play'
@@ -978,7 +1548,15 @@ export class PetBrain {
             this.interests.some((item) => item.id === object.id),
           ));
 
-    if (!focus) return null;
+    if (!focus) {
+      // Nothing else going on, and it is fond of you: watch the hand. Only
+      // while it is actually moving about, because a creature staring at a
+      // parked cursor is not affectionate, it is unsettling.
+      if (pointer && this.affection >= FOND) {
+        return { x: pointer.x, y: 40, z: pointer.z };
+      }
+      return null;
+    }
 
     return { x: focus.x, y: focus.height + 20, z: focus.z };
   }
@@ -1034,6 +1612,23 @@ export class PetBrain {
   private stay(): void {
     this.moveTarget = null;
     this.moveTargetId = null;
+  }
+
+  /**
+   * Start using something — once.
+   *
+   * The guard is the whole point of this being a method. Both callers run
+   * every tick while the creature is standing at the object, and the first
+   * version set the hold on every one of them: each frame pushed the end of
+   * the interaction a full duration into the future, so the creature ate
+   * for ever. A behaviour that renews its own deadline never finishes.
+   */
+  private beginUsing(id: string, affordance: PerceivedAffordance): void {
+    if (this.behavior === 'use' && this.using?.id === id) return;
+
+    this.using = { id, affordance };
+    this.usedAt.set(id, this.time);
+    this.setHold(affordance.duration);
   }
 
   /** Has it recently failed to get to this? */
