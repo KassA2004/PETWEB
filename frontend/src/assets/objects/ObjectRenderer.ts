@@ -43,11 +43,9 @@ import { createHammock } from './furniture/Hammock';
 import { createTable } from './furniture/Table';
 import { createTunnel } from './furniture/Tunnel';
 import { createAquarium } from './decorations/Aquarium';
-import { createClock } from './decorations/Clock';
 import { createLamp } from './decorations/Lamp';
 import { createMusicBox } from './decorations/MusicBox';
 import { createPlant } from './decorations/Plant';
-import { createRug } from './decorations/Rug';
 import { createBowl } from './play/Bowl';
 import { createScratcher } from './play/Scratcher';
 import { createBall } from './toys/Ball';
@@ -122,8 +120,6 @@ const RENDERERS: Record<ObjectType, ObjectFactory> = {
   beanbag: createBeanbag,
   plant: createPlant,
   lamp: createLamp,
-  clock: createClock,
-  rug: createRug,
   aquarium: createAquarium,
   scratcher: createScratcher,
   bowl: createBowl,

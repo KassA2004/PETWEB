@@ -16,6 +16,7 @@ definition can be placed many times with different transforms.
 |---|--------|------|-------|-------------|
 | 1 | `GET` | `/environments` | `[MVP]` | List the user's environments |
 | 1b | `GET` | `/environments/current` | `[MVP]` | The room the creature is living in |
+| 1c | `GET` | `/environments/current/objects` | `[MVP]` | Placed objects, without knowing the room id first |
 | 2 | `POST` | `/environments` | `[LATER]` | Create an additional environment |
 | 3 | `GET` | `/environments/:environmentId` | `[MVP]` | Environment metadata |
 | 4 | `PATCH` | `/environments/:environmentId` | `[MVP]` | Rename and/or restyle |
@@ -32,10 +33,12 @@ definition can be placed many times with different transforms.
 The MVP ships **one environment per user** (`project-overview.md` §7), created during
 sign-up bootstrap. Endpoints 2 and 5 are specified but not built yet.
 
-**Implemented so far:** 1, 1b, 3, 4, 4b. Everything about *placed objects*
-(7–12) is still specified-only; objects currently live in the client's mock
-inventory. What is built is the half the room could not do without: remembering
-what it looks like.
+**Implemented so far:** 1, 1b, 1c, 3, 4, 4b, and the objects routes (§7, §13)
+listed under "Implemented: the objects in a room" below. Everything else about
+*placed objects* (8–12, the inventory-backed placement flow) is still
+specified-only; objects currently live in the client's own catalog rather than
+an inventory. What is built is the half the room could not do without:
+remembering what it looks like and what is standing in it.
 
 `/environments/current` exists because the MVP has one room per user and the
 client should not have to know its id to load it — the same reasoning behind
@@ -261,6 +264,7 @@ at a bootstrap detail they did not cause.
       { "id": "decor-painting-4-2", "kind": "painting", "col": 4, "row": 2 },
       { "id": "decor-shelf-8-1", "kind": "shelf", "col": 8, "row": 1 }
     ],
+    "removed": [],
     "lightsOn": true
   },
   "objectCount": 0,
@@ -287,6 +291,7 @@ Replace the room's appearance.
     "wall": "brick",
     "window": "dungeon",
     "decor": [{ "id": "d1", "kind": "hole", "col": 7, "row": 0 }],
+    "removed": ["prop-chair"],
     "lightsOn": false
   }
 }
@@ -310,9 +315,10 @@ separate from a rename: a rename must never be able to clobber a room.
 | Rule | |
 |---|---|
 | shape | a JSON object, not an array or a scalar |
-| fields | `ambience`, `floor`, `wall`, `window` (slugs), `tint` (24-bit int), `decor` (array), `lightsOn` (bool). Unknown fields are **dropped**, not rejected |
+| fields | `ambience`, `floor`, `wall`, `window` (slugs), `tint` (24-bit int), `decor` (array), `removed` (array of strings), `lightsOn` (bool). Unknown fields are **dropped**, not rejected |
 | slugs | 1–32 chars, `[A-Za-z0-9_-]` only |
 | decor | at most 12 items, each with a `kind` and numeric `col`/`row` |
+| removed | at most 64 ids, each a non-empty string of at most 64 characters — the ids of the environment's own starting furniture the user has deleted (see `room-and-objects.md` §7c). Deduplicated on the way in |
 | size | at most 4096 characters of JSON |
 
 It does **not** check that `wall` names a texture that exists. The renderer owns
@@ -369,3 +375,31 @@ number of rows.
 
 See `room-and-objects.md` §7b for the client half and for the four bugs that
 shaped it.
+
+---
+
+## 13. `GET /environments/current/objects` `[MVP]`
+
+What is standing in the room, resolved from the session instead of a path
+parameter — the same list `GET /environments/:environmentId/objects` returns,
+for whichever environment `GET /environments/current` would resolve to.
+
+Auth required. No parameters, no body.
+
+`200` → `PlacedObjectView[]`, identical shape to §7's response.
+
+**Why this exists:** without it, the client had to load `/environments/current`
+first to learn the environment id before it could ask for the objects in it —
+one full round trip of latency on the load path, behind everything else the
+dashboard needed. The server has always been able to resolve "the user's
+current room" from the session alone (`EnvironmentsService.current` already
+does this), so the id was never a real dependency; it was only a dependency
+because the *route* required it. This route lets the client fetch its
+furniture in parallel with `/pets`, `/environments/current`, `/goals` and
+`/focus` instead of one hop behind them
+(`Docs/plans/website-performance-optimization-plan.md`, Task 8).
+
+The id-bearing route (§7) is unchanged and still exists — the save path
+(`PUT /environments/:environmentId/objects`) still needs an id to write to,
+and `GET /environments/:environmentId/objects` is still the correct route for
+loading a *specific, already-known* room.

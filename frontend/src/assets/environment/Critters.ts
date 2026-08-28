@@ -15,7 +15,7 @@
  *
  * Each critter carries its own container so it sorts by z against the
  * furniture like everything else: a beetle at the front of the room passes in
- * front of the rug, a moth by the window passes behind the plant.
+ * front of the basket, a moth by the window passes behind the plant.
  */
 
 import { Container, Graphics } from 'pixi.js';

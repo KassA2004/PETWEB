@@ -42,6 +42,16 @@ const MAX_BYTES = 4096;
 /** Wall decorations, capped. A wall with forty things on it is a jumble sale. */
 const MAX_DECOR = 12;
 
+/**
+ * Environment props the user has taken out of the room, capped.
+ *
+ * A room cannot start with more furniture than this, so a longer list is a
+ * corrupt document rather than a thorough user
+ * (`frontend/src/world/RoomStyle.ts`'s `normalizeRemoved` enforces the same
+ * ceiling on the way back out).
+ */
+const MAX_REMOVED = 64;
+
 /** Every field a room style may carry, and how to read it. */
 const STRING_FIELDS = ['ambience', 'floor', 'wall', 'window'] as const;
 
@@ -114,6 +124,29 @@ function readDecor(value: unknown): JsonObject[] | undefined {
 }
 
 /**
+ * Ids of starting furniture the user has deleted.
+ *
+ * The one array-of-strings field in the document, rather than an array of
+ * objects like `decor` — an id is the whole of what a tombstone is.
+ */
+function readRemoved(value: unknown): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) throw new RoomStyleRejected('removed must be an array');
+  if (value.length > MAX_REMOVED) {
+    throw new RoomStyleRejected(`removed may hold at most ${MAX_REMOVED} items`);
+  }
+
+  const out: string[] = [];
+  for (const [index, entry] of value.entries()) {
+    if (typeof entry !== 'string' || entry.length === 0 || entry.length > 64) {
+      throw new RoomStyleRejected(`removed[${index}] must be a non-empty string of at most 64 characters`);
+    }
+    if (!out.includes(entry)) out.push(entry);
+  }
+  return out;
+}
+
+/**
  * Check an incoming room style and return the document to store.
  *
  * Unknown fields are dropped rather than rejected, which is what lets a newer
@@ -138,6 +171,9 @@ export function assertStorableRoomStyle(input: unknown): JsonObject {
 
   const decor = readDecor(input.decor);
   if (decor !== undefined) out.decor = decor;
+
+  const removed = readRemoved(input.removed);
+  if (removed !== undefined) out.removed = removed;
 
   if (input.lightsOn !== undefined) {
     if (typeof input.lightsOn !== 'boolean') {

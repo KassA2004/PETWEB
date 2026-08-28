@@ -106,7 +106,7 @@ import {
 } from '../world/FloorGrid';
 import type { Footprint, GridAnchor, GridPlacement } from '../world/FloorGrid';
 import { rowForBand } from '../world/FloorGrid';
-import { snapWall, wallCellKey, wallCells, wallQuadAt } from '../world/WallGrid';
+import { WALL_TOP_Y, snapWall, wallCellKey, wallCells, wallQuadAt } from '../world/WallGrid';
 import type { WallAnchor } from '../world/WallGrid';
 import { DEFAULT_ENVIRONMENT } from '../world/environments';
 import type { EnvironmentDefinition, PlacedProp } from '../world/environments';
@@ -123,7 +123,7 @@ import {
 import type { RoomStyle, WallDecorPlacement } from '../world/RoomStyle';
 import { getWallDecor } from '../assets/environment/walls/WallDecor';
 import type { WallDecorKind } from '../assets/environment/walls/WallDecor';
-import { depthTintOf, pickAt, sortKeyOf } from './room/BodyView';
+import { depthTintOf, overlaps, pickAt, screenRectOf, sortKeyOf } from './room/BodyView';
 import { createDepthGuide } from './room/DepthGuide';
 import { swipeImpulse } from './room/Swipe';
 import type { Blocker } from './room/Swipe';
@@ -177,6 +177,30 @@ const CLICK_DISTANCE = 10;
 
 /** Below this release speed, letting go is *placing* rather than throwing. */
 const PLACE_SPEED = 150;
+
+/**
+ * How high a carried thing has to be lifted before letting go throws it away.
+ *
+ * Above every row of hanging space, so it is unambiguously *out of the room*
+ * rather than merely high up a wall. Derived from the wall grid rather than
+ * typed as a number, so adding a row of hanging space cannot quietly put the
+ * discard zone underneath the top row of pictures.
+ *
+ * The height is what makes this safe: a placement on the floor is `lift: 0` by
+ * construction, so no amount of dragging toward a corner can reach it. An
+ * earlier version measured the pointer against the frame's screen edges
+ * instead, which is exactly what someone dragging a chair toward the front
+ * corner of the room does — and deleted the chair.
+ */
+const DISCARD_LIFT = WALL_TOP_Y;
+
+/**
+ * How visible a toy is when something is standing in front of it.
+ *
+ * Present rather than gone, dim rather than full strength — the visual
+ * language for "it is there, it is just behind that" (`occludedToys`).
+ */
+const GHOST_ALPHA = 0.45;
 
 /** How close a toy has to be, edge to edge, before it is worth pouncing on. */
 const POUNCE_RANGE = 120;
@@ -319,6 +343,8 @@ export interface PetRoomOptions {
   style?: Partial<RoomStyle>;
   /** A wall-decor drag was just committed; the caller owns saving `RoomStyle`. */
   onWallDecorChange?: (decor: WallDecorPlacement[]) => void;
+  /** A starting prop was taken out; the caller owns saving `RoomStyle`. */
+  onRemovedChange?: (removed: string[]) => void;
   /**
    * Something was set down, added or taken away.
    *
@@ -370,6 +396,7 @@ export class PetRoom {
   private onStatus?: (status: RoomStatus) => void;
   private onObjectRemoved?: (id: string) => void;
   private onWallDecorChange?: (decor: WallDecorPlacement[]) => void;
+  private onRemovedChange?: (removed: string[]) => void;
   private onArrangementChange?: () => void;
   private onSound?: (event: RoomSound) => void;
 
@@ -433,6 +460,13 @@ export class PetRoom {
     anchor: WallAnchor | null;
     /** Over the window, or something else that is not hanging space. */
     blocked: boolean;
+    /**
+     * Above every row of hanging space: the piece is being lifted off the
+     * wall rather than moved along it. Only meaningful for a piece that is
+     * already hung — dragging a new one off the top of the palette is simply
+     * a drag that never landed.
+     */
+    discarding: boolean;
   } | null = null;
   /** The environment's non-hanging cells, resolved once. */
   private wallReserved: ReadonlySet<string> | null = null;
@@ -470,6 +504,16 @@ export class PetRoom {
 
   /** Pointer drag state. */
   private grabbed: Entity | null = null;
+  /**
+   * A locked object under the pointer, waiting to see whether this is a tap.
+   *
+   * Separate from `grabbed` because a locked object is never in the physics
+   * manipulator's hands: there is nothing to release, nothing to settle and
+   * nothing to snap. Reusing `grabbed` would mean every branch of `pointerUp`
+   * having to ask whether this one was real.
+   */
+  private tapped: { entity: Entity; time: number; moved: number; x: number; y: number } | null =
+    null;
   /**
    * The carried thing, while it is over somewhere it may not be set down.
    *
@@ -551,6 +595,7 @@ export class PetRoom {
     this.fit = options.fit ?? 'cover';
     this.onStatus = options.onStatus;
     this.onWallDecorChange = options.onWallDecorChange;
+    this.onRemovedChange = options.onRemovedChange;
     this.onArrangementChange = options.onArrangementChange;
     this.onObjectRemoved = options.onObjectRemoved;
     this.onSound = options.onSound;
@@ -657,10 +702,18 @@ export class PetRoom {
   /** Build the current environment's scenery, props and wildlife. */
   private enterEnvironment(): void {
     const environment = this.environment;
-
     this.dress(false);
 
-    for (const prop of environment.props) this.addProp(prop);
+    // Anything the user has already thrown out of a previous session does not
+    // come back just because the environment was rebuilt. `removed` is the
+    // only thing that makes deleting a piece of the starting furniture stick
+    // — the saved arrangement omits it too, but "not in the arrangement" is
+    // also what an untouched piece of starting furniture looks like.
+    const removed = new Set(this.style.removed);
+    for (const prop of environment.props) {
+      if (removed.has(prop.id)) continue;
+      this.addProp(prop);
+    }
 
     // The room's own wildlife. Not physics bodies: they weigh nothing and are
     // never in the way. Each carries its own container so it sorts among the
@@ -825,10 +878,34 @@ export class PetRoom {
     // The light switch composes with the hour rather than being part of it, so
     // it is applied through its own path and never triggers a rebuild.
     const relit = merged.lightsOn !== this.style.lightsOn;
-    const redress = !sameRoomStyle({ ...this.style, lightsOn: merged.lightsOn }, merged);
+
+    // Neither the light switch nor the tombstone list is worth a full rebuild
+    // for: the light composes with the hour through its own path, and a
+    // `removed` change is handled below by pruning exactly the entities it
+    // names — cheaper than a redress, and a cross-fade for furniture the user
+    // never saw this session would be a rebuild with no visible reason.
+    // Without this exclusion, deleting a chair would set `removed` on the very
+    // style that is about to be compared, and the room would tear itself down
+    // and cross-fade back in every time.
+    const redress = !sameRoomStyle(
+      { ...this.style, lightsOn: merged.lightsOn, removed: merged.removed },
+      merged,
+    );
 
     this.style = merged;
     this.mood = resolveMood(merged);
+
+    // A removed id that still has a live entity means the room was furnished
+    // before this tombstone was known — the common case is the very first
+    // frame: the scene is built from whatever style the page had on hand
+    // (typically `DEFAULT_ROOM_STYLE`) while the real one is still in flight
+    // from the server, and this is where the fetched list catches up. Without
+    // it, the redress exclusion above would leave an already-deleted piece of
+    // starting furniture sitting in a freshly loaded room until something
+    // else happened to trigger a full `dress(true)`.
+    for (const id of merged.removed) {
+      if (this.entities.has(id)) this.removeEntity(id);
+    }
 
     if (relit) this.setLights(merged.lightsOn);
     if (redress) this.dress(true);
@@ -1248,12 +1325,54 @@ export class PetRoom {
    * the only way an exit animation can never gate a state change
    * (`Docs/audio-and-feedback.md` §7).
    */
+  /**
+   * The user threw something out.
+   *
+   * Two things happen that a silent sync (`setStyle`'s pruning, below) does
+   * not do: a sound, because this is a moment the user caused, and — for a
+   * piece of the starting furniture — a tombstone, so the environment does not
+   * simply furnish it again on the next load.
+   */
   private discardObject(entity: Entity): void {
-    const at = entity.body.position;
-    this.emitSound('prop-place', 0.55, at, entity.type as ObjectType);
+    this.emitSound('prop-place', 0.55, entity.body.position, entity.type as ObjectType);
+
+    const id = entity.id;
+
+    // Only the starting furniture needs a tombstone. Anything the user added
+    // exists solely as a saved row, so leaving it out of the arrangement is
+    // already enough — furnishing never puts it back because furnishing never
+    // knew about it.
+    const isStartingProp = this.environment.props.some((prop) => prop.id === id);
+
+    this.removeEntity(id);
+
+    if (isStartingProp && !this.style.removed.includes(id)) {
+      const removed = [...this.style.removed, id];
+      // Updated locally as well as reported upward: the scene's own
+      // `sameRoomStyle` checks (`setStyle`'s redress guard) must agree with
+      // this the moment it happens, not once the round trip through React and
+      // back has finished.
+      this.style = { ...this.style, removed };
+      this.onRemovedChange?.(removed);
+    }
+
+    this.arrangementChanged();
+  }
+
+  /**
+   * Take an entity out of the physics and fade its artwork away. No sound, no
+   * tombstone, no arrangement save — those are for whichever caller means
+   * something by the removal. `discardObject` is the interactive one;
+   * `setStyle` calls this silently to prune a starting prop that was already
+   * furnished before its tombstone was known (typically the first frame after
+   * load, when the scene is built from whatever style the page had on hand
+   * while the real one is still arriving from the server).
+   */
+  private removeEntity(id: string): void {
+    const entity = this.entities.get(id);
+    if (!entity) return;
 
     const view = entity.view;
-    const id = entity.id;
 
     // Out of the world first, so nothing can collide with a thing that is on
     // its way out and no save can catch it half-removed.
@@ -1279,7 +1398,6 @@ export class PetRoom {
     this.app.ticker.add(shrink);
 
     this.onObjectRemoved?.(id);
-    this.arrangementChanged();
   }
 
   removeObject(id: string): void {
@@ -1363,6 +1481,7 @@ export class PetRoom {
       // Whatever was in the user's hand is put down before the room locks, or
       // it stays welded to the pointer for the next hour.
       if (this.grabbed) this.pointerUp();
+      this.tapped = null;
       this.wallDragCancel();
     }
 
@@ -1384,6 +1503,7 @@ export class PetRoom {
   setEditing(on: boolean): void {
     if (this.editing === on) return;
     this.editing = on;
+    this.tapped = null;
 
     if (!on && this.discarding) this.setDiscarding(false);
     this.emitStatus();
@@ -1394,11 +1514,15 @@ export class PetRoom {
   }
 
   /**
-   * The carried thing is over the removal area, or has left it.
+   * The carried thing has been lifted high enough to throw away, or has come
+   * back down.
    *
-   * The page owns the frame and therefore owns the question "is the pointer
-   * outside it" — the scene is told, rather than guessing from a coordinate it
-   * would have to un-project first.
+   * Called from `pointerMove` with `carry.lift >= DISCARD_LIFT` — a fact about
+   * world-space height, not about the pointer's position on screen. The scene
+   * decides this itself now rather than being told by the page: the page would
+   * have had to measure its own DOM rect and guess at "outside", which is
+   * exactly the coordinate that turned "drag to the front corner" into "drag to
+   * delete".
    *
    * Says so on the object itself as well as in the interface around it: the
    * thing the user is looking at is the object in their hand, and a caption
@@ -1481,7 +1605,7 @@ export class PetRoom {
    *
    * The world is a box on a page, and the page is where most of the product
    * actually happens — a goal is finished in a panel, not in the room. A
-   * creature that carries on chewing the rug while the user finishes something
+   * creature that carries on gnawing a toy while the user finishes something
    * they have been working at for a fortnight is a creature that is not really
    * there.
    *
@@ -1580,6 +1704,16 @@ export class PetRoom {
     const entity = this.entities.get(body.id);
     if (!entity) return false;
 
+    // Outside edit mode, only the creature and its toys move — everything
+    // else is furniture, and furniture that shifts every time somebody means
+    // to throw a ball is a room nobody can leave arranged. A tap still lands:
+    // it just does not pick anything up (§ handleClick, the existing twitch).
+    const movable = this.editing || entity.id === 'pet' || entity.isToy;
+    if (!movable) {
+      this.tapped = { entity, time: performance.now(), moved: 0, x: point.x, y: point.y };
+      return true;
+    }
+
     this.grabbed = entity;
     this.grabStart = { time: performance.now(), moved: 0 };
     this.grabOrigin = { ...body.position };
@@ -1601,12 +1735,25 @@ export class PetRoom {
   }
 
   pointerMove(canvasX: number, canvasY: number): void {
+    if (this.tapped) {
+      const point = this.root.toLocal({ x: canvasX, y: canvasY });
+      this.tapped.moved += Math.abs(point.x - this.tapped.x) + Math.abs(point.y - this.tapped.y);
+      this.tapped.x = point.x;
+      this.tapped.y = point.y;
+      return;
+    }
+
     const entity = this.grabbed;
     if (!entity) return;
 
     const point = this.root.toLocal({ x: canvasX, y: canvasY });
     const carry = this.carryTarget(point.x, point.y);
     this.world.manipulator.moveTo(carry.x, carry.z, carry.lift);
+
+    // Lifted out of the room, not toward its edge. `setDiscarding` already
+    // refuses anything that is not editable furniture (the pet, a locked
+    // object) — this only ever has to say how high the carried thing is.
+    this.setDiscarding(carry.lift >= DISCARD_LIFT);
 
     const dx = point.x - this.pointer.x;
     const dy = point.y - this.pointer.y;
@@ -1665,6 +1812,17 @@ export class PetRoom {
   }
 
   pointerUp(): void {
+    if (this.tapped) {
+      const { entity, time, moved } = this.tapped;
+      this.tapped = null;
+      // The same tap test the drag path uses below, so "what counts as a
+      // click" has one answer in this file.
+      if (performance.now() - time < CLICK_MS && moved < CLICK_DISTANCE) {
+        this.handleClick(entity);
+      }
+      return;
+    }
+
     const entity = this.grabbed;
     if (!entity) return;
 
@@ -1729,12 +1887,13 @@ export class PetRoom {
    *
    * `acceptsPropsOn` is the whole rule, and it is a property of the type: a
    * tabletop or a shelf is a surface *for things*, so a plant pot may be put
-   * on the table. A lamp, a plant, a clock, a bed, a chair or a basket is not,
-   * so a prop set down over one is refused rather than balanced on it.
+   * on the table. A lamp, a plant, a bed, a chair or a basket is not, so a
+   * prop set down over one is refused rather than balanced on it.
    *
-   * Only objects with real height are asked about — a rug is a decal, not a
-   * surface, and blocking a placement over one would make the floor itself
-   * feel broken.
+   * Only objects with real height are asked about — a zero-height decal is not
+   * a surface, and blocking a placement over one would make the floor itself
+   * feel broken. Nothing in the catalog is one today; the check stays general
+   * rather than a special case for whichever object last was.
    */
   private cellBlocked(x: number, z: number, ignoreId: string): boolean {
     const holder = this.world.surfaceBodyAt(x, z, ignoreId);
@@ -1897,6 +2056,12 @@ export class PetRoom {
       y: 240,
       x: (Math.random() - 0.5) * 140,
     });
+
+    // Repeatedly prodding something is how you point at it. The brain already
+    // has a channel for "that thing is worth a look" — this is that channel,
+    // and the curiosity it adds accumulates across taps until the creature
+    // acts on it.
+    this.brain.noticeObject(entity.id, 0.25);
   }
 
   // --- Wall decor -------------------------------------------------------------
@@ -1955,7 +2120,13 @@ export class PetRoom {
   wallDragStart(kind: WallDecorKind, existingId?: string): void {
     if (this.focused) return;
 
-    this.wallDrag = { kind, existingId: existingId ?? null, anchor: null, blocked: false };
+    this.wallDrag = {
+      kind,
+      existingId: existingId ?? null,
+      anchor: null,
+      blocked: false,
+      discarding: false,
+    };
   }
 
   /** Point the drag at a canvas position; snaps to the wall grid as it goes. */
@@ -1969,9 +2140,22 @@ export class PetRoom {
     const snapped = snapWall(wall.x, wall.y, spec.footprint);
     drag.anchor = { col: snapped.col, row: snapped.row };
 
+    // Above every row of hanging space: the piece is being lifted off the wall
+    // to be thrown away, the wall's own answer to `PetRoom.DISCARD_LIFT` for
+    // the floor. Only a piece that is already hung can be discarded — a new
+    // one from the palette dragged off the top has simply not landed yet.
+    drag.discarding = drag.existingId !== null && wall.y > WALL_TOP_Y;
+
     const reserved = this.reservedWallCells();
+    const occupied = occupiedWallCells(this.style.decor, drag.existingId ?? undefined);
     const cells = wallCells(drag.anchor, snapped.footprint).map(wallCellKey);
-    drag.blocked = cells.some((key) => reserved.has(key));
+
+    // Occupied is a refusal now, not a takeover: dropping on a cell that
+    // already holds something used to resolve the clash by silently removing
+    // the other piece (`placeWallDecor`), which is the one wall interaction
+    // that had no undo. The floor already refuses a stack it cannot accept;
+    // this is the same rule for the wall.
+    drag.blocked = cells.some((key) => reserved.has(key) || occupied.has(key));
 
     const wallColor = graded(this.mood.tint, this.mood.ambience);
 
@@ -1981,14 +2165,15 @@ export class PetRoom {
       kind: drag.kind,
       seed: this.wallDragSeed(drag.kind, drag.existingId),
       palette: { wall: wallColor, tint: this.style.tint, accent: PALETTE.punch },
-      // The pieces this one would take down are shown as taken rather than
-      // hidden: the drop resolves the clash by removing them (`placeWallDecor`),
-      // and that is easier to accept when you could see it coming.
-      occupied: new Set(
-        occupiedWallCells(this.style.decor, drag.existingId ?? undefined).keys(),
-      ),
+      // Shown as taken, so the refusal is never a surprise: the same set
+      // decides both the shading here and `blocked` above, so the two can
+      // never disagree.
+      occupied: new Set(occupied.keys()),
       reserved,
-      blocked: drag.blocked,
+      // Discarding reuses the exact same red as a blocked drop — it is a
+      // refusal to hang here, for a different reason, and the user should not
+      // have to learn a second colour for it.
+      blocked: drag.blocked || drag.discarding,
     });
   }
 
@@ -1997,9 +2182,19 @@ export class PetRoom {
     const drag = this.wallDrag;
     this.wallDrag = null;
     this.wallGuide.update(null);
-    // Never landed on the wall at all, or landed on the window: either way
-    // nothing changes, which is what the red said would happen.
-    if (!drag || !drag.anchor || drag.blocked) return;
+    if (!drag) return;
+
+    if (drag.discarding && drag.existingId) {
+      const next = this.style.decor.filter((item) => item.id !== drag.existingId);
+      this.emitSound('prop-place', 0.5, { x: ROOM_WIDTH / 2, z: 0 });
+      this.onWallDecorChange?.(next);
+      return;
+    }
+
+    // Never landed on the wall at all, or landed on the window or something
+    // already hanging: either way nothing changes, which is what the red said
+    // would happen.
+    if (!drag.anchor || drag.blocked) return;
 
     const next = placeWallDecor(
       this.style.decor,
@@ -2032,8 +2227,8 @@ export class PetRoom {
     const { impacts, walls, ground } = this.world.step(dt);
     const petBody = this.petEntity.body;
 
-    // Objects that move on their own: the clock's hands and pendulum, the
-    // plant's sway, the lamp's flicker. Some of them have things to say.
+    // Objects that move on their own: the plant's sway, the lamp's flicker.
+    // Some of them have things to say.
     const life = { time: this.time, lightsOn: this.lit, now: new Date() };
 
     for (const entity of this.entities.values()) {
@@ -2245,9 +2440,10 @@ export class PetRoom {
     this.animation.update(dt * 1000);
     this.updateDressing(dt);
 
+    const ghosts = this.occludedToys();
     for (const entity of this.entities.values()) {
       entity.motion.update(dt, entity.body);
-      this.syncEntity(entity);
+      this.syncEntity(entity, ghosts);
     }
 
     this.updateGuide(dt);
@@ -2453,7 +2649,16 @@ export class PetRoom {
     return body.collider.shape === 'cylinder' ? body.collider.radius : body.collider.halfX;
   }
 
-  /** Something in the room announced itself — currently, the clock striking. */
+  /**
+   * Something in the room announced itself, via `ObjectLife.drain()`.
+   *
+   * `'chime'` was the clock striking the hour. The clock hangs on the wall
+   * grid now (`WallDecor.ts`'s `clock` entry) rather than living as an entity
+   * in `this.entities`, so it is never ticked here and this branch is
+   * currently unreachable — left in place, rather than removed, because the
+   * dispatch itself is generic and a future object type is free to raise
+   * `'chime'` (or any other name a life wants to drain) and land here.
+   */
   private onObjectEvent(entity: Entity, event: string): void {
     if (event !== 'chime') return;
 
@@ -2974,7 +3179,49 @@ export class PetRoom {
    * *where* on screen the thing stands, *how big* it is drawn, *how pale* it
    * is, and *when* it is drawn relative to everything else.
    */
-  private syncEntity(entity: Entity): void {
+  /**
+   * Toys the furniture is standing in front of, and what they have to be
+   * drawn above to still be seen.
+   *
+   * A ball that has rolled behind the bed is sorted correctly by `sortKeyOf`
+   * and is therefore invisible, which is correct perspective and a bad game:
+   * the one thing a user wants from a toy is to know where it is. So an
+   * occluded toy is drawn *over* whatever is covering it, dimmed to
+   * `GHOST_ALPHA` — present, clearly behind, findable.
+   *
+   * Only toys, and only against things genuinely in front of them on screen,
+   * so the cost is a handful of rectangle tests a frame rather than a second
+   * full sort of the room.
+   */
+  private occludedToys(): Map<string, number> {
+    const ghosts = new Map<string, number>();
+
+    for (const toy of this.entities.values()) {
+      if (!toy.isToy || toy.body.held) continue;
+
+      const toyKey = sortKeyOf(toy.body, null);
+      const toyRect = screenRectOf(toy.body);
+      let cover = -Infinity;
+
+      for (const other of this.entities.values()) {
+        if (other === toy || other.id === 'pet') continue;
+        // Decals and wall decor are not "in front of" anything.
+        if (other.body.collider.height <= 0 || other.body.anchored) continue;
+
+        const otherKey = sortKeyOf(other.body, null);
+        if (otherKey <= toyKey) continue;
+        if (!overlaps(toyRect, screenRectOf(other.body))) continue;
+
+        cover = Math.max(cover, otherKey);
+      }
+
+      if (cover > -Infinity) ghosts.set(toy.id, cover);
+    }
+
+    return ghosts;
+  }
+
+  private syncEntity(entity: Entity, ghosts?: ReadonlyMap<string, number>): void {
     const { body, view, art, shadow } = entity;
 
     const scale = scaleAt(body.position.z);
@@ -3002,6 +3249,19 @@ export class PetRoom {
 
     const holder = body.support?.id ? (this.world.get(body.support.id) ?? null) : null;
     view.zIndex = sortKeyOf(body, holder);
+
+    // A toy the furniture is standing in front of is sorted correctly and
+    // therefore invisible, which is correct perspective and a bad game: the
+    // one thing worth knowing about a toy is where it is. Drawn above its
+    // occluder instead, and dimmed, so it still reads as *behind* the thing
+    // covering it rather than as misplaced.
+    const ghost = ghosts?.get(entity.id);
+    if (ghost !== undefined) {
+      view.zIndex = ghost + 0.25;
+      view.alpha = GHOST_ALPHA;
+    } else if (view.alpha !== 1) {
+      view.alpha = 1;
+    }
 
     // Artwork is anchored at the floor contact point, so lifting it is just
     // its height.

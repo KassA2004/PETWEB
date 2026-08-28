@@ -42,6 +42,21 @@ export class EnvironmentsController {
     return this.environments.current(user.id);
   }
 
+  /**
+   * What is standing in the room, without having to know which room it is.
+   *
+   * The same list as `GET /environments/:id/objects`, resolved from the session
+   * instead of from a path parameter, so the client can ask for its furniture in
+   * parallel with everything else rather than one round trip behind the room.
+   */
+  @Get('current/objects')
+  async listCurrentObjects(
+    @CurrentUser() user: SessionUser,
+  ): Promise<PlacedObjectView[]> {
+    const environmentId = await this.environments.currentId(user.id);
+    return this.objects.list(user.id, environmentId);
+  }
+
   @Get(':environmentId')
   findOne(
     @CurrentUser() user: SessionUser,

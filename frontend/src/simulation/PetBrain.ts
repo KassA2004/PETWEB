@@ -1459,9 +1459,17 @@ export class PetBrain {
 
     if (candidates.length === 0) return null;
 
+    // Something the user has been prodding outranks whatever happens to be
+    // nearest. `interests` is the same list `noticeObject` writes to, so the
+    // preference costs no new state and expires on the same timer.
+    const interested = candidates.filter((object) =>
+      this.interests.some((item) => item.id === object.id),
+    );
+    const pool = interested.length > 0 ? interested : candidates;
+
     // Nearer things are likelier, but nothing is impossible: a creature that
     // always visited the closest object would wear a groove in the floor.
-    const weighted = candidates.map((object) => ({
+    const weighted = pool.map((object) => ({
       object,
       weight: 1 / (120 + planarDistance(perception.pet, object)),
     }));

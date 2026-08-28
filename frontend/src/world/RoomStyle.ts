@@ -77,6 +77,19 @@ export interface RoomStyle {
   decor: WallDecorPlacement[];
   /** Whether anybody left a light on. */
   lightsOn: boolean;
+  /**
+   * Environment props the user has taken out of the room.
+   *
+   * The room's starting furniture is furnished by the environment definition
+   * on every load (`Farmhouse.props`), so "not in the saved arrangement"
+   * cannot mean "deleted" — it also means "never moved". This is the
+   * difference, and it is the only thing that makes deleting a piece of the
+   * starting furniture stick.
+   *
+   * Ids, not indices. They come from `PlacedProp.id` (`prop-bookshelf`, …),
+   * which is stable across loads because it is derived from the type.
+   */
+  removed: string[];
 }
 
 /**
@@ -92,14 +105,18 @@ export const DEFAULT_ROOM_STYLE: RoomStyle = {
   floor: 'boards',
   wall: 'plaster',
   window: DEFAULT_WINDOW_VIEW,
-  // Clear of the window (wall cells 1-2) and of the clock (cell 6), which is
-  // the sort of thing that has to be checked by hand exactly once because the
-  // grid then keeps it true.
+  // Clear of the window (wall cells 1-2) and of each other, which is the sort
+  // of thing that has to be checked by hand exactly once because the grid
+  // then keeps it true. The clock hangs here now rather than living as a
+  // fixed-position physics prop (see `world/environments/Farmhouse.ts`) — it
+  // is ordinary decor, at the same cell it always occupied.
   decor: [
     { id: 'decor-painting', kind: 'painting', col: 4, row: 2 },
     { id: 'decor-shelf', kind: 'shelf', col: 8, row: 1 },
+    { id: 'decor-clock', kind: 'clock', col: 6, row: 1 },
   ],
   lightsOn: true,
+  removed: [],
 };
 
 /* -------------------------------------------------------------------------- */
@@ -163,6 +180,21 @@ function normalizeDecor(value: unknown): WallDecorPlacement[] {
   return out;
 }
 
+function normalizeRemoved(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+
+  const out: string[] = [];
+  for (const entry of value) {
+    if (typeof entry !== 'string' || entry.length === 0 || entry.length > 64) continue;
+    if (out.includes(entry)) continue;
+    out.push(entry);
+    // A room cannot have more starting furniture than this, so a longer list
+    // is a corrupt document rather than a thorough user.
+    if (out.length >= 64) break;
+  }
+  return out;
+}
+
 /**
  * Turn whatever the database handed back into a room that will render.
  *
@@ -181,6 +213,7 @@ export function normalizeRoomStyle(value: unknown): RoomStyle {
     window: pick(record.window, WINDOW_VIEWS, DEFAULT_WINDOW_VIEW),
     decor: normalizeDecor(record.decor),
     lightsOn: typeof record.lightsOn === 'boolean' ? record.lightsOn : true,
+    removed: normalizeRemoved(record.removed),
   };
 }
 
@@ -279,7 +312,9 @@ export function sameRoomStyle(a: RoomStyle, b: RoomStyle): boolean {
         item.col === other.col &&
         item.row === other.row
       );
-    })
+    }) &&
+    a.removed.length === b.removed.length &&
+    a.removed.every((id, index) => id === b.removed[index])
   );
 }
 

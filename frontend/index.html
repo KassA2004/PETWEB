@@ -4,7 +4,15 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>frontend</title>
+    <!--
+      The API is a different origin, and `get-session` is the request the whole
+      dashboard waits behind. Opening the connection while the entry chunk is still
+      parsing takes DNS, TCP and TLS off that critical path.
+      Update this host if VITE_API_URL changes.
+    -->
+    <link rel="preconnect" href="http://localhost:3000" crossorigin />
+    <title>Digital Pet World</title>
+    <meta name="description" content="A small creature lives here. Be nice to it." />
   </head>
   <body>
     <div id="root"></div>

@@ -1,11 +1,13 @@
+import 'dotenv/config';
 import 'reflect-metadata';
 import { RequestMethod, ValidationPipe, VersioningType } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { toNodeHandler } from 'better-auth/node';
+import compression from 'compression';
 import express from 'express';
 import { AppModule } from './app.module';
-import { auth } from './auth/auth';
+import { auth, getCorsOrigins } from './auth/auth';
 import { HttpExceptionFilter } from './common/http-exception.filter';
 import { MEDIA_URL_PREFIX, uploadRoot } from './media/media-paths';
 import { toValidationDetails, ValidationFailedException } from './common/validation.exception';
@@ -26,9 +28,29 @@ async function bootstrap(): Promise<void> {
   // exactly what happened here the first time (the browser saw no
   // Access-Control-Allow-Origin header on any auth response).
   app.enableCors({
-    origin: process.env.FRONTEND_URL ?? 'http://localhost:5173',
+    origin: getCorsOrigins(),
     credentials: true,
   });
+
+  // Gzip on the way out. Registered here, before the raw Better Auth mount,
+  // for the same reason CORS is: Express runs middleware in registration
+  // order, and anything added after that mount never runs for /api/auth/*.
+  //
+  // JSON is the only thing this application sends in bulk and it compresses
+  // very well. Uploaded images are already compressed formats, and the
+  // `filter` below leaves them alone rather than spending CPU to make them
+  // very slightly larger.
+  app.use(
+    compression({
+      filter: (req, res) => {
+        const type = res.getHeader('Content-Type');
+        if (typeof type === 'string' && /^(image|video|audio)\//.test(type)) {
+          return false;
+        }
+        return compression.filter(req, res);
+      },
+    }),
+  );
 
   const expressApp = app.getHttpAdapter().getInstance();
 

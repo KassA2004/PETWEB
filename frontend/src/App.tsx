@@ -1,5 +1,4 @@
 import { AuthGate } from './features/auth/AuthGate';
-import { Dashboard } from './features/dashboard/Dashboard';
 
 /**
  * The app is a page with a creature living in it.
@@ -9,11 +8,7 @@ import { Dashboard } from './features/dashboard/Dashboard';
  * interface (/Docs/project-overview.md §10).
  */
 function App() {
-  return (
-    <AuthGate>
-      <Dashboard />
-    </AuthGate>
-  );
+  return <AuthGate />;
 }
 
 export default App;

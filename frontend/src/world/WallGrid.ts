@@ -9,7 +9,8 @@
  * So the back wall gets the same treatment the floor got, and it inherits the
  * floor's columns exactly:
  *
- *      wall row 2   ┌───┬───┬───┬───┬───┐
+ *      wall row 3   ┌───┬───┬───┬───┬───┐
+ *      wall row 2   ├───┼───┼───┼───┼───┤
  *      wall row 1   ├───┼───┼───┼───┼───┤
  *      wall row 0   ├───┼───┼───┼───┼───┤
  *                   └───┴───┴───┴───┴───┘
@@ -35,8 +36,17 @@ import type { ScreenPoint } from './Projection';
 /** Wall columns are floor columns. That is the entire point of them. */
 export const WALL_COLUMNS = GRID_COLUMNS;
 
-/** How many rows of hanging space there are. */
-export const WALL_ROWS = 3;
+/**
+ * How many rows of hanging space there are.
+ *
+ * Measured against the projection, not chosen freely: at 3 rows the top of the
+ * grid sits at screen y=125 in the 720-tall room image, at 4 rows it is at
+ * y=62, and at 5 rows it is at y=0 — the very top edge of the image, with no
+ * margin left for a piece like `vines` or `bunting` whose art overflows its
+ * own cell. 4 is as far as this room can go before the ceiling and the grid
+ * collide.
+ */
+export const WALL_ROWS = 4;
 
 /**
  * How far up the wall the bottom row starts, in world units.

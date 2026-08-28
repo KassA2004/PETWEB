@@ -23,17 +23,31 @@
  * on to thousands of base64 images.
  */
 
-import { Application, Container } from 'pixi.js';
+// Aliased: this module exports its own plain-data `Rectangle` (below), which is
+// deliberately not Pixi's class — callers describe a region without constructing
+// scene-graph types.
+import { Application, Container, Rectangle as PixiRectangle } from 'pixi.js';
 
 /** How much of the frame the subject fills, leaving a margin around it. */
 const DEFAULT_FILL = 0.86;
+
+/**
+ * Pixel density of every extracted preview.
+ *
+ * Load-bearing, and it is the reason tiles are sharp. `extract` defaults to the
+ * renderer's own resolution, which is fine — but the resolution has to be part
+ * of the cache key as well, or a display change would serve a tile drawn for
+ * the other density forever.
+ */
+const RESOLUTION = Math.min(typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1, 2);
 
 /**
  * Cap on the cache.
  *
  * Generous, because the customizer legitimately has a few hundred distinct
  * previews across its categories and thrashing them would defeat the point.
- * Each entry is a small PNG; a few hundred is a couple of megabytes.
+ * Each entry is a PNG of `size × RESOLUTION` square — on a 2× display a full
+ * cache of 76px tiles is roughly four megabytes.
  */
 const CACHE_LIMIT = 400;
 
@@ -51,7 +65,7 @@ async function getApp(): Promise<Application> {
         height: 256,
         backgroundAlpha: 0,
         antialias: true,
-        resolution: Math.min(window.devicePixelRatio, 2),
+        resolution: RESOLUTION,
         autoDensity: false,
         // Nothing here animates; rendering happens on demand.
         autoStart: false,
@@ -139,7 +153,7 @@ export async function renderPreview(
 ): Promise<string> {
   const size = options.size ?? 96;
   const fill = options.fill ?? DEFAULT_FILL;
-  const full = `${size}:${key}`;
+  const full = `${size}@${RESOLUTION}:${key}`;
 
   const hit = cache.get(full);
   if (hit) return hit;
@@ -149,7 +163,6 @@ export async function renderPreview(
 
   const work = (async () => {
     const app = await getApp();
-    app.renderer.resize(size, size);
 
     const stage = new Container();
     const subject = build();
@@ -173,17 +186,39 @@ export async function renderPreview(
 
     app.stage.removeChildren();
     app.stage.addChild(stage);
-    app.render();
 
-    const url = await app.renderer.extract.base64(app.stage);
+    /*
+     * Extracted through an explicit frame, and that is the whole ballgame.
+     *
+     * `extract.base64(container)` re-renders the container into a *new* texture
+     * sized to its own content bounds — it does not read back the framebuffer
+     * the lines above so carefully composed. Called that way, the framing
+     * rectangle survives only as a scale factor: the crop never happens, the
+     * requested `size` is ignored, and the PNG comes out at whatever the
+     * subject happens to occupy. Measured, before this: a 100×200 subject asked
+     * for at 76px returned 32×65, and a 50×50 focus window on a 400×400 subject
+     * returned 522×522 — the whole subject, scaled *up*, with nothing cropped.
+     *
+     * Naming the frame is what makes the output the square that was asked for,
+     * at the density the display needs, with everything outside it cut away.
+     */
+    const url = await app.renderer.extract.base64({
+      target: app.stage,
+      frame: new PixiRectangle(0, 0, size, size),
+      resolution: RESOLUTION,
+    });
 
     app.stage.removeChildren();
     stage.destroy({ children: true });
 
     remember(full, url);
-    pending.delete(full);
     return url;
-  })();
+  })().finally(() => {
+    // Cleared however this settled. Left behind on a rejection, the failed
+    // promise would be handed to every future caller of this key forever —
+    // one transient failure permanently blanking a tile.
+    pending.delete(full);
+  });
 
   pending.set(full, work);
   return work;

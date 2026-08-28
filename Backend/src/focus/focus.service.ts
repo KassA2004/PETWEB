@@ -55,7 +55,12 @@ export interface FocusStateView {
 
 const MINUTE_MS = 60 * 1000;
 
-function deadlineOf(session: FocusSession): Date {
+/**
+ * Widened to the two fields it actually reads, rather than the full
+ * `FocusSession`, so `activeGoalId` below can call it against a narrow
+ * `select` instead of duplicating this arithmetic.
+ */
+function deadlineOf(session: Pick<FocusSession, 'startedAt' | 'durationMinutes'>): Date {
   return new Date(session.startedAt.getTime() + session.durationMinutes * MINUTE_MS);
 }
 
@@ -330,10 +335,27 @@ export class FocusService {
    * deleted. Not a courtesy: a goal deleted out from under a running session
    * leaves the room dark with nothing in the slot, and the user with no way to
    * turn the lights back on except by waiting.
+   *
+   * Deliberately does not go through `current()`. That method builds the room's
+   * whole picture — including an affection read that can write back a settled
+   * value — and the only caller of this one wants a goal id. A session whose time
+   * ran out is *not* active, which is the same answer `current()` gives, reached
+   * without touching the user row.
    */
   async activeGoalId(ownerId: string, now = new Date()): Promise<string | null> {
-    const state = await this.current(ownerId, now);
-    return state.active?.goalId ?? null;
+    const running = await this.prisma.focusSession.findFirst({
+      where: { ownerId, status: 'active' },
+      orderBy: { startedAt: 'desc' },
+      select: { goalId: true, startedAt: true, durationMinutes: true },
+    });
+
+    if (!running) return null;
+
+    // Expired but not yet sealed: `current()` will seal it on the next read. It
+    // is not blocking anything in the meantime.
+    if (deadlineOf(running).getTime() <= now.getTime()) return null;
+
+    return running.goalId;
   }
 
   /**

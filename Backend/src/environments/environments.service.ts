@@ -94,6 +94,34 @@ export class EnvironmentsService {
     return toView(await this.owned(ownerId, environmentId));
   }
 
+  /**
+   * The id of the room the user is living in, and nothing else.
+   *
+   * Exists so `GET /environments/current/objects` can answer without the client
+   * first fetching the room to learn its id — that round trip was the last hop of
+   * a three-deep waterfall, and the dependency was never real: the server has
+   * always been able to resolve "the current room" from the owner alone.
+   *
+   * Creates one if the account somehow has none, for the same reason `current()`
+   * does: an account without a room cannot render anything.
+   */
+  async currentId(ownerId: string): Promise<string> {
+    const existing = await this.prisma.environment.findFirst({
+      where: { ownerId },
+      orderBy: { name: 'asc' },
+      select: { id: true },
+    });
+
+    if (existing) return existing.id;
+
+    const created = await this.prisma.environment.create({
+      data: { ownerId, name: 'Room' },
+      select: { id: true },
+    });
+
+    return created.id;
+  }
+
   /** Rename a room, change what it looks like, or both. */
   async update(
     ownerId: string,

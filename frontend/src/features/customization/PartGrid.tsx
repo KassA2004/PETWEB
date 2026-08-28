@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import { OptionGrid } from '../../components/ui/option-grid';
 import type { GridOption } from '../../components/ui/option-grid';
 import type { PetAppearance } from '../../assets/pets/customization/PetAppearance';
-import { renderOptionPreview } from './previews';
+import { PREVIEW_BASE, renderOptionPreview } from './previews';
 import type { PreviewFocus } from './previews';
 
 /**
@@ -34,8 +34,6 @@ interface PartGridProps<T extends string> {
   focus: PreviewFocus;
   value: T;
   onChange: (value: T) => void;
-  /** The creature the options are previewed on. */
-  appearance: PetAppearance;
   columns?: number;
   rows?: number;
 }
@@ -48,18 +46,20 @@ export function PartGrid<T extends string>({
   focus,
   value,
   onChange,
-  appearance,
   columns,
   rows,
 }: PartGridProps<T>) {
   /**
-   * Rebuilt when the creature changes, and only then.
+   * Never rebuilt, because nothing it depends on moves.
    *
-   * Every option previews on the *current* appearance, so dragging the body
-   * width slider legitimately redraws all forty tiles — but a new closure per
-   * render with an unchanged appearance would re-run each tile's effect for
-   * nothing. `lib/preview` caches on the far side, so the cost of getting this
-   * wrong is small; it is still worth getting right.
+   * Previews are drawn on `PREVIEW_BASE`, a module constant, so editing the
+   * creature cannot invalidate a tile's cache key. Two rules keep this true and
+   * both are load-bearing: `keys` and `table` must be stable references from
+   * the call site (a table built inline inside a `.map` is a new object every
+   * render and this memo never holds), and `patch` must be a pure function of
+   * `key` alone. Fold live state into `patch` and every tile in the grid
+   * rebuilds its rig on every keystroke — measured at 15 rig rebuilds per step
+   * of the accessory size slider, which is what this shape replaced.
    */
   const options = useMemo<GridOption<T>[]>(
     () =>
@@ -67,12 +67,12 @@ export function PartGrid<T extends string>({
         value: key,
         label: table[key].label,
         hint: table[key].hint,
-        preview: () => renderOptionPreview(appearance, patch(key), focus),
+        preview: () => renderOptionPreview(PREVIEW_BASE, patch(key), focus, undefined, key),
       })),
     // `patch` is defined inline by every call site and would defeat the memo;
-    // it is a pure function of `key`, so the appearance is the real dependency.
+    // it is a pure function of `key`, so it is deliberately not a dependency.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [keys, table, focus, appearance],
+    [keys, table, focus],
   );
 
   return (

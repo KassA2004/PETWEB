@@ -32,7 +32,7 @@ export interface CharacterOptions {
   /**
    * How tall a ledge the creature simply steps onto.
    *
-   * Without it a rug edge or a dropped pillow is a wall, and the creature
+   * Without it a dropped pillow or a low toy is a wall, and the creature
    * spends its afternoon shuffling against a cushion.
    */
   stepHeight?: number;

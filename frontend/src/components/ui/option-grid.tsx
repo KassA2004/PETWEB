@@ -2,6 +2,7 @@ import * as React from 'react';
 import { sfx } from '../../lib/audio';
 import { cn, paginate } from '../../lib/utils';
 import { Carousel } from './carousel';
+import { Skeleton } from './skeleton';
 
 /**
  * A grid of things you can see.
@@ -219,7 +220,7 @@ function Thumbnail<T extends string>({ option }: { option: GridOption<T> }) {
           className="animate-fade-in h-full w-full object-contain transition-transform duration-200 group-hover:scale-105"
         />
       ) : (
-        <span className="size-full animate-pulse rounded-lg bg-muted/60" />
+        <Skeleton className="size-full rounded-lg" />
       )}
     </span>
   );

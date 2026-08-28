@@ -73,6 +73,18 @@ export function fetchRoomObjects(
 }
 
 /**
+ * The furniture, without knowing which room it is in.
+ *
+ * Lets the arrangement load in parallel with `/environments/current` instead of
+ * waiting on it for an id the server can resolve itself.
+ */
+export function fetchCurrentRoomObjects(
+  signal?: AbortSignal,
+): Promise<PlacedObject[]> {
+  return apiRequest<PlacedObject[]>('/environments/current/objects', { signal });
+}
+
+/**
  * Save the arrangement.
  *
  * PUT and whole-list, for the same reason the style is: the scene always holds

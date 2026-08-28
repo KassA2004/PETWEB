@@ -4,6 +4,8 @@ import { imageSrc } from '../media/api';
 import { cn } from '../../lib/utils';
 import { deleteMemory, fetchMemories } from './api';
 import type { Memory } from './api';
+import { Skeleton } from '../../components/ui/skeleton';
+import { useDelayedVisible } from '../../lib/useDelayedVisible';
 
 /**
  * The memory book.
@@ -81,15 +83,28 @@ export function MemoriesPanel({ refreshToken }: MemoriesPanelProps) {
     }
   }, []);
 
-  if (loading) {
+  const showSkeleton = useDelayedVisible(loading, { delay: 150, minVisible: 400 });
+
+  if (showSkeleton) {
     return (
-      <div className="space-y-2" aria-busy="true">
+      <div className="space-y-3" aria-busy="true">
+        <p role="status" className="sr-only">
+          Loading your memories…
+        </p>
         {[0, 1, 2].map((row) => (
-          <div key={row} className="h-20 animate-pulse rounded-xl bg-muted/60" />
+          <div key={row} className="overflow-hidden rounded-xl border border-border bg-card">
+            <Skeleton className="h-48 w-full rounded-none" />
+            <div className="space-y-1.5 p-3">
+              <Skeleton className="h-3 w-2/3" />
+              <Skeleton className="h-3 w-1/3" />
+            </div>
+          </div>
         ))}
       </div>
     );
   }
+
+  if (loading) return null;
 
   if (error && memories.length === 0) {
     return (
@@ -128,12 +143,15 @@ export function MemoriesPanel({ refreshToken }: MemoriesPanelProps) {
             )}
           >
             {memory.imageUrl && (
-              <img
-                src={imageSrc(memory.imageUrl)}
-                alt=""
-                loading="lazy"
-                className="max-h-48 w-full object-cover"
-              />
+              <div className="h-48 w-full overflow-hidden bg-muted">
+                <img
+                  src={imageSrc(memory.imageUrl)}
+                  alt=""
+                  loading="lazy"
+                  decoding="async"
+                  className="h-full w-full object-cover"
+                />
+              </div>
             )}
 
             <div className="flex items-start gap-3 p-3">

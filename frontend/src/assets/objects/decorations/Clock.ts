@@ -1,20 +1,30 @@
 /**
- * Clock — a farmhouse pendulum clock, hung on the wall, telling the real time.
+ * Clock — a farmhouse pendulum clock, telling the real time.
  *
- * It is the one object in the room that is not decoration. The hands read the
- * user's actual clock, so glancing at the creature's room tells you something
- * true about your own afternoon, and the room's light and the room's hour stay
- * honest with each other.
+ * The hands read the user's actual clock, so glancing at the creature's room
+ * tells you something true about your own afternoon.
  *
- * Three moving parts, all procedural:
+ * Three moving parts, all procedural — and all written for a caller that ticks
+ * this every frame:
  *
  *   hands       hour and minute drift, the second hand ticks and overshoots
  *   pendulum    a steady 1.4s swing, the room's heartbeat
  *   strike      on the hour the case rocks and the room is told about it,
  *               which is how the creature comes to look up at a clock
  *
- * Anchored at the bottom of its case; the room hangs it at the trait's mount
- * height, so it has no contact shadow of its own.
+ * Its one caller today is wall decor (`assets/environment/walls/WallDecor.ts`),
+ * which does **not** tick anything every frame — the wall is drawn once and
+ * left alone until `RoomStyle` changes. That caller calls `updateLife` exactly
+ * once, at build time, purely to pose the hands for the current moment; the
+ * pendulum, the second-hand overshoot and the on-the-hour strike are all still
+ * here, correctly written, and simply never run in practice under that caller.
+ * They are not dead code so much as code with no current audience — a future
+ * caller that ticks the clock (a live wall-decor pass, say) would get all three
+ * back for free.
+ *
+ * Anchored at the bottom of its case — the same convention every floor prop
+ * draws to — so a caller centring it on a box has one translation to do
+ * (see `WallDecor.ts`'s `clock` entry).
  */
 
 import { Container, Graphics } from 'pixi.js';
@@ -22,12 +32,29 @@ import { PALETTE, darken, lighten, outline, tones } from '../../shared/color';
 import { drawCapsule, drawSquircle } from '../../shared/shapes';
 import { attachLife } from '../ObjectLife';
 import { formFill } from '../shared/Surface';
-import type { ObjectRenderContext } from '../ObjectRenderer';
 
 /** One full swing, there and back. A slow tock reads calmer than a fast one. */
 const SWING_SECONDS = 1.4;
 
-export function createClock(ctx: ObjectRenderContext): Container {
+/**
+ * Just the box and the colours a clock is drawn into.
+ *
+ * Not `ObjectRenderContext` — the clock hangs on the wall-decor grid now
+ * (`assets/environment/walls/WallDecor.ts`), not in the floor's object
+ * catalog, so it no longer has a `type`, a `depth` or a set of `traits` to
+ * carry. This is the whole of what the drawing code below actually reads.
+ */
+export interface ClockContext {
+  /** Across the case, in world units. */
+  width: number;
+  /** From the hook to the foot of the case, in world units. */
+  height: number;
+  color: number;
+  secondaryColor: number;
+  accentColor: number;
+}
+
+export function createClock(ctx: ClockContext): Container {
   const root = new Container();
   root.label = 'clock';
 

@@ -301,13 +301,38 @@ rest of the time.
 
 The floor is a grid of square 120-unit cells, ten across and five deep, and an
 object's size **is** its footprint on that grid: a chair is one cell, a bed is
-two, a rug is six. The back wall has its own grid sharing the floor's columns,
-so a painting hangs above the bookshelf rather than approximately above it.
+two. The back wall has its own grid sharing the floor's columns, so a painting
+hangs above the bookshelf rather than approximately above it.
 
 That is a large enough subject to have its own document. See
 **`room-and-objects.md`** for the grid, the placement rules, the object catalog,
 the object surface language, affordances, and how the user's choices about the
 room are saved.
+
+## A toy behind something is dimmed, not gone
+
+Depth sorting is correct perspective and, on its own, a bad game: a ball that
+has rolled behind the bed is sorted honestly and is therefore invisible, and
+the one thing worth knowing about a toy is where it is. An occluded toy is
+drawn *above* whatever is covering it and dimmed to 45% alpha — present, and
+readably behind the thing hiding it, rather than gone or (worse) drawn in front
+as if nothing were in the way.
+
+This is not a blend with the depth tint every object already carries (§8
+above) — that tint is aerial perspective, a fact about distance, and applies
+whether or not anything is in front. Ghosting is a fact about occlusion, layered
+on top of it, and only ever applies to toys: furniture that is genuinely behind
+something else is *meant* to disappear behind it, the same as it would in a
+real room. Only the object a user is actively looking for benefits from
+cheating the sort order.
+
+`scenes/PetRoom.ts`'s `occludedToys` finds, once a frame, every toy whose
+screen rectangle overlaps something both taller and nearer; `syncEntity` then
+draws that toy just above its occluder's own depth (`+0.25`, enough to win the
+sort without competing with whatever is genuinely in front of the occluder
+itself) at the reduced alpha. Cheap on purpose — only toys are checked, and only
+against things actually in front of them on screen, not a second full sort of
+the room.
 
 ---
 
@@ -1156,6 +1181,55 @@ Anything that is not the room is kept out of that frame — the creature's name
 and mood sit above it, and messages float over it — because every pixel of
 chrome inside the frame is a pixel off the room twice: once for the chrome, and
 again for refitting the room into a box whose shape the chrome changed.
+
+## 20.5 Skeletons
+
+`components/ui/skeleton.tsx` is the one placeholder shape in the product —
+shadcn's `Skeleton`, hand-written to match `card.tsx`'s conventions (there is
+no `components.json`; shadcn is used here as a style, not a CLI). Every
+loading placeholder in the panels — grid tiles (`option-grid.tsx`'s
+`Thumbnail`), the customizer's own shape before the customizer arrives
+(`CustomizerSkeleton.tsx`), Memories' cards, the Pet Library's tiles — is
+built from it, so they all breathe at the same rate and stop together under
+`prefers-reduced-motion`.
+
+**A skeleton must occupy the exact box its real content will occupy.** A
+placeholder of the wrong size is a layout shift with extra steps; this is the
+same discipline as §20.4's frame-shape rule, applied to loading states.
+
+**It breathes, it does not sweep.** `.petweb-skeleton`'s animation is a slow
+opacity pulse (`index.css`), not a moving gradient — a sweep reads as a
+progress bar that is nearly done, which a skeleton has no way of promising.
+
+**Shown late, held long.** `lib/useDelayedVisible.ts` is the one place the
+timing lives: nothing appears until the wait has run 150 ms (so a 90 ms fetch
+never flashes a skeleton for three frames), and once shown it stays at least
+400 ms (so a skeleton that would otherwise vanish in 40 ms doesn't read as a
+flicker in the other direction). Every skeleton in the product is gated by
+this hook rather than reimplementing its own timing.
+
+## 20.6 The loading screen
+
+`features/habitat/WorldLoader.tsx` is what covers the habitat frame — and
+**only** the frame, never the tools beside it — while the room is still being
+assembled. Two decisions shape it:
+
+**The creature is the loading animation.** `DancingPet`, the same animated
+renderer the product already had (`features/pets/DancingPet.tsx`), bobs in
+place while the room loads. This is the one loading asset a generic spinner
+could never be: a small preview of the thing about to appear.
+
+**Progress is a ring, not a bar.** An SVG arc closing on itself around the
+creature reads as "the world is assembling," where a filling bar reads as a
+file download — and it would be lying about what is actually happening
+(`useWorldProgress` measures four weighted phases of *render work* — session,
+data, world, settled — never bytes). The ring geometry is one radius/
+circumference pair (`WorldLoader.tsx`) so the dash maths cannot drift from the
+visible circle.
+
+The overlay fades over 200 ms rather than disappearing on one frame, and is
+held for a minimum visible time the same way a skeleton is (§20.5) — a room
+that loads instantly should not flash a loading screen either.
 
 ---
 

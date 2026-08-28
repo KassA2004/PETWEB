@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
 } from 'react';
+import type { ReactNode } from 'react';
 import { Application } from 'pixi.js';
 import { PetRoom } from '../../scenes/PetRoom';
 import type { PetReaction, PlacedObjectSnapshot, RoomStatus } from '../../scenes/PetRoom';
@@ -88,17 +89,6 @@ const FRAME = 24;
 /** How often the creature is allowed to make a small noise to itself. */
 const IDLE_VOICE_MS = 26_000;
 
-/**
- * How close to the frame's edge counts as "out of the room", in pixels.
- *
- * Inside the frame rather than outside it, and the inset is the whole reason
- * removal feels reachable: a target you have to leave the element to hit is a
- * target you discover by accident, and on a touch screen the finger is already
- * past the edge before the browser says so. Twenty-eight pixels is a band you
- * can aim at without being one you fall into.
- */
-const EDGE = 28;
-
 export interface PetHabitatHandle {
   /**
    * Start hanging a new piece from the palette, or picking up an already-hung
@@ -164,6 +154,19 @@ interface PetHabitatProps {
   /** Small screen: a taller frame and touch-shaped hints. */
   compact?: boolean;
   className?: string;
+  /**
+   * The world exists and has drawn. Fired once per mount, after the scene is
+   * on the stage and the saved arrangement has been placed.
+   *
+   * The dashboard uses it to start background work (`prefetch.ts`) only once
+   * the thing the user is actually looking at is finished.
+   */
+  onReady?: () => void;
+  /**
+   * Something to show over the frame, inside its own positioning context —
+   * the loading overlay (`WorldLoader`), and nothing else today.
+   */
+  overlay?: ReactNode;
 }
 
 export const PetHabitat = forwardRef<PetHabitatHandle, PetHabitatProps>(function PetHabitat(
@@ -181,6 +184,8 @@ export const PetHabitat = forwardRef<PetHabitatHandle, PetHabitatProps>(function
     onObjectRemoved,
     compact = false,
     className,
+    onReady,
+    overlay,
   },
   ref,
 ) {
@@ -234,6 +239,7 @@ export const PetHabitat = forwardRef<PetHabitatHandle, PetHabitatProps>(function
   const onRoomStyleChangeRef = useRef(onRoomStyleChange);
   const onArrangementChangeRef = useRef(onArrangementChange);
   const onObjectRemovedRef = useRef(onObjectRemoved);
+  const onReadyRef = useRef(onReady);
 
   useEffect(() => {
     styleRef.current = roomStyle;
@@ -250,6 +256,10 @@ export const PetHabitat = forwardRef<PetHabitatHandle, PetHabitatProps>(function
   useEffect(() => {
     onObjectRemovedRef.current = onObjectRemoved;
   }, [onObjectRemoved]);
+
+  useEffect(() => {
+    onReadyRef.current = onReady;
+  }, [onReady]);
 
   const [status, setStatus] = useState<RoomStatus>({
     mood: 'settling in',
@@ -360,6 +370,7 @@ export const PetHabitat = forwardRef<PetHabitatHandle, PetHabitatProps>(function
         fit: 'contain',
         onStatus: setStatus,
         onWallDecorChange: (decor) => onRoomStyleChangeRef.current({ decor }),
+        onRemovedChange: (removed) => onRoomStyleChangeRef.current({ removed }),
         onArrangementChange: () => onArrangementChangeRef.current?.(),
         onObjectRemoved: (id) => onObjectRemovedRef.current?.(id),
         // The room reports what happened; the mixer decides what it sounds
@@ -389,6 +400,11 @@ export const PetHabitat = forwardRef<PetHabitatHandle, PetHabitatProps>(function
           definition: placement.definition,
         });
       }
+
+      // The world is on the stage and the saved room is in it. Anything the
+      // dashboard wants to do in the background can start now, and not before —
+      // the room is what the user is looking at.
+      onReadyRef.current?.();
 
       if (import.meta.env.DEV) {
         // Handles for poking at the world from the console during development.
@@ -610,29 +626,12 @@ export const PetHabitat = forwardRef<PetHabitatHandle, PetHabitatProps>(function
     roomRef.current?.pointerHover(point.x, point.y);
 
     if (!dragging.current) return;
+    // The scene decides for itself whether this is a discard, from the carried
+    // thing's own height — see `PetRoom.pointerMove` and `DISCARD_LIFT`. The
+    // page used to measure its own DOM rect and guess at "outside", which
+    // treated a drag toward the front corner of the room the same as a drag
+    // out of it.
     roomRef.current?.pointerMove(point.x, point.y);
-
-    /*
-     * Is the hand outside the room?
-     *
-     * Answered here rather than in the scene because the frame is a DOM
-     * element and its edges are a DOM fact — the scene would have to
-     * un-project a coordinate to ask the same question, and would get a
-     * slightly different answer at the corners.
-     *
-     * Pointer capture is what makes this work at all: the drag is captured on
-     * the host, so moves *past* its edge still arrive here. Without it the
-     * events would stop at the boundary and the removal area could never be
-     * reached.
-     */
-    const rect = event.currentTarget.getBoundingClientRect();
-    const outside =
-      event.clientX < rect.left + EDGE ||
-      event.clientX > rect.right - EDGE ||
-      event.clientY < rect.top + EDGE ||
-      event.clientY > rect.bottom - EDGE;
-
-    roomRef.current?.setDiscarding(outside);
   };
 
   const handlePointerLeave = () => {
@@ -711,12 +710,15 @@ export const PetHabitat = forwardRef<PetHabitatHandle, PetHabitatProps>(function
           {/*
             The removal area.
 
-            Drawn as a band inside the frame's own edge rather than as a bin
-            somewhere else on the page, because "outside the room" is a place
-            the user can already see — and a drop target that is part of the
-            thing you are dragging out of needs no explaining. It exists only
-            while something is actually in hand, so the room is not permanently
-            ringed by a warning.
+            A ring around the whole frame rather than a bin somewhere else on
+            the page, because "out of the room" is a place the user can already
+            see. What decides it is height, not position on screen: the scene
+            reports `isDiscarding` once the carried thing has been lifted above
+            every row of wall hanging space (`DISCARD_LIFT`), which is a
+            gesture no floor placement — including one in a front corner —
+            can trigger by accident. It exists only while something is
+            actually in hand, so the room is not permanently ringed by a
+            warning.
           */}
           {status.editing && status.holding === 'prop' && (
             <div
@@ -737,7 +739,9 @@ export const PetHabitat = forwardRef<PetHabitatHandle, PetHabitatProps>(function
                     : 'bg-foreground/80 text-background',
                 )}
               >
-                {status.discarding ? 'Let go to put it away' : 'Drag to the edge to remove'}
+                {status.discarding
+                  ? 'Let go to put it away'
+                  : 'Lift it out of the room to remove'}
               </span>
             </div>
           )}
@@ -770,6 +774,8 @@ export const PetHabitat = forwardRef<PetHabitatHandle, PetHabitatProps>(function
             )}
             role="presentation"
           />
+
+          {overlay}
         </div>
       </div>
     </div>

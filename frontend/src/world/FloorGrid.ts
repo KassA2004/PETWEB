@@ -120,8 +120,8 @@ export interface GridCell {
  *
  * The whole standardisation, in two integers. Everything else about an
  * object's size — the width it is drawn at, the depth of its collider, how
- * much of a rug it covers — is derived from this rather than authored beside
- * it and hoped to agree.
+ * much of the cell its art actually fills — is derived from this rather than
+ * authored beside it and hoped to agree.
  */
 export interface Footprint {
   /** Cells across the room's x axis. */

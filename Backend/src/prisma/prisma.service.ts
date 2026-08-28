@@ -14,9 +14,32 @@ import { PrismaClient } from '@prisma/client';
 export class PrismaService extends PrismaClient implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(PrismaService.name);
 
+  /**
+   * Query logging, off by default and on only when asked.
+   *
+   * `PRISMA_LOG_QUERIES=1` is the diagnostic switch for measuring query count
+   * and duration per request (performance baselining and regression checks).
+   * It is never on in a normal run — logging every query is not something a
+   * production process should pay for by default.
+   */
+  constructor() {
+    super(
+      process.env.PRISMA_LOG_QUERIES === '1'
+        ? { log: [{ emit: 'event', level: 'query' }] }
+        : {},
+    );
+  }
+
   async onModuleInit(): Promise<void> {
     await this.$connect();
     this.logger.log('Connected to PostgreSQL via Prisma');
+
+    if (process.env.PRISMA_LOG_QUERIES === '1') {
+      // @ts-expect-error Prisma's event typing does not narrow on the log config
+      this.$on('query', (event: { query: string; duration: number }) => {
+        this.logger.debug(`${event.duration}ms ${event.query}`);
+      });
+    }
   }
 
   async onModuleDestroy(): Promise<void> {

@@ -22,10 +22,9 @@ It sits alongside, not instead of:
 
 > **An object's size is its grid footprint, and nothing else.**
 
-A chair is 1×1 cells. A bed is 2×1. A rug is 3×2. Every other number about an
-object — how wide it is drawn, how deep its collider is, what its contact
-shadow measures, where the drag guide highlights — is *derived* from those two
-integers.
+A chair is 1×1 cells. A bed is 2×1. Every other number about an object — how
+wide it is drawn, how deep its collider is, what its contact shadow measures,
+where the drag guide highlights — is *derived* from those two integers.
 
 This is not a style preference. It is the fix for a specific class of bug that
 kept coming back, described in §3.
@@ -75,7 +74,7 @@ cell for it.
 
 ```text
 WALL_COLUMNS    = GRID_COLUMNS      the same columns as the floor
-WALL_ROWS       3
+WALL_ROWS       4
 WALL_CELL       = TILE              square, and square on screen too
 WALL_BASE_Y     150                 above the furniture, clear of the skirting
 ```
@@ -83,8 +82,15 @@ WALL_BASE_Y     150                 above the furniture, clear of the skirting
 Wall columns *are* floor columns. A painting above the bookshelf is above the
 bookshelf because both are anchored to column three.
 
-The window is a citizen of this grid (2×3 cells), and so is the clock. Nothing on
-the back wall is positioned by a magic number any more.
+Four rows, not three — measured against the projection rather than chosen
+freely. At 3 rows the top of the grid sits at screen y=125 in the 720-tall room
+image; at 4 it is y=62; at 5 it would be y=0, the very top edge of the image,
+with no margin for a piece like `vines` or `bunting` whose art overflows its own
+cell. 4 is as far as this room goes before the grid meets the ceiling.
+
+The window is a citizen of this grid (2×3 cells), and so is every wall
+decoration — **including the clock**, which used to be the one exception (see
+below). Nothing on the back wall is positioned by a magic number any more.
 
 **The lattice is visible while you are hanging something, and only then.** The
 floor draws its grid into the boards, so the cells a chair can stand on are
@@ -100,16 +106,45 @@ struck through in the guide, and refuse a drop — before this, a painting could
 be hung across the glass. Stated as areas rather than checked for by name, so a
 room with two windows and a door costs three entries and no conditionals.
 
-**Anchored bodies are background, everywhere.** Wall-mounted decor keeps a
-floor-plane collider so the wall grid can borrow the floor's columns, and every
-system that treats that collider as furniture has produced a bug:
+**An occupied cell refuses a drop; it no longer resolves one.** Dropping a new
+piece on a cell that already holds something used to silently take the older
+piece down (`RoomStyle.placeWallDecor`'s clash resolution) — the one wall
+interaction with no undo. `PetRoom.wallDragMove` now folds occupied cells into
+the same `blocked` flag the window uses, so the cell shades and the drop is
+refused, the same red as any other refusal. `placeWallDecor`'s own
+clash-resolving code is still there and still correct for a *reposition* that
+overlaps a piece's own old cells — it is simply no longer reachable for a
+genuine collision between two different pieces, because the drag refuses that
+before a drop is ever attempted.
+
+**Deleting a hung piece is the wall's version of lifting something out of the
+room.** Drag an already-hung piece — `existingId` is set — above every row of
+hanging space (`wall.y > WALL_TOP_Y`, checked in `PetRoom.wallDragMove`) and
+letting go removes it from `RoomStyle.decor` rather than hanging it. Shown in
+the same red as a blocked drop; a *new* piece from the palette dragged off the
+top has simply not landed anywhere, which is indistinguishable from any other
+drag that never found a cell.
+
+**Anchored bodies are background, everywhere — a rule with no current members.**
+Wall-mounted *physics props* keep a floor-plane collider so the wall grid can
+borrow the floor's columns, and every system that ever treated that collider as
+furniture produced a bug:
 
 | System | What it must do with `body.anchored` | The bug when it didn't |
 |---|---|---|
-| `PhysicsWorld.surfaceBodyAt` | skip it | a prop dropped on the clock's cell settled on *top* of it, ~448 units up |
+| `PhysicsWorld.surfaceBodyAt` | skip it | a prop dropped on an anchored body's cell settled on *top* of it, hundreds of units up |
 | `Broadphase.interesting` | never pair it | a thrown toy ricocheted off invisible geometry two hundred units up the plaster |
 | `BodyView.sortKeyOf` | sort it on the wall plane | it competed for depth with whatever stood on the cell beneath it |
 | `PetHabitat` pointer-down | ask the room *first*, the wall second | a bookshelf's top overlaps wall row 0 on screen, so clicking the shelf picked up the painting behind it |
+
+The clock was the only catalog entry that ever set `mount` (and therefore the
+only body `anchored: traits.mount !== undefined` ever produced) — it hangs on
+the wall-decor grid now, alongside the painting and the shelf, rather than as a
+physics prop with a fixed-height collider (§7c). Nothing in the catalog sets
+`mount` today, so `anchored` is currently always `false` and this whole table is
+dormant rather than deleted: the four fixes stay in place for whatever next
+wants a floor-plane collider anchored at a height instead of standing on the
+ground.
 
 ---
 
@@ -276,7 +311,7 @@ Helpers worth knowing before writing anything new:
 | Helper | For |
 |---|---|
 | `FLOOR_SQUASH` | how flat a floor-plane extent is drawn, **0.42** everywhere |
-| `floorOval`, `floorSlab` | any horizontal plane: tabletop, rug, bowl rim |
+| `floorOval`, `floorSlab` | any horizontal plane: tabletop, basket mouth, bowl rim |
 | `formFill`, `topFill` | the ramp for an upright face and for an upward one |
 | `slab` | a horizontal slab with a visible top face and thickness |
 | `post` | a tapered leg, stem or upright |
@@ -320,10 +355,15 @@ Helpers worth knowing before writing anything new:
 ### Object life and state
 
 ```text
-ObjectLife    small permanent motion: the pendulum, the sway, the flicker.
+ObjectLife    small permanent motion: the plant's sway, the lamp's flicker.
               `attachLife(view, { update, drain })`. `drain` is how an object
-              tells the room something happened (the clock striking, the music
-              box starting).
+              tells the room something happened (the music box starting).
+              Ticked once a frame for everything in `PetRoom.entities` — which
+              is why the clock does not use this any more now that it hangs on
+              the wall-decor grid rather than standing as a physics prop
+              (§2.2, §7c): nothing ticks a wall decoration every frame, so its
+              one caller poses the hands once, at build time, by calling
+              `updateLife` itself rather than being called by the room.
 ObjectState   the small amount an object remembers: how full the bowl is.
               `attachState` / `readState`, asked for BY SHAPE
               (`SuppliedState`), never by knowing which object it is.
@@ -540,13 +580,32 @@ grouped by the category the simulation already groups them by. Each tap makes a
 second chair means a second chair rather than a refusal that the first is
 already out.
 
-**Removing is "Edit room" plus a drag out of the frame.**
+**Nothing but the creature and its toys moves outside edit mode.**
+`PetRoom.pointerDown` gates the grab itself: `this.editing || entity.id ===
+'pet' || entity.isToy`. Furniture that shifted every time somebody meant to
+throw a ball was a room nobody could leave arranged — and it made toys hard to
+grab cleanly, since a drag could just as easily pick up whatever the toy was
+resting against. A tap on a locked object still lands, through a small bit of
+state (`PetRoom.tapped`, mirroring the drag path's own click detection) that
+never touches the physics: no grab, no lift sound, nothing to release. It runs
+the same `handleClick` a successful click always ran — the existing knock/shove
+twitch — and additionally calls `PetBrain.noticeObject`, so repeated prodding
+raises the creature's curiosity the same way a moving toy does. Enough taps
+clear the curiosity gate in `PetBrain.select`, and `pickCuriosity` now prefers
+whatever is already in `interests` over whatever is merely nearest — so
+pointing at something by prodding it reliably sends the creature over to it,
+not to a different, closer distraction.
+
+**Removing is "Edit room" plus lifting the thing out of the room, on the
+height axis — not dragging it toward an edge of the frame.**
 
 ```text
   Edit room  ──→  PetRoom.setEditing(true)
                        │
-  drag a thing to the frame's edge  ──→  PetHabitat measures the host rect
-                       │                 and calls setDiscarding(true)
+  drag a thing, then lift it above every row of wall hanging space
+                       │    PetRoom.pointerMove computes carry.lift the same
+                       │    way it always has (§ carryTarget) and calls
+                       │    setDiscarding(carry.lift >= DISCARD_LIFT)
                        ▼
   the frame rings itself red, the caption changes, let go
                        ▼
@@ -554,29 +613,75 @@ already out.
                           shrink-and-fade the artwork, report it upward
 ```
 
-Four things this arrangement gets right, each of which was a way to get it
+`DISCARD_LIFT` is `WALL_TOP_Y` — the same constant the wall grid tops out at —
+so the threshold is a fact about the room's geometry, not a number chosen to
+feel right. This replaced an earlier version that measured the pointer against
+the *frame's own screen edges*: a band 28px inside the DOM element's rect. That
+band could be reached by dragging toward a front corner of the room — which is
+exactly what placing a chair in a corner requires — so trying to arrange the
+corner could delete the chair instead. Height cannot be reached that way: every
+legal floor placement is `lift: 0` by construction, so no drag across the floor,
+corner included, can ever cross the threshold.
+
+Five things this arrangement gets right, each of which was a way to get it
 wrong:
 
 - **Edit mode is a switch, not a mode you fall into.** The two states want
   opposite things from the same gesture: normally clicking the lamp turns the
   light off, and while editing, dragging it out throws it away. A room where
   those are one gesture is a room that eats your furniture.
-- **The removal area is inside the frame's own edge**, by 28px, not outside the
-  element. A target you have to leave the element to hit is one you discover by
-  accident, and on a touch screen the finger is past the edge before the browser
-  says so.
-- **The page answers "is the pointer outside", not the scene.** The frame is a
-  DOM element and its edges are a DOM fact; the scene would have to un-project a
-  coordinate to ask the same question and would disagree at the corners. Pointer
-  *capture* is what makes it work at all — without it the events stop at the
-  boundary and the removal area can never be reached.
+- **The discard test is a fact about the carried thing, not about the
+  pointer's screen position.** `carryTarget` already turns pointer travel past
+  the back wall into height (`lift`) for the ordinary lift-and-throw gesture;
+  discarding reuses that number rather than computing a second, competing
+  notion of "outside".
+- **The scene decides for itself**, not the page. `PetHabitat` used to measure
+  its own host element's `getBoundingClientRect()` and pass a boolean in; now
+  `PetRoom.pointerMove` calls `this.setDiscarding(carry.lift >= DISCARD_LIFT)`
+  directly, so there is one definition of "being discarded" and it lives next
+  to the height calculation it depends on.
 - **Removal is reported upward** (`onObjectRemoved`). The page holds its own list
   of what it has put in the room; a scene that quietly removed a row from under
   it would re-add the object on the next render.
+- **A piece of the *starting* furniture needs a tombstone; a piece the user
+  added does not.** See below.
 
 The exit animation gates nothing: the object leaves the physics and the
 arrangement immediately, and what shrinks is a picture of something that has
 already gone.
+
+### Why a deleted piece of starting furniture has to be remembered
+
+`Farmhouse.ts`'s `props` are furnished into the room on every
+`enterEnvironment()`, unconditionally — that is how the bed is there on a brand
+new account with nothing saved yet. A user-added object has no such second
+source: it exists only as a saved `EnvironmentObject` row, so omitting it from
+the save is the whole story. But the starting bookshelf is not like that —
+"missing from the saved arrangement" is ambiguous between *deleted* and *never
+touched*, and the environment cannot tell the two apart on its own.
+
+`RoomStyle.removed: string[]` is the id list that resolves the ambiguity —
+additive to the JSON document already in `Environment.sceneData`, so no
+migration. `PetRoom.discardObject` adds a starting prop's id to it (never a
+user-added object's — checked against `environment.props`); `enterEnvironment`
+skips furnishing anything already in the set.
+
+**The trap this shape has to avoid twice.** `PetRoom.setStyle` decides whether
+to rebuild the room's scenery (`dress(true)`) by comparing the old style to the
+new one; `removed` is deliberately excluded from that comparison; a change to
+it never earns a cross-fade, because the entity it names is either already gone
+(the scene did the removing itself) or needs a *targeted* prune rather than a
+full rebuild. That second case is the one that is easy to miss: on the very
+first frame, the scene is usually built from `DEFAULT_ROOM_STYLE` — the page's
+own room-style fetch is still in flight — so the starting bookshelf gets
+furnished *before* anyone has told the scene it was deleted last session. When
+the real style arrives moments later with `removed: ['prop-bookshelf']`,
+excluding `removed` from the redress comparison means nothing else notices
+either. `setStyle` therefore prunes explicitly: after `this.style = merged`, it
+walks `merged.removed` and calls the (sound-free, tombstone-free) `removeEntity`
+on any id that still has a live entity. `discardObject` and this prune share
+that one removal method; only `discardObject` plays a sound and writes the
+tombstone, because only it is a thing the user just did.
 
 ## 8. The environment's scenery
 
@@ -588,7 +693,7 @@ assets/environment/
                          baseboard
   walls/WallTextures.ts  plaster, panelling, planks, brick, stripes, tile
   walls/WallDecor.ts     painting, portrait, shelf, vines, hole, bunting,
-                         mirror, sconce
+                         mirror, sconce, clock
   window/Window.ts       the hole: reveal, pane, glass, bars, sill
   window/WindowViews.ts  what is on the other side
   Lighting.ts            haze, shafts, pool, wash, vignette
@@ -681,5 +786,17 @@ wants anyway.
       therefore saved too.
 - [ ] Placement saves are debounced and snapshot eagerly — never per frame, and
       never read from a scene that may already be gone.
+- [ ] Nothing outside `PetRoom.pointerDown`'s `movable` check (the pet, a toy,
+      or `this.editing`) can be dragged. If a new interaction needs to move
+      something, it goes through that check rather than around it.
+- [ ] A deletion gesture is a fact about world-space geometry (height, a grid
+      cell), never about the pointer's position against a DOM element's screen
+      rect — that is the bug `DISCARD_LIFT` replaced (§7c).
+- [ ] Deleting a piece of the *environment's own* starting furniture writes to
+      `RoomStyle.removed`; deleting something the user added does not need to
+      (§7c). Either way, if `RoomStyle`'s redress comparison (`setStyle`) grows
+      a new field, decide on purpose whether a change to it should rebuild the
+      room or be pruned/applied directly — silently doing neither is how a
+      deletion stops sticking on the next load.
 - [ ] `npx tsc -b` and `npx eslint src` are clean, from `frontend/`.
 - [ ] It has been *looked at* — §9.

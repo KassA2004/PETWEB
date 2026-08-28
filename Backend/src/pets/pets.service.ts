@@ -30,9 +30,25 @@ export interface PetView {
   ageDays: number;
 }
 
+/**
+ * A preset as the library grid shows it: a name, a species and a rig to draw.
+ *
+ * Narrower than `PetView` on purpose. `personalityData` and `stateData` are
+ * documents nobody on the client reads, and the library returns one row per
+ * saved preset — so they were bytes serialised, transferred and parsed on every
+ * page load to be thrown away (§3.5).
+ */
+export interface PetSummaryView {
+  id: string;
+  name: string;
+  species: string;
+  appearanceData: unknown;
+  updatedAt: string;
+}
+
 /** A pet, plus whether it is the one the user currently has selected. */
 export interface PetLibraryView {
-  pets: PetView[];
+  pets: PetSummaryView[];
   activePetId: string | null;
 }
 
@@ -79,6 +95,13 @@ export class PetsService {
       this.prisma.pet.findMany({
         where: { ownerId },
         orderBy: { updatedAt: 'desc' },
+        select: {
+          id: true,
+          name: true,
+          species: true,
+          appearanceData: true,
+          updatedAt: true,
+        },
       }),
       this.prisma.user.findUnique({
         where: { id: ownerId },
@@ -86,7 +109,16 @@ export class PetsService {
       }),
     ]);
 
-    return { pets: pets.map(toView), activePetId: user?.activePetId ?? null };
+    return {
+      pets: pets.map((pet) => ({
+        id: pet.id,
+        name: pet.name,
+        species: pet.species,
+        appearanceData: pet.appearanceData,
+        updatedAt: pet.updatedAt.toISOString(),
+      })),
+      activePetId: user?.activePetId ?? null,
+    };
   }
 
   async findOne(ownerId: string, petId: string): Promise<PetView> {

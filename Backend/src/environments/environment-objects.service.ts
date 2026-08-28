@@ -116,7 +116,21 @@ export class EnvironmentObjectsService {
       }),
     ]);
 
-    return this.list(ownerId, environmentId);
+    // Built from the rows just written rather than read back. Ownership was proven
+    // at the top of this method and the transaction has committed, so a second
+    // SELECT would return exactly this array — plus a redundant ownership check.
+    // Sorted to match `list()` byte for byte, because the client compares the
+    // confirmed arrangement against its pending one (`useRoomObjects.same`) and an
+    // order change would look like a change.
+    return rows
+      .map((row) => ({
+        key: row.key,
+        type: row.type,
+        col: row.col,
+        row: row.row,
+        definition: row.definitionData,
+      }))
+      .sort((a, b) => (a.row - b.row) || (a.col - b.col));
   }
 
   private async ownedEnvironment(ownerId: string, environmentId: string): Promise<void> {

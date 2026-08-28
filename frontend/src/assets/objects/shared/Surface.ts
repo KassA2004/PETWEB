@@ -50,7 +50,7 @@ export { tones };
  * container that has already been scaled by the camera, so it cannot vary it
  * per object without the object changing shape as it moves back. One constant,
  * matching the landing ring the drag guide already draws (`DepthGuide`), keeps
- * every top face, rug and bowl rim agreeing with every contact shadow.
+ * every top face and bowl rim agreeing with every contact shadow.
  */
 export const FLOOR_SQUASH = 0.42;
 
@@ -58,7 +58,7 @@ export const FLOOR_SQUASH = 0.42;
  * Trace the ellipse that a rectangle of floor `width` x `depth` reads as.
  *
  * Every horizontal plane in the room — a tabletop, the water in a bowl, the
- * mouth of a basket, a rug — is this shape at some height.
+ * mouth of a basket — is this shape at some height.
  */
 export function floorOval(
   g: Graphics,

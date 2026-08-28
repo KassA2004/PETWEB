@@ -30,8 +30,17 @@ export interface PetRecord {
   ageDays: number;
 }
 
+/** A preset as the library returns it — only what the grid and the room need. */
+export interface PetSummary {
+  id: string;
+  name: string;
+  species: string;
+  appearanceData: unknown;
+  updatedAt: string;
+}
+
 /** A saved pet with its appearance already resolved into a renderable one. */
-export interface SavedPet extends Omit<PetRecord, 'appearanceData'> {
+export interface SavedPet extends Omit<PetSummary, 'appearanceData'> {
   appearance: PetAppearance;
 }
 
@@ -41,16 +50,18 @@ export interface PetLibrary {
 }
 
 interface RawLibrary {
-  pets: PetRecord[];
+  pets: PetSummary[];
   activePetId: string | null;
 }
 
-function toSavedPet(record: PetRecord): SavedPet {
-  const { appearanceData, ...rest } = record;
+function toSavedPet(record: PetSummary | PetRecord): SavedPet {
   return {
-    ...rest,
+    id: record.id,
+    name: record.name,
+    species: record.species,
+    updatedAt: record.updatedAt,
     appearance: createPetAppearance(
-      (appearanceData ?? {}) as Partial<PetAppearance>,
+      (record.appearanceData ?? {}) as Partial<PetAppearance>,
     ),
   };
 }

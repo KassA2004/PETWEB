@@ -83,30 +83,11 @@ const PROPS: PlacedProp[] = [
   at(4, 2, 'chair', 102),
   at(6, 2, 'bed', 24),
 
-  // The rug sits under the front half of the room. It has no collision at all
-  // (see the catalog), so it is free to overlap whatever stands on it.
-  at(3, 3, 'rug', 44),
-
   // Front row: the basket, and whatever is lying about near it.
   at(0, 4, 'basket', 19),
   at(4, 4, 'ball', 12),
   at(6, 4, 'plush', 55),
   at(9, 4, 'bowl', 601),
-];
-
-/**
- * The clock is the one prop that does not stand on the floor, so it does not
- * get a cell — it hangs on the back wall at the height its traits ask for.
- */
-const WALL_PROPS: PlacedProp[] = [
-  // On the wall grid too, six columns across: clear of the window, and above
-  // the gap between the bookshelf and the bed.
-  {
-    id: 'prop-clock',
-    definition: { type: 'clock', seed: 7 },
-    x: wallCenter({ col: 6, row: 1 }).x,
-    z: 8,
-  },
 ];
 
 export const farmhouse: EnvironmentDefinition = {
@@ -131,7 +112,11 @@ export const farmhouse: EnvironmentDefinition = {
   // hung across the glass.
   wallReserved: [{ ...WINDOW_CELL, footprint: WINDOW_FOOTPRINT }],
 
-  props: [...PROPS, ...WALL_PROPS],
+  // The clock used to be the one entry here that did not stand on the floor
+  // (a physics prop with an anchored collider, floating at a fixed wall
+  // height). It is ordinary wall decor now — `DEFAULT_ROOM_STYLE.decor` places
+  // it, the same as the painting and the shelf.
+  props: PROPS,
 
   createScenery(style: RoomStyle) {
     const { ambience, tint } = resolveMood(style);

@@ -160,7 +160,7 @@ export interface PhysicsBody {
   // --- State ---------------------------------------------------------------
   /** Held bodies hang off the pointer; gravity still acts on the rest. */
   held: boolean;
-  /** Fixed bodies never move: a rug underfoot, a clock on the wall. */
+  /** Fixed bodies never move: a bookshelf, a table, a bed. */
   fixed: boolean;
   /** True while the body is sitting still and can be skipped. */
   resting: boolean;

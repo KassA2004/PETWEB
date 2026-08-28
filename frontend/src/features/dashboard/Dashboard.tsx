@@ -1,8 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Tabs } from '../../components/ui/tabs';
 import type { TabItem } from '../../components/ui/tabs';
 import { UserBadge } from '../auth/UserBadge';
-import { CustomizerPanel } from '../customization/CustomizerPanel';
 import { AffectionMeter } from '../focus/AffectionMeter';
 import { useFocus } from '../focus/useFocus';
 import { CelebrationDialog } from '../goals/CelebrationDialog';
@@ -16,14 +15,36 @@ import { RoomStylePanel } from '../habitat/RoomStylePanel';
 import { useRoomObjects } from '../habitat/useRoomObjects';
 import { useRoomStyle } from '../habitat/useRoomStyle';
 import type { PlacedObject } from '../habitat/api';
-import { MemoriesPanel } from '../memories/MemoriesPanel';
 import { PetLibraryPanel } from '../pets/PetLibraryPanel';
 import { usePetLibrary } from '../pets/usePetLibrary';
+import { CustomizerSkeleton } from '../customization/CustomizerSkeleton';
+import { prefetchPanels } from './prefetch';
+import { useWorldProgress } from '../habitat/useWorldProgress';
+import { WorldLoader } from '../habitat/WorldLoader';
+import { useDelayedVisible } from '../../lib/useDelayedVisible';
 import { OBJECT_TYPES } from '../../assets/objects/ObjectRenderer';
 import type { ObjectType } from '../../assets/objects/ObjectRenderer';
 import { audio } from '../../lib/audio';
 import { useIsCompact } from '../../lib/useMediaQuery';
 import { cn } from '../../lib/utils';
+
+/**
+ * The editor, and Splide with it, fetched when the Pet tab is opened.
+ *
+ * Not on the load path: the dashboard opens on Goals, and nothing in the
+ * room needs the part catalogs to draw. This is the largest thing behind a
+ * tab the user may never press.
+ */
+const CustomizerPanel = lazy(() =>
+  import('../customization/CustomizerPanel').then((m) => ({
+    default: m.CustomizerPanel,
+  })),
+);
+
+/** The book of memories — a secondary tab, not on the load path. */
+const MemoriesPanel = lazy(() =>
+  import('../memories/MemoriesPanel').then((m) => ({ default: m.MemoriesPanel })),
+);
 
 /**
  * The application shell.
@@ -121,6 +142,63 @@ export function Dashboard() {
   const focus = useFocus();
   const habitatRef = useRef<PetHabitatHandle>(null);
 
+  /** True once the room has drawn. Gates background work. */
+  const [worldReady, setWorldReady] = useState(false);
+  const progress = useWorldProgress();
+  const handleWorldReady = useCallback(() => {
+    setWorldReady(true);
+    progress.complete('world');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Reported once, on mount: by the time this component exists, `AuthGate` has
+  // a session and this is already rendering.
+  useEffect(() => {
+    progress.complete('session');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // A world that never reports ready must not leave the user staring at a
+  // creature on a veil. After eight seconds the overlay goes regardless; if the
+  // canvas really did fail, the room behind it shows that honestly.
+  //
+  // `settled` is included alongside `world`/`data`: it normally completes one
+  // `requestAnimationFrame` after `world`, but a hidden/backgrounded tab can
+  // have that frame throttled indefinitely by the browser, and without this
+  // the loader would sit at 80% forever instead of actually going "regardless".
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      progress.complete('world');
+      progress.complete('data');
+      progress.complete('settled');
+    }, 8000);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /*
+   * The overlay obeys the same anti-flash rule as every other loading state.
+   *
+   * It used to be `{ delay: 0, minVisible: 600 }`, which is a promise that the
+   * product can never load quickly: `delay: 0` shows the veil on every load
+   * however fast, and `minVisible: 600` then pins it there. Measured against a
+   * world that was ready at 123ms, that spent 482ms covering a room that was
+   * already drawn, plus the fade — the loading screen *was* the load time.
+   *
+   * With a real delay, a fast load never shows it at all, which is the correct
+   * behaviour for a fast load. A genuinely slow one still gets a settled
+   * indicator rather than a flicker.
+   */
+  const showLoader = useDelayedVisible(progress.loading, { delay: 150, minVisible: 300 });
+
+  // Background-load the tabs the user is most likely to open next, once the room
+  // they are actually looking at has finished. See `prefetch.ts`.
+  useEffect(() => {
+    if (!worldReady) return;
+    const handle = prefetchPanels();
+    return () => handle.cancel();
+  }, [worldReady]);
+
   // --- What is standing in the room ----------------------------------------
   // Stable identities, because they are handed to a PixiJS scene that is built
   // once: a new function every render would leave the scene holding a stale
@@ -167,6 +245,16 @@ export function Dashboard() {
     snapshot: snapshotObjects,
     onLoaded: restoreObjects,
   });
+
+  // The data phase is done once everything the room and its tools need has
+  // settled — independent requests, so this is just "are they all in yet".
+  useEffect(() => {
+    if (library.loading || room.loading || goals.loading || focus.loading || roomObjects.loading) {
+      return;
+    }
+    progress.complete('data');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [library.loading, room.loading, goals.loading, focus.loading, roomObjects.loading]);
 
   // --- Goals ---------------------------------------------------------------
   const beginComplete = (goal: GoalRecord) => {
@@ -342,6 +430,17 @@ export function Dashboard() {
       editing={editing}
       onObjectRemoved={forgetObject}
       compact={compact}
+      onReady={handleWorldReady}
+      overlay={
+        showLoader ? (
+          <WorldLoader
+            appearance={appearance}
+            progress={progress.value}
+            leaving={!progress.loading}
+            petName={petName}
+          />
+        ) : null
+      }
     />
   );
 
@@ -357,7 +456,15 @@ export function Dashboard() {
         />
       )}
 
-      {shownTab === 'memories' && <MemoriesPanel refreshToken={memoryToken} />}
+      {shownTab === 'memories' && (
+        <Suspense
+          fallback={
+            <p className="px-1 py-3 text-sm text-muted-foreground">Opening the book…</p>
+          }
+        >
+          <MemoriesPanel refreshToken={memoryToken} />
+        </Suspense>
+      )}
 
       {shownTab === 'pet' && (
         <div className="space-y-4">
@@ -373,12 +480,14 @@ export function Dashboard() {
             <AffectionMeter petName={petName} affection={focus.affection} />
           </section>
 
-          <CustomizerPanel
-            appearance={appearance}
-            onChange={updateAppearance}
-            petName={petName}
-            onPetNameChange={setPetName}
-          />
+          <Suspense fallback={<CustomizerSkeleton />}>
+            <CustomizerPanel
+              appearance={appearance}
+              onChange={updateAppearance}
+              petName={petName}
+              onPetNameChange={setPetName}
+            />
+          </Suspense>
         </div>
       )}
 
@@ -458,7 +567,7 @@ export function Dashboard() {
           className="shrink-0 text-xs"
         />
 
-        <div className="-mr-1 min-h-0 flex-1 overflow-y-auto pr-1 pb-6">{panels}</div>
+        <div className="relative -mr-1 min-h-0 flex-1 overflow-y-auto pr-1 pb-6">{panels}</div>
 
         {saveTrouble && <SaveTrouble message={saveTrouble} />}
         {completionDialog}
@@ -519,7 +628,13 @@ export function Dashboard() {
           <Tabs items={tabs} value={shownTab} onValueChange={setTab} className="shrink-0" />
 
           {/* The one scrollable region in the product. */}
-          <div className="-mr-1 min-h-0 flex-1 overflow-y-auto pr-1">{panels}</div>
+          {/*
+            `relative` makes this column a containing block, so an absolutely
+            positioned descendant (Tailwind's `sr-only`, a popover, a badge) is clipped
+            by this scroller instead of escaping to <html> and growing the page. See
+            `controls.tsx` SwatchRow for the bug this prevents recurring.
+          */}
+          <div className="relative -mr-1 min-h-0 flex-1 overflow-y-auto pr-1">{panels}</div>
         </aside>
       </div>
 

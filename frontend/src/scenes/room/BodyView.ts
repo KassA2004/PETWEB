@@ -35,8 +35,11 @@ export interface ScreenRect {
  * between sitting on a basket and sitting in one.
  */
 export function sortKeyOf(body: PhysicsBody, holder: PhysicsBody | null): number {
-  // Ground decals — rugs, spills, anything with no height at all — are the
-  // floor as far as the eye is concerned and belong under everything.
+  // Ground decals — a spill, a patch of a different floor, anything with no
+  // height at all — are the floor as far as the eye is concerned and belong
+  // under everything. A general rule about the *shape*, not about any one
+  // object: nothing in the catalog currently has a zero-height collider (the
+  // rug was the one that did), and the branch stays for whatever next does.
   if (body.collider.height <= 0) return -8000 + body.position.z;
 
   // Wall-mounted decor is part of the wall. It kept a floor-plane collider so
@@ -78,6 +81,11 @@ export function screenRectOf(body: PhysicsBody, headroom = 1): ScreenRect {
     width,
     height: Math.max(8, base.y - crown.y),
   };
+}
+
+/** Whether two screen rectangles cover any of the same pixels. */
+export function overlaps(a: ScreenRect, b: ScreenRect): boolean {
+  return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
 }
 
 /**

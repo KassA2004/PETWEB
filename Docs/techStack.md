@@ -44,6 +44,11 @@ Responsibilities:
 - Memories & rewards
 - Pet simulation logic
 - Realtime communication
+- **compression** (`Backend/src/main.ts`) — gzips outgoing JSON responses
+  above a size threshold. Registered before the raw Better Auth mount, for
+  the same middleware-ordering reason CORS is. Added during the performance
+  optimization pass (`Docs/plans/website-performance-optimization-plan.md`,
+  Task 15).
 
 ### REST API
 Used for standard operations:

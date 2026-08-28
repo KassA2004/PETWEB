@@ -200,9 +200,9 @@ export interface PhysicsBody {
   /**
    * How tall a ledge this body simply steps onto, rather than bumping into.
    *
-   * Zero for everything but the creature. Without it a rug edge or a dropped
-   * pillow is a wall, and the creature spends its afternoon shuffling against
-   * a cushion.
+   * Zero for everything but the creature. Without it a dropped pillow or a
+   * low toy is a wall, and the creature spends its afternoon shuffling
+   * against a cushion.
    */
   stepHeight: number;
 

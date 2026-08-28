@@ -118,9 +118,20 @@ export function SwatchRow({ label, colors, value, onChange }: SwatchRowProps) {
         <p className="text-sm text-foreground">{label}</p>
         {/* The native picker is the escape hatch: the swatches are the fast
             path, this is the "no, I want THAT green" path. */}
+        {/*
+          `relative` is load-bearing, not cosmetic.
+
+          The colour input below is `sr-only`, which is `position: absolute` with no
+          offsets. An absolutely positioned element is clipped only by an ancestor
+          that establishes a containing block — and every `overflow-hidden` wrapper
+          in the dashboard is `position: static`. Without `relative` here the input's
+          containing block is the *initial* one: it lays out against <html> at its
+          static offset (~2800px down a scrolled panel), escapes every clip, and
+          grows the document until the whole page scrolls. Measured: 800px -> 2794px.
+        */}
         <label
           htmlFor={id}
-          className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground"
+          className="relative flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground"
         >
           Custom
           <span

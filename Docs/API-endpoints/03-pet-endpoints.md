@@ -71,6 +71,17 @@ which is also the shape `GET /pets` returns.
 Errors: `404 NOT_FOUND` when the pet is not the caller's — deliberately not
 `403`, so the API never confirms that an id exists.
 
+**Projection (added for load-time performance,
+`Docs/plans/website-performance-optimization-plan.md` Task 12):** the `pets`
+array in this shape — returned by `GET /pets`, `PUT /pets/active`, and
+`DELETE /pets/:petId` alike, since all three hand back "the library" — carries
+only `{ id, name, species, appearanceData, updatedAt }` per pet, not the full
+pet record. `personalityData`, `stateData`, `ownerId`, `environmentId`,
+`createdAt` and `ageDays` are omitted: nothing on the client reads them from
+the library grid, only from a single pet fetched by `GET /pets/:petId` or
+`GET /pets/active`, both of which are **unchanged** and still return the full
+shape documented in §4.
+
 ---
 
 ## 2. `GET /pets/species` `[MVP]`

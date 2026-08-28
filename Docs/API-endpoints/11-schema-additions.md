@@ -141,6 +141,15 @@ The column never contains code. Only configuration — the same guarantee
 `Backend/prisma/environment.prisma` and migration
 `20260823134915_environment_scene_data`.
 
+**Proof this shape earns its keep:** `RoomStyle` later grew a `removed: string[]`
+field — the ids of the environment's own starting furniture a user has deleted
+(`room-and-objects.md` §7c). It shipped as a whitelist entry in
+`assertStorableRoomStyle`/`normalizeRoomStyle` and nothing else — **no Prisma
+migration, no new column, no schema change of any kind.** That is exactly the
+bet this section made: a JSON document read whole by one consumer can grow an
+axis the day the product needs one, at the cost of one function on each side of
+the trust boundary rather than a migration.
+
 ---
 
 ## 4. `InventoryItem` — nice to have

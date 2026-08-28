@@ -95,17 +95,29 @@ export function clampField(field: RangedField, value: number): number {
 /**
  * Keep the mass from collapsing into a line.
  *
- * Width and height are free individually; only their *ratio* is bounded, and
- * the bounds are generous — a 2.6:1 pancake and a 1:2.6 pole are both allowed.
- * What is not allowed is a creature with no silhouette left.
+ * Width and height are free individually; only their *ratio* is bounded.
+ *
+ * The bounds are set by the catalog, not by taste. The widest body type is
+ * `wide` at 1.40/0.78 and the narrowest is `narrow` at 0.58/1.22 — against a
+ * base of 210×196 that is a ratio of 1.92 and 0.51 respectively. The band below
+ * clears both with a little room and stops there, so every body type reads at
+ * full strength and the Width/Height dials can no longer push past the point
+ * where the shape stops being a creature.
+ *
+ * It used to be 0.38–2.60, which nothing in the catalog came close to needing.
+ * That headroom belonged entirely to the dials: Wide with Width at maximum and
+ * Height at minimum reached 2.86 and clamped at 2.60, which is a pancake with
+ * eyes on it — the "body size is broken" report. The face rides on these
+ * numbers (`proportions.ts` places eyes, ears and snout from `bodyWidth`/
+ * `bodyHeight`), so the aspect bound is also the feature-distortion bound.
  */
 export function constrainBodyAspect(
   width: number,
   height: number,
 ): { width: number; height: number } {
   const ratio = width / Math.max(1, height);
-  const min = 0.38;
-  const max = 2.6;
+  const min = 0.46;
+  const max = 2.05;
 
   if (ratio >= min && ratio <= max) return { width, height };
 

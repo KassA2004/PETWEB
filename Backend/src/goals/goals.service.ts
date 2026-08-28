@@ -233,7 +233,7 @@ export class GoalsService {
 
     const before = (await this.affection.read(ownerId)).value;
 
-    const completed = await this.prisma.$transaction(async (tx) => {
+    const { goal: completed, affection } = await this.prisma.$transaction(async (tx) => {
       const goal = await tx.goal.update({
         where: { id: goalId },
         data: { status: 'completed', completedAt: new Date() },
@@ -252,18 +252,24 @@ export class GoalsService {
         });
       }
 
-      // The largest single thing that happens to the relationship, and it
-      // belongs in this transaction rather than after it: a completion the
-      // creature did not notice is a completion the product did not record.
-      await this.affection.apply(tx, ownerId, GOAL_DELTA, { followedThrough: true });
-
-      return tx.goal.findUniqueOrThrow({
-        where: { id: goal.id },
-        include: { memory: true },
+      // The largest single thing that happens to the relationship, and it belongs
+      // in this transaction rather than after it: a completion the creature did not
+      // notice is a completion the product did not record.
+      //
+      // Its return value is the new value. Reading it again after the transaction
+      // was a third `User.findUnique` for a number this call already produced.
+      const applied = await this.affection.apply(tx, ownerId, GOAL_DELTA, {
+        followedThrough: true,
       });
-    });
 
-    const affection = await this.affection.read(ownerId);
+      return {
+        goal: await tx.goal.findUniqueOrThrow({
+          where: { id: goal.id },
+          include: { memory: true },
+        }),
+        affection: applied,
+      };
+    });
 
     return {
       ...toView(completed),

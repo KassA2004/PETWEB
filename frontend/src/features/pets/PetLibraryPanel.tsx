@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { Button } from '../../components/ui/button';
 import { Section } from '../../components/ui/controls';
+import { Skeleton } from '../../components/ui/skeleton';
+import { useDelayedVisible } from '../../lib/useDelayedVisible';
 import { cn } from '../../lib/utils';
 import { PetPortrait } from './PetPortrait';
 import { SavePetDialog } from './SavePetDialog';
@@ -44,6 +46,8 @@ export function PetLibraryPanel({ library }: PetLibraryPanelProps) {
     remove,
   } = library;
 
+  const showSkeleton = useDelayedVisible(loading, { delay: 150, minVisible: 400 });
+
   return (
     <Section
       title="Your creatures"
@@ -69,9 +73,16 @@ export function PetLibraryPanel({ library }: PetLibraryPanelProps) {
         </div>
       )}
 
-      {loading ? (
-        <p className="text-sm text-muted-foreground">Looking for your creatures…</p>
-      ) : (
+      {showSkeleton ? (
+        <div className="grid grid-cols-3 gap-2" aria-busy="true">
+          <p role="status" className="sr-only">
+            Looking for your creatures…
+          </p>
+          {[0, 1, 2, 3].map((slot) => (
+            <Skeleton key={slot} className="size-16 rounded-xl" />
+          ))}
+        </div>
+      ) : loading ? null : (
         pets.length > 0 && (
           <ul className="grid grid-cols-3 gap-2">
             {pets.map((pet) => {

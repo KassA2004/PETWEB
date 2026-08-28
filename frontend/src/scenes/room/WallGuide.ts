@@ -133,9 +133,11 @@ export function createWallGuide(): WallGuideView {
               state.lineTo(quad[3].x, quad[3].y);
               state.stroke({ color: PALETTE.ink, width: 1.5, alpha: 0.3 });
             } else if (occupied.has(key)) {
-              // Taken, but takeable: dropping here takes the other piece down
-              // (`placeWallDecor`), which is easier to accept when the cell
-              // was visibly spoken for beforehand.
+              // Taken, and refused: a drop here is blocked exactly the way a
+              // reserved cell is (`PetRoom.wallDragMove` folds this set into
+              // the same `blocked` flag). Shaded rather than only red at the
+              // drop point so the refusal is visible before the piece is ever
+              // dragged over it, not discovered by trying.
               state.poly(polygon);
               state.fill({ color: PALETTE.cream, alpha: 0.16 });
             }

@@ -1,7 +1,20 @@
+import 'dotenv/config';
 import { randomUUID } from 'node:crypto';
 import { betterAuth } from 'better-auth';
 import { prismaAdapter } from 'better-auth/adapters/prisma';
 import { prismaService } from '../prisma/prisma.service';
+
+export const getCorsOrigins = (): string[] => {
+  const origins = new Set<string>();
+  if (process.env.FRONTEND_URL) {
+    origins.add(process.env.FRONTEND_URL);
+  }
+  origins.add('http://localhost:5173');
+  origins.add('http://localhost:4173');
+  origins.add('http://127.0.0.1:5173');
+  origins.add('http://127.0.0.1:4173');
+  return Array.from(origins);
+};
 
 /**
  * Better Auth instance.
@@ -19,7 +32,7 @@ export const auth = betterAuth({
   baseURL: process.env.BETTER_AUTH_URL ?? 'http://localhost:3000',
   basePath: '/api/auth',
   secret: process.env.BETTER_AUTH_SECRET,
-  trustedOrigins: [process.env.FRONTEND_URL ?? 'http://localhost:5173'],
+  trustedOrigins: getCorsOrigins(),
 
   // InitialDB-plan.md uses UUID (PK) for every table's id. Better Auth's
   // default id generator is not a UUID, so it's overridden to keep AuthUser /
@@ -39,7 +52,27 @@ export const auth = betterAuth({
   // /Backend/prisma/auth-*.prisma, so they never collide with the domain
   // `User` model in user.prisma.
   user: { modelName: 'AuthUser' },
-  session: { modelName: 'AuthSession' },
+  /**
+   * `modelName` maps this onto `AuthSession` (`Backend/prisma/auth-*.prisma`).
+   *
+   * `cookieCache` is the performance-relevant part: a signed copy of the
+   * session in the cookie, refreshed every five minutes. `AuthGuard` runs on
+   * every request, and without this every request began with a session read
+   * from Postgres — five of them on one dashboard load, before any handler had
+   * done its own work.
+   *
+   * Five minutes, and not longer, because this is the window in which a
+   * revoked session still works. The domain `User` lookup in `auth.guard.ts`
+   * is deliberately NOT cached: that row is the authorization decision, and it
+   * is a primary-key hit.
+   */
+  session: {
+    modelName: 'AuthSession',
+    cookieCache: {
+      enabled: true,
+      maxAge: 5 * 60,
+    },
+  },
   account: { modelName: 'AuthAccount' },
   verification: { modelName: 'AuthVerification' },
 

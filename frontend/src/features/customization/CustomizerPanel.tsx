@@ -148,6 +148,58 @@ function accessoryPatch(
   return { accessories: next };
 }
 
+/**
+ * What the *tile* for an accessory option shows.
+ *
+ * Deliberately not `accessoryPatch`. That one carries the wearer's current
+ * colour and size into the result, which is right for applying a choice and
+ * wrong for drawing a catalogue: it makes the picture a function of live state,
+ * so every nudge of the size dial gives all three accessory grids a new cache
+ * key and rebuilds a full creature rig per tile. Measured at 15 rig rebuilds
+ * per slider step.
+ *
+ * A tile answers "what is this item", so it draws the item at its own defaults
+ * on the bare preview creature, and the answer is the same every time.
+ */
+function accessoryPreviewPatch(
+  slot: AccessorySlot,
+  value: AccessoryType | 'none',
+): Partial<PetAppearance> {
+  if (value === 'none') return { accessories: {} };
+  return { accessories: { [slot]: createAccessoryConfig(value) } };
+}
+
+/**
+ * The option list and label table for each slot, built once.
+ *
+ * Module level because `PartGrid` memoises its options on `keys` and `table` by
+ * reference. Built inline inside the `ACCESSORY_SLOTS.map` below they were new
+ * objects on every render, the memo never held, and every tile re-requested its
+ * preview on every keystroke — the other half of the same bug
+ * `accessoryPreviewPatch` fixes.
+ *
+ * "None" is an option like any other, so it gets a tile like any other — a
+ * picture of the creature without one. A bare list that silently omits the way
+ * back is a customizer you can put a hat on and not take it off.
+ */
+type SlotTable = Record<AccessoryType | 'none', { label: string; hint?: string }>;
+
+const SLOT_KEYS = Object.fromEntries(
+  ACCESSORY_SLOTS.map((slot) => [slot, ['none' as const, ...accessoriesForSlot(slot)]]),
+) as Record<AccessorySlot, (AccessoryType | 'none')[]>;
+
+const SLOT_TABLES = Object.fromEntries(
+  ACCESSORY_SLOTS.map((slot) => [
+    slot,
+    {
+      none: { label: 'None' },
+      ...Object.fromEntries(
+        accessoriesForSlot(slot).map((type) => [type, ACCESSORY_TYPES[type]]),
+      ),
+    } as SlotTable,
+  ]),
+) as Record<AccessorySlot, SlotTable>;
+
 const percent = (value: number) => `${Math.round(value * 100)}%`;
 const degrees = (value: number) => `${Math.round(value * 57)}°`;
 
@@ -282,7 +334,6 @@ export function CustomizerPanel({
             focus="whole"
             value={appearance.bodyType}
             onChange={(bodyType) => onChange({ bodyType })}
-            appearance={appearance}
           />
           {dial('bodyScale', 'Size')}
           {dial('bodyWidth', 'Width')}
@@ -301,7 +352,6 @@ export function CustomizerPanel({
               focus="ears"
               value={appearance.earType}
               onChange={(earType) => onChange({ earType })}
-              appearance={appearance}
             />
             {dial('earScale', 'Size')}
             {dial('earSpread', 'Spacing', percent)}
@@ -319,7 +369,6 @@ export function CustomizerPanel({
               focus="feet"
               value={appearance.footType}
               onChange={(footType) => onChange({ footType })}
-              appearance={appearance}
             />
             {dial('footScale', 'Size')}
           </Section>
@@ -339,7 +388,6 @@ export function CustomizerPanel({
               focus="face"
               value={appearance.eyeType}
               onChange={(eyeType) => onChange({ eyeType })}
-              appearance={appearance}
             />
             {dial('eyeScale', 'Size')}
             {dial('eyeSpacing', 'Spacing', percent)}
@@ -356,7 +404,6 @@ export function CustomizerPanel({
               focus="face"
               value={appearance.browType}
               onChange={(browType) => onChange({ browType })}
-              appearance={appearance}
             />
             {dial('browScale', 'Size')}
           </Section>
@@ -372,7 +419,6 @@ export function CustomizerPanel({
               focus="face"
               value={appearance.mouthType}
               onChange={(mouthType) => onChange({ mouthType })}
-              appearance={appearance}
             />
             {dial('mouthWidth', 'Width')}
             {dial('mouthWeight', 'Line weight')}
@@ -384,7 +430,6 @@ export function CustomizerPanel({
               focus="face"
               value={appearance.teethType}
               onChange={(teethType) => onChange({ teethType })}
-              appearance={appearance}
             />
             {appearance.teethType !== 'none' && dial('fangs', 'Tooth size', percent)}
           </Section>
@@ -398,7 +443,6 @@ export function CustomizerPanel({
               focus="face"
               value={appearance.snoutType}
               onChange={(snoutType) => onChange({ snoutType })}
-              appearance={appearance}
             />
             {dial('snoutScale', 'Snout size')}
             <PartGrid
@@ -409,7 +453,6 @@ export function CustomizerPanel({
               focus="face"
               value={appearance.cheekType}
               onChange={(cheekType) => onChange({ cheekType })}
-              appearance={appearance}
             />
             {appearance.cheekType !== 'none' && dial('blush', 'Blush', percent)}
           </Section>
@@ -450,7 +493,6 @@ export function CustomizerPanel({
             focus="whole"
             value={appearance.pattern}
             onChange={(pattern) => onChange({ pattern })}
-            appearance={appearance}
           />
           {appearance.pattern !== 'none' && (
             <SwatchRow
@@ -473,7 +515,6 @@ export function CustomizerPanel({
               focus="wings"
               value={appearance.wingType}
               onChange={(wingType) => onChange({ wingType })}
-              appearance={appearance}
             />
             {dial('wingScale', 'Size')}
           </Section>
@@ -486,7 +527,6 @@ export function CustomizerPanel({
               focus="tail"
               value={appearance.tailType}
               onChange={(tailType) => onChange({ tailType })}
-              appearance={appearance}
             />
             {dial('tailScale', 'Size')}
           </Section>
@@ -499,7 +539,6 @@ export function CustomizerPanel({
               focus="topper"
               value={appearance.topperType}
               onChange={(topperType) => onChange({ topperType })}
-              appearance={appearance}
             />
             {dial('topperScale', 'Size')}
           </Section>
@@ -507,28 +546,15 @@ export function CustomizerPanel({
           {ACCESSORY_SLOTS.map((slot) => {
             const worn = appearance.accessories[slot];
 
-            // "None" is an option like any other, so it gets a tile like any
-            // other — a picture of the creature without one. A bare list that
-            // silently omits the way back is a customizer you can put a hat on
-            // and not take it off.
-            const slotKeys = ['none' as const, ...accessoriesForSlot(slot)];
-            const slotTable = {
-              none: { label: 'None' },
-              ...Object.fromEntries(
-                accessoriesForSlot(slot).map((type) => [type, ACCESSORY_TYPES[type]]),
-              ),
-            } as Record<AccessoryType | 'none', { label: string; hint?: string }>;
-
             return (
               <Section key={slot} title={`${ACCESSORY_SLOT_LABELS[slot]} accessory`}>
                 <PartGrid
-                  keys={slotKeys}
-                  table={slotTable}
-                  patch={(value) => accessoryPatch(appearance, slot, value)}
+                  keys={SLOT_KEYS[slot]}
+                  table={SLOT_TABLES[slot]}
+                  patch={(value) => accessoryPreviewPatch(slot, value)}
                   focus={slot === 'neck' ? 'whole' : 'head'}
                   value={worn?.type ?? 'none'}
                   onChange={(value) => setAccessory(slot, value)}
-                  appearance={appearance}
                 />
                 {worn && (
                   <>

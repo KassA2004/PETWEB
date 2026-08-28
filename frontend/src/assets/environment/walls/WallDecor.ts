@@ -20,6 +20,8 @@ import { Container, Graphics } from 'pixi.js';
 import { PALETTE, darken, lighten, mix, tones } from '../../shared/color';
 import { createRng, drawOrganicOval, drawSquircle, rngRange } from '../../shared/shapes';
 import { edge, formFill, gloss, glowBall } from '../../objects/shared/Surface';
+import { createClock } from '../../objects/decorations/Clock';
+import { updateLife } from '../../objects/ObjectLife';
 import type { WallFootprint } from '../../../world/WallGrid';
 
 export const WALL_DECOR_KINDS = [
@@ -31,6 +33,7 @@ export const WALL_DECOR_KINDS = [
   'bunting',
   'mirror',
   'sconce',
+  'clock',
 ] as const;
 
 export type WallDecorKind = (typeof WALL_DECOR_KINDS)[number];
@@ -518,6 +521,63 @@ const sconce: WallDecorSpec = {
   },
 };
 
+const clock: WallDecorSpec = {
+  kind: 'clock',
+  label: 'Wall Clock',
+  note: 'Tells the real time — the one honest thing in the room.',
+  footprint: { cols: 1, rows: 1 },
+  fill: 0.9,
+  /**
+   * The clock used to be a physics prop with its own anchored collider — four
+   * separate systems special-cased it (`sortKeyOf`, `surfaceBodyAt`,
+   * `Broadphase.interesting`, and the hit-test order in `PetHabitat`) purely so
+   * it could hang in one fixed place, and none of that ever made it
+   * draggable. It belongs here instead, where dragging, refusing an occupied
+   * cell and deleting by lifting a piece off the wall already work for
+   * everything else hanging up.
+   *
+   * `createClock` is reused whole (`assets/objects/decorations/Clock.ts`) — the
+   * same artwork the room always drew, not a redrawn copy of it. Two things
+   * reconcile it with this grid instead of the physics:
+   *
+   *   position   `createClock` draws bottom-anchored, the convention every
+   *              floor prop uses (its case hangs from a hook at y=0 and
+   *              extends upward). Every other piece on this wall is centred
+   *              on (0, 0). One translation settles the difference; nothing
+   *              about the clock's own drawing code changes.
+   *   the hands  wall decor is drawn once into a container that is never
+   *              ticked — there is no per-frame update for anything hanging
+   *              on this grid, unlike a physics prop's `ObjectLife`. So the
+   *              hands are posed once, for the moment the wall is built, by
+   *              calling the same `updateLife` the room would otherwise call
+   *              every frame. The clock is right when you look at it and does
+   *              not visibly advance between glances — the trade the wall's
+   *              simplicity costs, and cheap at the price: the wall rebuilds
+   *              (and the clock reposes) on every `RoomStyle` change already.
+   */
+  draw(halfW, halfH) {
+    const group = new Container();
+
+    const clockView = createClock({
+      width: halfW * 2,
+      height: halfH * 2,
+      // Its own fixed colours, not the room's palette — the clock never took
+      // its tint from the room even as a physics prop (the old
+      // `ObjectCatalog.OBJECT_COLORS.clock` named these same three constants),
+      // and a face that repainted itself to match the walls would stop
+      // reading as a clock.
+      color: PALETTE.cream,
+      secondaryColor: darken(PALETTE.sand, 0.3),
+      accentColor: PALETTE.ink,
+    });
+    clockView.position.set(0, halfH);
+    updateLife(clockView, 0, { time: 0, lightsOn: true, now: new Date() });
+
+    group.addChild(clockView);
+    return group;
+  },
+};
+
 const DECOR: Record<WallDecorKind, WallDecorSpec> = {
   painting,
   portrait,
@@ -527,6 +587,7 @@ const DECOR: Record<WallDecorKind, WallDecorSpec> = {
   bunting,
   mirror,
   sconce,
+  clock,
 };
 
 export const WALL_DECOR_LIST: WallDecorSpec[] = WALL_DECOR_KINDS.map((kind) => DECOR[kind]);

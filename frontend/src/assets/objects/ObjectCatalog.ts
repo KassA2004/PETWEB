@@ -12,7 +12,6 @@
  *
  *   chair    1 x 1 cell
  *   bed      2 x 1 cells
- *   rug      3 x 2 cells
  *
  * Art dimensions and collider half-extents used to be authored separately and
  * hoped to agree; they did not, which is why a bed could be snapped to a tile
@@ -50,8 +49,6 @@ export const OBJECT_TYPES = [
   // Decor
   'plant',
   'lamp',
-  'clock',
-  'rug',
   'aquarium',
   // Play and care
   'scratcher',
@@ -171,7 +168,16 @@ export interface ObjectTraits {
   rolls?: boolean;
   /** What other objects can rest on or inside, and how nice that is. */
   surface?: SurfaceSpec;
-  /** Decor that hangs on the wall, at this height above the floor. */
+  /**
+   * Decor that hangs on the wall, at this height above the floor.
+   *
+   * A general capability of the physics side of a prop, not tied to any one
+   * type of object — the clock was its only user, and the clock hangs on the
+   * wall-decor grid now (`WallDecor.ts`) rather than as a physics prop, so
+   * nothing in this catalog currently sets it. Left in place for whatever
+   * next wants a floor-plane collider anchored at a fixed height rather than
+   * standing on the ground.
+   */
   mount?: number;
   /**
    * Roughly where in the room a *new* one appears.
@@ -333,45 +339,6 @@ export const OBJECT_TRAITS: Record<ObjectType, ObjectTraits> = {
     friction: 0.8,
     solidity: 'scenery',
     home: 'back',
-  },
-
-  clock: {
-    label: 'Wall Clock',
-    category: 'decor',
-    footprint: { cols: 1, rows: 1 },
-    fill: 0.9,
-    height: 200,
-    body: 'static',
-    mass: 4,
-    restitution: 0.1,
-    friction: 0.9,
-    solidity: 'scenery',
-    // Its foot, not its centre: the artwork hangs upward from here. Chosen so
-    // the case is centred on wall row 1 (world/WallGrid.ts).
-    mount: 248,
-    home: 'back',
-  },
-
-  rug: {
-    label: 'Round Rug',
-    category: 'decor',
-    // The one object whose footprint is the point of it: a rug is a patch of
-    // floor, so it is measured in floor.
-    footprint: { cols: 3, rows: 2 },
-    // Zero height, which in this solver means no collision at all — nothing
-    // can overlap it, nothing can stand on it, and it never becomes anybody's
-    // support. That last part is the one that matters: a rug three units tall
-    // is something the creature *steps onto*, which makes the rug its floor,
-    // which sorts the creature against a two-hundred-unit-deep footprint and
-    // draws it in front of the entire room. A rug is a decal.
-    height: 0,
-    round: true,
-    body: 'static',
-    mass: 8,
-    restitution: 0.1,
-    friction: 0.95,
-    solidity: 'scenery',
-    home: 'front',
   },
 
   aquarium: {
@@ -640,12 +607,6 @@ export const OBJECT_COLORS: Record<
   beanbag: { color: PALETTE.punch, secondaryColor: PALETTE.blush, accentColor: PALETTE.cream },
   plant: { color: PALETTE.mint, secondaryColor: PALETTE.sand, accentColor: PALETTE.cream },
   lamp: { color: PALETTE.cream, secondaryColor: PALETTE.grape, accentColor: PALETTE.cream },
-  clock: {
-    color: PALETTE.cream,
-    secondaryColor: darken(PALETTE.sand, 0.3),
-    accentColor: PALETTE.ink,
-  },
-  rug: { color: PALETTE.sky, secondaryColor: PALETTE.cream, accentColor: PALETTE.blush },
   aquarium: {
     color: mix(PALETTE.sky, PALETTE.cream, 0.35),
     secondaryColor: PALETTE.sand,

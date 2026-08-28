@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError } from '../../lib/api';
 import type { PlacedObjectSnapshot } from '../../scenes/PetRoom';
-import { fetchRoomObjects, saveRoomObjects } from './api';
+import { fetchCurrentRoomObjects, saveRoomObjects } from './api';
 import type { PlacedObject } from './api';
 
 /**
@@ -123,14 +123,16 @@ export function useRoomObjects(options: {
   }, []);
 
   // --- Load ----------------------------------------------------------------
+  // Loads immediately, without waiting for `useRoomStyle` to hand over an id:
+  // the server resolves the current room itself. The id is still needed to
+  // *save*, but a save is debounced by 900 ms and only ever follows a user
+  // action, so it is always in hand long before the first write.
   useEffect(() => {
-    if (!environmentId) return;
-
     const controller = new AbortController();
 
     void (async () => {
       try {
-        const objects = await fetchRoomObjects(environmentId, controller.signal);
+        const objects = await fetchCurrentRoomObjects(controller.signal);
         if (controller.signal.aborted) return;
 
         persisted.current = objects;
@@ -147,7 +149,7 @@ export function useRoomObjects(options: {
     })();
 
     return () => controller.abort();
-  }, [environmentId]);
+  }, []);
 
   // --- Save ----------------------------------------------------------------
   const write = useCallback(async () => {
