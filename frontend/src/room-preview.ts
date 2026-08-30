@@ -12,6 +12,7 @@ import { OBJECT_TYPES, renderObject } from './assets/objects/ObjectRenderer';
 import type { ObjectType } from './assets/objects/ObjectRenderer';
 import { updateLife } from './assets/objects/ObjectLife';
 import type { RoomStyle } from './world/RoomStyle';
+import { park } from './world/environments/Park';
 import { project } from './world/Projection';
 
 const host = document.getElementById('host') as HTMLDivElement;
@@ -116,8 +117,20 @@ if (mode === 'gallery') {
   // which ones fire, how hard, and how often.
   const sounds: unknown[] = [];
 
+  /*
+   * Which environment to look at.
+   *
+   * `?env=park` builds the lawn instead of the farmhouse. Imported directly
+   * rather than through the registry for the same reason `ParkStage` does it —
+   * the registry deliberately does not carry the park, so that the product's
+   * first screen never downloads it (`world/environments/index.ts`).
+   */
+  const wanted = new URLSearchParams(location.search).get('env');
+  const environment = wanted === 'park' ? park : undefined;
+
   const room = new PetRoom(app, {
     fit: 'contain',
+    environment,
     // Mirrors what PetHabitat wires up, so a wall-decor drag can be exercised
     // end to end from this harness too.
     onWallDecorChange: (decor) => room.setStyle({ decor }),
@@ -136,6 +149,43 @@ if (mode === 'gallery') {
 
   dev.__room = room;
   dev.__style = (patch: Partial<RoomStyle>) => room.setStyle(patch);
+
+  /**
+   * Put somebody else's creature on the lawn, without a second browser.
+   *
+   * The park's visitors normally arrive over a socket. This is the same call
+   * the socket makes (`PetRoom.addVisitor`), so what is being looked at is the
+   * real thing rather than a mock of it: a real `PetRenderer`, a real
+   * animation controller, the real depth sorting.
+   */
+  dev.__visitor = (
+    id: string,
+    appearance: Record<string, unknown> = {},
+    tint = 0x7bb6e8,
+  ) => {
+    room.addVisitor({
+      userId: id,
+      username: id,
+      petName: id,
+      appearance,
+      tint,
+    });
+  };
+
+  dev.__moveVisitor = (
+    id: string,
+    x: number,
+    z: number,
+    state = 'walk',
+    facing: -1 | 1 = 1,
+  ) => room.moveVisitor(id, { x, z, facing, state: state as 'walk' });
+
+  dev.__interact = (
+    from: string | null,
+    to: string | null,
+    kind = 'greet',
+    ms = 2600,
+  ) => room.playInteraction(from, to, kind as 'greet', ms);
   // For simulating real drags from the console: world -> screen.
   dev.__project = project;
 }

@@ -720,6 +720,78 @@ opening are what stop it being a sticker. The first version had none of them.
 
 ---
 
+## 8b. The park — a second environment, and what it cost
+
+```text
+assets/environment/park/
+  Outdoors.ts            sky, clouds, sun/moon, two treelines, fence, lawn,
+                         border shrubs
+world/environments/
+  Park.ts                the EnvironmentDefinition
+```
+
+`world/environments/types.ts` promised that *"adding a second one is writing a
+second file rather than picking the first one apart"*. The park is the test of
+that promise, and it held: **nothing about the scene, the physics, the grid, the
+placement rules, the drag or the pointer changed.** A park is an
+`EnvironmentDefinition` and `PetRoom` already knew how to run one.
+
+What an environment is allowed to change, and did:
+
+```text
+  the scenery   sky, treeline, fence and grass instead of three walls and a
+                window. `createScenery` returns containers; it is not handed a
+                wallpaper, so an environment that has no walls simply does not
+                draw any
+  the light     the sky itself. No window means no shaft and no pool
+  the furniture four things at the edges. A park is somewhere to be, not
+                somewhere to arrange
+  the night     shallow (alpha 0.34, not 0.62). Outdoors at midnight still has
+                a sky in it
+  wallReserved  empty. There is no wall, so the wall-decor drag simply never
+                finds anywhere to land — no conditional anywhere
+```
+
+What it may never change, and did not: **the camera, the bounds and the grid.**
+Everything standing in the park stands on the same cells a chair stands on
+indoors. That is what lets the same snap, the same depth sorting and the same
+drag guide run here with no branching.
+
+### The one shared thing that had to be extracted
+
+`createMoodOverlay` (`assets/environment/Lighting.ts`). The wash and the
+vignette are what make an *hour* read at all — a park at midnight without them
+is a park at noon with green grass — but the rest of `createLighting` is about a
+window. So those two came out into a function both environments call, rather
+than the park growing a vignette of its own that would drift.
+
+### It is not in the registry, on purpose
+
+`ENVIRONMENTS` and `getEnvironment` carry the farmhouse only. `PetRoom` imports
+that registry, and `PetRoom` is on the first screen's load path — so a static
+import of the park there would put a sky, a treeline, a fence and a lawn into
+the chunk every signed-in visitor downloads, to draw a place most of them will
+never stand in. It measured ~17 kB.
+
+`features/social/ParkStage.tsx`, which is itself behind a `lazy()` boundary,
+imports `world/environments/Park` directly and hands the definition to
+`PetHabitat` as an object. `getEnvironment` keeps answering for the rooms a
+creature can *live* in, which is what it is for — a park is somewhere you go,
+not somewhere you are from.
+
+### Other people's creatures stand on this grid too
+
+`scenes/room/Visitors.ts` puts them in the **same sortable stage layer** as the
+furniture, with a `zIndex` computed by the same rule (`BodyView.sortKeyOf`: the
+near edge of the footprint). A park with six creatures and a table in it sorts
+exactly as a room with one creature and a table in it does. They have no
+collider — the navigator routes *to* them and the physics never has to resolve
+two creatures occupying one another, which is a contact neither simulation owns.
+
+See `API-endpoints/13-social-endpoints.md` §10 for the rest.
+
+---
+
 ## 9. Verifying visually
 
 Three dev-only harnesses, none of which is built (only `index.html` is a Vite
@@ -745,6 +817,7 @@ gallery of every object, without the auth gate or the backend.
 
 ```text
 /room-preview.html                     the room
+/room-preview.html?env=park            the park (see §8b)
 /room-preview.html?mode=gallery        every object type, on a neutral floor
 /room-preview.html?mode=gallery&only=bed,tunnel   a few of them, larger
 ```
@@ -756,7 +829,22 @@ window.__cap('name')       // render + POST to Vite's /__snapshot sink,
                            // which writes frontend/.snapshots/name.png
 window.__advance(seconds)  // step the ticker BY HAND
 window.__style({ ... })    // change the room's appearance
+
+// Other people's creatures, without a second browser. These call exactly what
+// the socket calls, so what is being looked at is the real thing: a real
+// PetRenderer, a real animation controller, the real depth sorting.
+window.__visitor('ivy', { primaryColor: 0x7bb6e8, earType: 'floppy' }, 0x7bb6e8)
+window.__moveVisitor('ivy', 420, 400, 'walk', 1)
+window.__interact(null, 'ivy', 'greet', 2600)   // null means the local creature
 ```
+
+**Two browsers cannot be two users.** They share a cookie jar, so the multiplayer
+case cannot be exercised with two tabs. The visitor helpers above cover the
+*rendering* half; the other half — a genuinely separate session joining the same
+park over a real socket — is exercised by a Node client that signs in, gives
+itself a creature, opens a park and walks around in it. That is how the two-user
+park was actually verified, and it is the only way to see the wire format,
+proximity arbitration and chat delivery all working at once.
 
 **`__advance` is not a convenience.** An automated browser drives the page in a
 background tab, where `requestAnimationFrame` is throttled to nothing — so the

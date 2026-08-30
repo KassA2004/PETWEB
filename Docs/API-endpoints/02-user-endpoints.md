@@ -16,8 +16,13 @@ Profile data only. Credentials and sessions belong to `01-auth-endpoints.md`.
 | 2 | `PATCH` | `/users/me` | `[MVP]` | Update username |
 | 3 | `GET` | `/users/me/bootstrap` | `[MVP]` | Single-call app boot payload |
 | 4 | `DELETE` | `/users/me` | `[LATER]` | Delete account and all owned data |
-| 5 | `GET` | `/users/:userId` | `[LATER]` | Public profile (social) |
-| 6 | `GET` | `/users/:userId/environments` | `[LATER]` | Visitable environments (social) |
+| 5 | `GET` | `/users/:userId` | **built** | What a visitor may know: `13-social-endpoints.md` §2.3 |
+| 6 | `GET` | `/users/:userId/environments` | **built, as `/users/:userId/room`** | See below |
+| 7 | `GET` | `/users/search?q=` | **built** | Prefix search by username |
+| 8 | `GET` | `/users/:userId/memories` | **built** | Their public memories only |
+
+**Status.** 1, 2, 5, 6, 7 and 8 exist. 3 (`/users/me/bootstrap`) and 4 do not —
+see §4 and §5.
 
 ---
 
@@ -52,10 +57,21 @@ Email changes go through Better Auth, not here.
 
 ---
 
-## 4. `GET /users/me/bootstrap`
+## 4. `GET /users/me/bootstrap` — **specified, not built**
 
 One request that gives the client everything needed to render the world on load,
 avoiding a waterfall of five calls before the first frame.
+
+**It was never built, and the waterfall it was designed against does not exist.**
+`Dashboard` fires its five loads *in parallel* (`usePetLibrary`, `useRoomStyle`,
+`useGoals`, `useFocus`, `useRoomObjects`), and the one real dependency that was
+in that chain — needing the environment's id before its objects could be asked
+for — was removed by giving the server a route that resolves it itself
+(`GET /environments/current/objects`). Building this now would be one more
+endpoint to keep correct in exchange for nothing measurable.
+
+The design below stands for the day the load path grows a dependency that
+genuinely cannot be resolved server-side.
 
 `200`
 
@@ -95,8 +111,25 @@ and uploaded media files. Requires password re-entry through Better Auth first.
 
 ---
 
-## 6. Social endpoints `[LATER]`
+## 6. Social endpoints — **built**
 
-`GET /users/:userId` and `GET /users/:userId/environments` exist only to support the
-future shared-world feature (`project-overview.md` §12). They must expose username and
-public pet appearance only — never email, goals, or memories.
+See [`13-social-endpoints.md`](./13-social-endpoints.md) §2 for the whole
+surface. Two deviations from the sketch above, both deliberate:
+
+**`/users/:userId/environments` became `/users/:userId/room`.** A user has one
+room and the product has no way to make a second; a list endpoint would have
+returned an array of length one and made the client pick from it. The route
+returns what a visit actually needs: the room's style, what is standing in it,
+and the creature living there — the same three things the owner's own client
+draws from, so a visit renders through `PetHabitat` rather than through a
+second, simplified viewer.
+
+**"never memories" became "never *private* memories".** The constraint above was
+written when a memory had no visibility. It has one now, so
+`GET /users/:userId/memories` returns the ones the owner chose to share and the
+filter is in the query rather than in the response mapping — the private rows
+are never read, not fetched-and-hidden.
+
+The rest of the rule holds exactly: username and public pet appearance, never
+email, never goals. `PublicUserView` is built field by field precisely so that a
+widened query cannot add one.

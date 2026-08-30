@@ -25,6 +25,26 @@
   Used only where a category has more options than a grid can hold (eyes has 22,
   mouths 16, the object catalog 20). Categories that fit one page render as a
   plain grid with no carousel chrome at all.
+- **Lucide** (`lucide-react`) - Icons for interface chrome: the tab strips, the
+  Home/Friends switch, buttons and status lines.
+
+  Added on request, and it does **not** loosen theme-and-design.md §20.1. That
+  rule — "there is no icon set, and there must never be one" — is about
+  *choosing things*: an ear option is a picture of the ear drawn by the same
+  procedural code that draws it in the world, never a glyph standing in for it,
+  because a glyph is a second copy of a design that silently stops matching the
+  first. Every option grid, every object tile and every creature preview still
+  obeys that, and always will.
+
+  Navigation is not choosing a thing. "Parks", "Messages", "Home" name places
+  the renderer cannot draw because they are not objects in the world, and a bare
+  row of words is what the social layer's four stacked sections looked like
+  before — unscannable. Icons are allowed there and forbidden anywhere a preview
+  of the real thing is possible.
+
+  Tree-shaken per-icon: only the marks actually used are in the bundle, and
+  every one of them is an inline SVG, so the "no images, no webfonts" rule in
+  the Performance Rules is untouched.
 - **Zustand** - Lightweight client-side state management.
 - **TanStack Query** - Server-state management, API fetching, caching, and mutations.
 - **Zod** - Runtime validation for API data, pet configurations, and structured data.
@@ -57,9 +77,35 @@ Used for standard operations:
 - Retrieving memories and managing inventory
 
 ### WebSockets
-Used for realtime features:
-- Shared environments
-- Player presence and interactions
+**Socket.IO** (`@nestjs/websockets` + `@nestjs/platform-socket.io` on the
+backend, `socket.io-client` on the frontend), on one namespace, `/social`.
+
+Socket.IO rather than a bare `ws`, and the choice is the one
+`10-realtime-events.md` §5 already assumed when it said Redis would back "the
+Socket.IO adapter": rooms, acknowledgements and reconnection with backoff are
+all things a park needs and none of them are worth hand-rolling. The
+acknowledgement in particular is load-bearing — joining a park is a *request*
+that can be refused (full, wrong passcode, closed), and a protocol without a
+reply would need a correlation id and a timeout invented for it.
+
+**No polling fallback.** `transports: ['websocket']` on both ends. Long-polling
+would work, and is exactly the shape this feature is not allowed to be built on;
+silently falling back to it under a strict proxy would mean shipping that shape
+without noticing.
+
+Used for:
+- Parks: presence, creature positions, pet-to-pet interactions
+- Chat, in a park and between friends
+- Friend requests and who is online
+
+See `API-endpoints/13-social-endpoints.md` §8.
+
+### bcrypt / argon2 — deliberately NOT added
+A private park's passcode is hashed with **scrypt from Node's own `crypto`**.
+A password-hashing KDF is required (a park passcode is a human-chosen secret, so
+a fast digest of it is a lookup table away from plaintext), and scrypt is
+memory-hard, in the standard library, and costs no native module to compile on
+every machine this deploys to. See `13-social-endpoints.md` §5.2.
 
 ---
 
@@ -98,8 +144,18 @@ Used for:
 
 ### Redis (Local)
 Local Redis instance run via Docker.
-*Note: Required only when realtime/shared-world functionality becomes necessary. Not required for the initial prototype.*
-Potential uses: Player presence, WebSocket coordination, Pub/Sub.
+
+*Still not required, and the social layer shipped without it.* The rule from
+`10-realtime-events.md` §5 held: Redis backs the Socket.IO **adapter** once more
+than one backend process serves sockets, and a single process needs none.
+
+What would have to change for a second process is the adapter, and nothing else.
+Membership, capacity, park credentials and every message are in Postgres
+precisely so that they are not one process's memory; the in-memory parts —
+last-known creature positions and interaction cooldowns — are per-park ephemera
+a second process would simply hold its own copy of.
+
+Potential uses, unchanged: WebSocket coordination, Pub/Sub.
 
 ---
 

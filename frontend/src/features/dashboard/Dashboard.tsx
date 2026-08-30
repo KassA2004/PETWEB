@@ -1,4 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Armchair, BookHeart, Home, PawPrint, Sparkles, Target, Users } from 'lucide-react';
 import { Tabs } from '../../components/ui/tabs';
 import type { TabItem } from '../../components/ui/tabs';
 import { UserBadge } from '../auth/UserBadge';
@@ -25,8 +26,20 @@ import { useDelayedVisible } from '../../lib/useDelayedVisible';
 import { OBJECT_TYPES } from '../../assets/objects/ObjectRenderer';
 import type { ObjectType } from '../../assets/objects/ObjectRenderer';
 import { audio } from '../../lib/audio';
-import { useIsCompact } from '../../lib/useMediaQuery';
+import { useViewport } from '../../lib/useViewport';
 import { cn } from '../../lib/utils';
+import type { SocialPlace } from '../social/SocialLayer';
+/*
+ * The one thing about the social layer the entry bundle is allowed to know.
+ *
+ * `parkMemory` has no imports at all — it is three `sessionStorage` calls — so
+ * pulling it in here costs the bundle nothing and buys the thing a refresh
+ * needs: the dashboard has to know, before it renders, whether this tab was
+ * standing in a park, because that decides whether the social chunk is fetched
+ * at all. Asking the chunk would mean loading the chunk to find out whether to
+ * load the chunk.
+ */
+import { rememberedPark } from '../social/parkMemory';
 
 /**
  * The editor, and Splide with it, fetched when the Pet tab is opened.
@@ -44,6 +57,25 @@ const CustomizerPanel = lazy(() =>
 /** The book of memories — a secondary tab, not on the load path. */
 const MemoriesPanel = lazy(() =>
   import('../memories/MemoriesPanel').then((m) => ({ default: m.MemoriesPanel })),
+);
+
+/**
+ * Other people, and everything that talks to them.
+ *
+ * The third code-split boundary inside the dashboard, and the one that most
+ * earns it: this chunk carries `socket.io-client`, the park view and the whole
+ * social surface, none of which a visitor who never presses the button
+ * downloads — and, more to the point, none of which opens a WebSocket until
+ * they do.
+ *
+ * Deliberately **not** in `prefetch.ts` beside the customizer and the memory
+ * book. Those two are prefetched because the dashboard's own tabs lead to them
+ * and most people open one; the social layer is a place somebody chooses to go,
+ * and spending a signed-in visitor's bandwidth on a screen they may never open
+ * is the kind of quiet regression the Performance Rules are about.
+ */
+const SocialLayer = lazy(() =>
+  import('../social/SocialLayer').then((m) => ({ default: m.SocialLayer })),
 );
 
 /**
@@ -98,7 +130,19 @@ function isKnownType(type: string): type is ObjectType {
   return OBJECT_TYPE_SET.has(type);
 }
 
-export function Dashboard() {
+interface DashboardProps {
+  /**
+   * Who is signed in.
+   *
+   * Passed down from `AuthGate` rather than read from `useSession` here, and
+   * the reason is load-bearing: `useSession` is a subscription that can
+   * refetch, and a refetch flips `isPending` in `AuthGate`, which unmounts this
+   * component and rebuilds the entire world. See the comment there.
+   */
+  userId: string;
+}
+
+export function Dashboard({ userId }: DashboardProps) {
   // The creature, its saved presets, and which one is selected. Survives a
   // reload and a fresh sign-in, which local state never did.
   const library = usePetLibrary();
@@ -128,7 +172,82 @@ export function Dashboard() {
   /** The goal whose completion flow is open, or null. */
   const [completing, setCompleting] = useState<GoalRecord | null>(null);
 
-  const compact = useIsCompact();
+  /*
+   * Other people, as a mode of the same page.
+   *
+   * Three pieces of state and they are not the same thing:
+   *
+   * ```text
+   *   socialOpened   has the social chunk ever been asked for. Once true it
+   *                  stays true, because the socket, the friend list and any
+   *                  park the user is standing in must outlive a glance back
+   *                  at their goals
+   *   mode           which set of options the tools column is showing right
+   *                  now. This is the only thing the Home/Friends switch moves
+   *   place          somewhere else is on screen — a park, or somebody's room.
+   *                  While it is set the world column belongs to the social
+   *                  layer and the dashboard does not mount a world of its own,
+   *                  so the page never holds two PixiJS applications at once
+   * ```
+   */
+  /*
+   * Both start open when the tab was in a park, because a reload is not a
+   * departure. The park id outlives the page (`parkMemory.ts`) and the
+   * participant row outlives the socket, so the honest thing for a refresh to
+   * do is put the user back on the lawn they were standing on — which means
+   * fetching the social chunk on load, but only for the one visitor in a
+   * hundred who was actually out.
+   */
+  const [socialOpened, setSocialOpened] = useState(() => rememberedPark() !== null);
+  const [mode, setMode] = useState<'home' | 'social'>(() =>
+    rememberedPark() !== null ? 'social' : 'home',
+  );
+  const [place, setPlace] = useState<SocialPlace | null>(null);
+  /** Friend requests waiting, for the badge on the switch. */
+  const [attention, setAttention] = useState(0);
+
+  /*
+   * The two slots the social layer renders into.
+   *
+   * Held as state rather than as refs, because a portal needs its host to exist
+   * during render and a ref's `.current` changing does not cause one. A
+   * callback ref into `useState` is React's own answer for "I need to render
+   * against a node I just mounted".
+   */
+  const [worldHost, setWorldHost] = useState<HTMLDivElement | null>(null);
+  const [asideHost, setAsideHost] = useState<HTMLDivElement | null>(null);
+
+  const openSocial = useCallback(() => {
+    setSocialOpened(true);
+    setMode('social');
+  }, []);
+
+  /*
+   * Which of the three shapes the page is in, and how much of the screen is
+   * actually available.
+   *
+   * `landscape` is a real third case rather than a narrow desktop: a phone on
+   * its side is compact by width and has 375 pixels of height, which is less
+   * than the room alone needs in the column layout. See `useLayoutMode`.
+   */
+  const { layout, keyboardOpen } = useViewport();
+  const compact = layout !== 'desktop';
+  const landscape = layout === 'landscape';
+
+  /**
+   * Somebody is typing on a small screen.
+   *
+   * The rule this turns on is one sentence: **while a keyboard is up, the thing
+   * being typed into owns the screen.** A phone with a keyboard has about 300
+   * points left, and the page was spending eighty of them on a title, a
+   * where-am-I switch and a row of tabs — none of which anybody is looking at
+   * while they are writing a message, naming a park or naming their creature.
+   *
+   * So they go, and they come back the moment the keyboard does. Nothing has to
+   * be dismissed and nothing can be got stuck in: the exit is the keyboard's own
+   * exit, which is the one control on a phone that everybody already knows.
+   */
+  const typing = compact && keyboardOpen;
 
   // The room's appearance is loaded from the server and saved back to it, so
   // the hour, the paint and everything on the walls survive a refresh and a
@@ -390,18 +509,34 @@ export function Dashboard() {
    * the one they were promised — and the promise was that the page would get
    * out of the way for an hour.
    */
-  const tabs = useMemo<TabItem<TabValue>[]>(
-    () =>
-      focus.active
-        ? [{ value: 'goals', label: 'Focus' }]
-        : [
-            { value: 'goals', label: 'Goals', count: goals.open.length },
-            { value: 'memories', label: 'Memories' },
-            { value: 'pet', label: 'Pet' },
-            { value: 'room', label: 'Room', count: placements.length },
-          ],
-    [focus.active, goals.open.length, placements.length],
-  );
+  const tabs = useMemo<TabItem<TabValue>[]>(() => {
+    if (focus.active) return [{ value: 'goals', label: 'Focus', icon: Target }];
+
+    const always: TabItem<TabValue>[] = [
+      { value: 'goals', label: 'Goals', icon: Target, count: goals.open.length },
+      { value: 'memories', label: 'Memories', icon: BookHeart },
+    ];
+
+    /*
+     * The wardrobe and the furniture are about a room that is not on screen.
+     *
+     * While the user is standing in a park or in somebody else's room, the
+     * world column is showing that place — so a Room tab would be a set of
+     * controls for something they cannot see, and dragging a lamp into a room
+     * that is not there is a control with no feedback at all. Removed rather
+     * than disabled, the same way a focus session removes them: a row of greyed
+     * tabs is a row of things the user is being told they cannot have.
+     *
+     * Goals and Memories stay, because neither is about the room.
+     */
+    if (place) return always;
+
+    return [
+      ...always,
+      { value: 'pet', label: 'Pet', icon: PawPrint },
+      { value: 'room', label: 'Room', icon: Armchair, count: placements.length },
+    ];
+  }, [focus.active, goals.open.length, placements.length, place]);
 
   /**
    * Whatever they were looking at, they are looking at the timer now.
@@ -411,9 +546,36 @@ export function Dashboard() {
    * and when the hour is up the user is put back on the tab they were on rather
    * than somewhere the product chose for them.
    */
-  const shownTab: TabValue = focus.active ? 'goals' : tab;
+  const shownTab: TabValue =
+    focus.active || (place && (tab === 'pet' || tab === 'room')) ? 'goals' : tab;
 
   const saveTrouble = room.error ?? roomObjects.error;
+
+  /*
+   * How the room is dressed and sized, per shape.
+   *
+   * One object, spread into every habitat on the page — the dashboard's own and
+   * the social layer's park and visits — so a park on a phone is edge-to-edge
+   * for the same reason the room is, and nobody has to remember to pass three
+   * props in four places.
+   *
+   * ```text
+   *   desktop    a card in the middle of a column. Unchanged
+   *   portrait   edge to edge, sized by width, nudged 4% larger
+   *   landscape  edge to edge, sized by the box — height is the scarce axis
+   * ```
+   *
+   * **The zoom is small on purpose.** Past about 1.06 the overscale starts
+   * eating the wall-decor rail, and a room whose pictures are half off the top
+   * of the screen is worse than a room that is 4% smaller. What it spends is
+   * the empty plaster above the shelf line, which is the only part of the view
+   * nothing is ever placed in.
+   */
+  const world: { bleed?: boolean; fill?: boolean; zoom?: number } = !compact
+    ? {}
+    : landscape
+      ? { bleed: true, fill: true, zoom: 1.02 }
+      : { bleed: true, zoom: 1.04 };
 
   const habitat = (
     <PetHabitat
@@ -430,6 +592,7 @@ export function Dashboard() {
       editing={editing}
       onObjectRemoved={forgetObject}
       compact={compact}
+      {...world}
       onReady={handleWorldReady}
       overlay={
         showLoader ? (
@@ -507,6 +670,144 @@ export function Dashboard() {
     </>
   );
 
+
+  /*
+   * Whether the creature in the room is one other people can be shown.
+   *
+   * It is not, until it is saved: `usePetLibrary` holds a working copy and Save
+   * is what writes the `Pet` row. The park reads that row on the server — a
+   * client may not send a rig — so somebody who has never pressed Save would
+   * walk into a park invisible. The social panel puts a one-button gate in
+   * front of that rather than letting it happen quietly.
+   */
+  const creatureGate = {
+    saved: library.activePetId !== null,
+    name: petName,
+    busy: library.busy,
+    save: () => library.savePreset(petName),
+  };
+
+  /*
+   * Other people.
+   *
+   * Mounted from the first time the switch is pressed and never unmounted
+   * after, and both halves of that matter. Not before: the connection is opened
+   * by this chunk and lives until sign-out, so somebody who never presses the
+   * button never opens a WebSocket — and, because the chunk is lazy, never
+   * downloads `socket.io-client` either. Not after: a park the user is standing
+   * in has to survive them switching back to look at a goal, and unmounting
+   * this would walk them out of it.
+   *
+   * It renders nothing where it sits. Everything it draws goes through a portal
+   * into `asideHost` (the tools column) or `worldHost` (the world column). See
+   * `SocialLayer`.
+   */
+  const socialLayer = socialOpened ? (
+    <Suspense fallback={null}>
+      <SocialLayer
+        selfId={userId}
+        appearance={appearance}
+        petName={petName}
+        creature={creatureGate}
+        compact={compact}
+        typing={typing}
+        world={world}
+        active={mode === 'social'}
+        asideHost={asideHost}
+        worldHost={worldHost}
+        onPlaceChange={setPlace}
+        onAttention={setAttention}
+      />
+    </Suspense>
+  ) : null;
+
+  /*
+   * The world column's contents.
+   *
+   * Exactly one world, ever. When the social layer has somewhere on screen the
+   * dashboard's own habitat is *unmounted* rather than hidden — a hidden PixiJS
+   * application still holds a WebGL context, still ticks, and still resizes
+   * itself against a zero-height box, which is precisely the combination that
+   * made entering a park look like the room breaking.
+   *
+   * The host below is always in the tree, because a portal needs its target to
+   * exist before the thing being portalled renders.
+   */
+  const worldColumn = (
+    <>
+      {!place && habitat}
+
+      {/*
+        `empty:hidden`, not `hidden` when `place` is null.
+
+        The difference is one render and it is the whole bug. `place` is
+        reported *upward* by the social layer, from an effect, so it arrives a
+        render after the stage has already portalled its world in here — which
+        meant a park's canvas was created inside a `display: none` box and
+        initialised at 0×0. The CSS `:empty` selector stops applying the moment
+        React appends the portal's child, in the same commit, so the box has a
+        size before anything is drawn into it.
+
+        `PetHabitat` also watches its own host now, so a canvas that starts at
+        no size recovers rather than staying wrong. Both: this stops it
+        happening, that stops it mattering.
+      */}
+      <div ref={setWorldHost} className="flex min-h-0 flex-1 flex-col empty:hidden" />
+    </>
+  );
+
+  /*
+   * The tools column's contents, in whichever mode it is in.
+   *
+   * One strip and one scroller, and the social layer takes them over rather
+   * than opening a second set beside them — which is what makes "go and see
+   * other people" the same gesture as "open the Room tab" rather than a
+   * different kind of thing.
+   */
+  const toolsColumn = (
+    <>
+      <div className={cn('flex min-h-0 flex-1 flex-col gap-3', mode !== 'home' && 'hidden')}>
+        {/*
+          The strip goes while a keyboard is up, for the same reason the header
+          does: naming a creature or adding a goal is typing, and forty points
+          of tabs is a seventh of what a phone has left to show the field in.
+        */}
+        {!typing && (
+        <Tabs
+          items={tabs}
+          value={shownTab}
+          onValueChange={setTab}
+          // Smaller type on a phone, so four labels fit a 375-pixel strip
+          // rather than scrolling. `cn` merges this over the strip's own
+          // `text-sm`, which is the size the desktop column wants.
+          dense={compact}
+          className={cn('shrink-0', compact && 'text-xs')}
+        />
+        )}
+
+        {/* The one scrollable region in this mode. */}
+        {/*
+          `relative` makes this column a containing block, so an absolutely
+          positioned descendant (Tailwind's `sr-only`, a popover, a badge) is clipped
+          by this scroller instead of escaping to <html> and growing the page. See
+          `controls.tsx` SwatchRow for the bug this prevents recurring.
+        */}
+        <div className="relative -mr-1 min-h-0 flex-1 overflow-y-auto pr-1 pb-4">{panels}</div>
+      </div>
+
+      {/*
+        Hidden rather than unmounted, and it has to be: this is a portal target,
+        so it must stay in the document for the social layer to keep rendering
+        into it while the user is looking at their goals — which is what lets
+        them stand in a park and check a goal without leaving the park.
+      */}
+      <div
+        ref={setAsideHost}
+        className={cn('flex min-h-0 flex-1 flex-col', mode !== 'social' && 'hidden')}
+      />
+    </>
+  );
+
   const completionDialog = (
     <>
       <GoalCompletionDialog
@@ -540,37 +841,148 @@ export function Dashboard() {
    * which looks like the panel is broken rather than like the page is fixed.
    */
 
-  // --- Mobile: the creature on top, one column of tools under it -----------
+  /*
+   * --- Phone and tablet: ONE tree, two shapes ------------------------------
+   *
+   * Portrait and landscape used to be two `return`s, and that was the bug
+   * behind two separate reports. React reconciles by position, so two different
+   * trees mean **everything under them is unmounted and rebuilt** when the mode
+   * changes — the PixiJS world, the social layer with whatever park you were
+   * standing in, the half-typed form. It looked exactly like the app crashing
+   * and restarting, and on a phone it happened constantly, because an on-screen
+   * keyboard shrinks the layout viewport enough to look like a rotation
+   * (`useLayoutMode` now refuses to be fooled by that, which is the other half
+   * of the fix).
+   *
+   * So there is one tree, and the two shapes differ only in classes and props:
+   *
+   * ```text
+   *   portrait    body is a column   room band on top (fixed height), tools under
+   *   landscape   body is a row      room fills the left, tools are a fixed column
+   * ```
+   *
+   * The header stays at the top in both. In landscape that costs 44 of 375
+   * pixels of height, which is worth paying to keep the tree identical — a
+   * rotation now re-lays-out the room instead of rebuilding it.
+   */
   if (compact) {
     return (
-      <div className="mx-auto flex h-svh w-full max-w-2xl flex-col gap-3 overflow-hidden p-3">
-        <header className="flex shrink-0 items-center justify-between gap-3">
-          <h1 className="text-base font-semibold tracking-tight">Digital Pet World</h1>
-          <UserBadge />
-        </header>
+      <div
+        className="flex w-full flex-col overflow-hidden"
+        style={{ height: 'var(--app-height)' }}
+      >
+        {/*
+          Gone while a keyboard is up. See `typing`.
 
-        {/* Fixed, not sticky: on a phone the creature is the page, and it now
-            physically cannot leave. */}
-        <div className="shrink-0">{habitat}</div>
+          Unmounted rather than hidden: a header that is merely invisible is
+          still in the tab order, and the first thing a keyboard user would
+          reach from a field is a control they cannot see.
+        */}
+        {!typing && (
+          <header
+            className={cn(
+              'flex shrink-0 items-center justify-between gap-2 px-3 py-2',
+              'pt-[max(0.5rem,env(safe-area-inset-top))]',
+            )}
+          >
+          <h1 className="truncate text-base font-semibold tracking-tight">
+            Digital Pet World
+          </h1>
+
+          <div className="flex shrink-0 items-center gap-2">
+            {/*
+              The way out to other people is taken away for the hour, like every
+              other tool: a session is the page getting out of the way, and a
+              door to a park in the middle of it is the product interrupting the
+              thing it just promised to protect.
+            */}
+            {!focus.active && (
+              <ModeSwitch
+                value={mode}
+                place={place}
+                attention={attention}
+                onHome={() => setMode('home')}
+                onSocial={openSocial}
+                compact
+              />
+            )}
+            <UserBadge />
+            </div>
+          </header>
+        )}
+
+        <div
+          className={cn('flex min-h-0 flex-1', landscape ? 'flex-row' : 'flex-col')}
+        >
+          {/*
+            The room, edge to edge.
+
+            Upright, its height is stated rather than measured — `100vw × 9/16`
+            is the same number the habitat's own aspect ratio arrives at, and
+            having it here as well is what lets it *animate* to nothing when a
+            keyboard opens. On its side, height is the scarce axis, so the room
+            takes whatever is left of the row and is measured into it (`fill`).
+
+            The room is never unmounted when it collapses: the habitat inside
+            keeps its own box and is clipped by this one, because a PixiJS
+            application resized to zero height is a renderer being asked to draw
+            nothing, and it does not always come back.
+          */}
+          <div
+            className={cn(
+              'relative overflow-hidden bg-card',
+              landscape
+                ? 'flex min-h-0 min-w-0 flex-1 flex-col'
+                : 'shrink-0 shadow-sm shadow-foreground/10 transition-[height] duration-300 ease-out motion-reduce:transition-none',
+            )}
+            style={
+              landscape ? undefined : { height: keyboardOpen ? 0 : 'calc(100vw * 9 / 16)' }
+            }
+            aria-hidden={!landscape && keyboardOpen}
+          >
+            <div
+              className={cn(
+                landscape ? 'flex min-h-0 flex-1 flex-col' : 'absolute inset-x-0 top-0',
+              )}
+            >
+              {worldColumn}
+            </div>
+          </div>
+
+          {/*
+            The tools.
+
+            `pb` carries the home indicator, so the last row of a list is not
+            under it. When a keyboard is open the shell has already shrunk to the
+            visible area, which is what keeps a composer clear of the bottom edge.
+          */}
+          <div
+            className={cn(
+              'flex min-h-0 flex-col gap-3 text-xs',
+              landscape
+                ? 'w-[21rem] shrink-0 border-l border-border p-2.5 pr-[max(0.625rem,env(safe-area-inset-right))]'
+                : 'flex-1 px-3 pt-3 pb-[max(0.25rem,env(safe-area-inset-bottom))]',
+            )}
+          >
+            {toolsColumn}
+          </div>
+        </div>
 
         {toast && (
-          <p className="animate-rise inline-flex shrink-0 items-center gap-2 self-start rounded-full border border-accent/30 bg-accent/10 px-3 py-1.5 text-xs text-accent">
-            <span aria-hidden>✦</span>
+          <p className="animate-rise mx-3 mb-2 inline-flex shrink-0 items-center gap-2 self-start rounded-full border border-accent/30 bg-accent/10 px-3 py-1.5 text-xs text-accent">
+            <Sparkles aria-hidden className="size-3.5" />
             {toast}
           </p>
         )}
 
-        <Tabs
-          items={tabs}
-          value={shownTab}
-          onValueChange={setTab}
-          className="shrink-0 text-xs"
-        />
+        {saveTrouble && (
+          <div className="shrink-0 px-3 pb-2">
+            <SaveTrouble message={saveTrouble} />
+          </div>
+        )}
 
-        <div className="relative -mr-1 min-h-0 flex-1 overflow-y-auto pr-1 pb-6">{panels}</div>
-
-        {saveTrouble && <SaveTrouble message={saveTrouble} />}
         {completionDialog}
+        {socialLayer}
       </div>
     );
   }
@@ -580,19 +992,31 @@ export function Dashboard() {
     <div className="mx-auto flex h-svh max-w-[1500px] flex-col gap-4 overflow-hidden p-4 lg:p-6">
       {/*
         One line, not two.
-        
+
         Every pixel this bar takes is a pixel off the room, and the room is now
         sized by the height left over — so the strapline sits beside the title
         rather than under it. It is the same words; it is not the same 28px.
       */}
-      <header className="flex shrink-0 items-baseline justify-between gap-4">
+      <header className="flex shrink-0 items-center justify-between gap-4">
         <div className="flex min-w-0 items-baseline gap-3">
           <h1 className="text-lg font-semibold tracking-tight">Digital Pet World</h1>
-          <p className="truncate text-xs text-muted-foreground">
+          <p className="hidden truncate text-xs text-muted-foreground xl:block">
             A small creature lives here. Be nice to it.
           </p>
         </div>
-        <UserBadge />
+
+        <div className="flex shrink-0 items-center gap-3">
+          {!focus.active && (
+            <ModeSwitch
+              value={mode}
+              place={place}
+              attention={attention}
+              onHome={() => setMode('home')}
+              onSocial={openSocial}
+            />
+          )}
+          <UserBadge />
+        </div>
       </header>
 
       <div className="grid min-h-0 flex-1 gap-6 lg:grid-cols-[minmax(0,1fr)_26rem]">
@@ -603,19 +1027,19 @@ export function Dashboard() {
         */}
         {/*
           Messages float over the world rather than sitting under it.
-          
+
           A reserved strip underneath would cost the room forty pixels of
           height permanently, to be used for a few seconds an hour — and letting
           it appear and disappear in the flow would resize the room every time
           something was saved, which is worse than either.
         */}
         <main className="relative flex min-h-0 flex-col overflow-hidden">
-          {habitat}
+          {worldColumn}
 
           <div className="pointer-events-none absolute inset-x-0 bottom-2 flex flex-col items-center gap-2">
             {toast && (
               <p className="animate-rise inline-flex items-center gap-2 rounded-full border border-accent/30 bg-accent/95 px-4 py-2 text-sm text-accent-foreground shadow-lg">
-                <span aria-hidden>✦</span>
+                <Sparkles aria-hidden className="size-4" />
                 {toast}
               </p>
             )}
@@ -624,23 +1048,108 @@ export function Dashboard() {
           </div>
         </main>
 
-        <aside className="flex min-h-0 flex-col gap-4 overflow-hidden">
-          <Tabs items={tabs} value={shownTab} onValueChange={setTab} className="shrink-0" />
-
-          {/* The one scrollable region in the product. */}
-          {/*
-            `relative` makes this column a containing block, so an absolutely
-            positioned descendant (Tailwind's `sr-only`, a popover, a badge) is clipped
-            by this scroller instead of escaping to <html> and growing the page. See
-            `controls.tsx` SwatchRow for the bug this prevents recurring.
-          */}
-          <div className="relative -mr-1 min-h-0 flex-1 overflow-y-auto pr-1">{panels}</div>
-        </aside>
+        <aside className="flex min-h-0 flex-col gap-4 overflow-hidden">{toolsColumn}</aside>
       </div>
 
       {completionDialog}
+      {socialLayer}
     </div>
   );
+}
+
+/**
+ * Home, or everybody else.
+ *
+ * One control, two states, and it is the *only* way between the two halves of
+ * the product — which is what makes the tools column legible: whichever set of
+ * tabs is under it, this says which world they belong to.
+ *
+ * It replaced a small icon button that opened a sheet. A sheet is a thing you
+ * dismiss; this is a place you are, and a segmented switch is what says so. The
+ * badge is friend requests waiting, because that is the only social event that
+ * is *still there* when you get round to it — a message you have already been
+ * shown does not need a number on a button.
+ *
+ * While the user is standing somewhere — a park, somebody's room — the Friends
+ * half says where, quietly, so that going back to Goals never means losing the
+ * thread of having gone out.
+ */
+function ModeSwitch({
+  value,
+  place,
+  attention,
+  onHome,
+  onSocial,
+  compact = false,
+}: {
+  value: 'home' | 'social';
+  place: SocialPlace | null;
+  attention: number;
+  onHome: () => void;
+  onSocial: () => void;
+  compact?: boolean;
+}) {
+  const item = (selected: boolean) =>
+    cn(
+      'press relative flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium',
+      'transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring',
+      selected
+        ? 'bg-card text-foreground shadow-sm'
+        : 'text-muted-foreground hover:text-foreground',
+    );
+
+  return (
+    <div
+      role="group"
+      aria-label="Where you are"
+      className="flex shrink-0 items-center gap-1 rounded-xl bg-muted/70 p-1"
+    >
+      <button type="button" onClick={onHome} className={item(value === 'home')}>
+        <Home aria-hidden className="size-4" />
+        {!compact && 'Home'}
+      </button>
+
+      <button
+        type="button"
+        onClick={onSocial}
+        className={item(value === 'social')}
+        aria-label={place ? `Friends — you are in ${place.label}` : 'Friends'}
+      >
+        <Users aria-hidden className="size-4" />
+        {!compact && (place ? shorten(place.label) : 'Friends')}
+
+        {/*
+          Two marks, never both. The dot says "you are out there right now",
+          which is a state; the number says "these are waiting for you", which
+          is a queue. Showing both at once on a control this small would make
+          neither readable.
+        */}
+        {place ? (
+          <span
+            aria-hidden
+            className="absolute -top-0.5 -right-0.5 size-2 rounded-full bg-accent ring-2 ring-muted"
+          />
+        ) : (
+          attention > 0 && (
+            <span
+              aria-hidden
+              className={cn(
+                'absolute -top-1 -right-1 grid min-w-4 place-items-center rounded-full',
+                'bg-primary px-1 text-[0.6rem] leading-4 text-primary-foreground ring-2 ring-muted',
+              )}
+            >
+              {attention}
+            </span>
+          )
+        )}
+      </button>
+    </div>
+  );
+}
+
+/** Keep the switch one line wide whatever a park has been called. */
+function shorten(label: string): string {
+  return label.length > 14 ? `${label.slice(0, 13)}…` : label;
 }
 
 /**

@@ -11,6 +11,15 @@ import { Type } from 'class-transformer';
  */
 export const USER_MEMORY_TYPES = ['snapshot', 'note'] as const;
 
+/**
+ * Who else may see a memory.
+ *
+ * Two values, and `private` is what an omitted field means everywhere — in the
+ * column's default, in the service, and in the migration that backfilled every
+ * memory written before this existed.
+ */
+export const MEMORY_VISIBILITIES = ['private', 'public'] as const;
+
 export class CreateMemoryDto {
   @IsIn(USER_MEMORY_TYPES)
   type!: (typeof USER_MEMORY_TYPES)[number];
@@ -29,6 +38,11 @@ export class CreateMemoryDto {
   @IsString()
   @Length(1, 500)
   imageUrl?: string;
+
+  /** Defaults to `private`. */
+  @IsOptional()
+  @IsIn(MEMORY_VISIBILITIES)
+  visibility?: (typeof MEMORY_VISIBILITIES)[number];
 }
 
 export class UpdateMemoryDto {
@@ -41,6 +55,11 @@ export class UpdateMemoryDto {
   @IsString()
   @Length(0, 500)
   description?: string;
+
+  /** Show it to visitors, or take it back. */
+  @IsOptional()
+  @IsIn(MEMORY_VISIBILITIES)
+  visibility?: (typeof MEMORY_VISIBILITIES)[number];
 }
 
 export class ListMemoriesDto {

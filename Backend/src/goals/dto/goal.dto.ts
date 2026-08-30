@@ -7,6 +7,7 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
+import { MEMORY_VISIBILITIES } from '../../memories/dto/memory.dto';
 
 /**
  * Request bodies for the goal endpoints.
@@ -69,6 +70,19 @@ export class CompletionMemoryDto {
   @IsString()
   @Length(1, 500)
   imageUrl?: string;
+
+  /**
+   * Whether anybody else may see this memory. Defaults to `private`.
+   *
+   * Asked at the moment the memory is made rather than afterwards, because
+   * that is the only moment the user is actually thinking about the thing they
+   * just finished. A visibility setting buried in a list is one nobody ever
+   * finds, and a memory that is public by default is a promise the product
+   * never made.
+   */
+  @IsOptional()
+  @IsIn(MEMORY_VISIBILITIES)
+  visibility?: (typeof MEMORY_VISIBILITIES)[number];
 }
 
 export class CompleteGoalDto {

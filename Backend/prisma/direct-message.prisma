@@ -1,0 +1,26 @@
+// DirectMessage
+// Source: /Docs/API-endpoints/13-social-endpoints.md §9
+//
+// One message in a direct conversation. Kept — unlike a park's chatter, which
+// dies with the park.
+//
+// Authorization is the conversation's, not the message's: a reader may have
+// this row if they are one of the two people on the `Conversation`, which is
+// one check at the top of a read rather than a check per row.
+
+model DirectMessage {
+  id             String @id @default(uuid()) @db.Uuid
+  conversationId String @db.Uuid
+  senderId       String @db.Uuid
+
+  /// 1-1000 chars, trimmed. Stored as typed — see `ParkMessage.body`.
+  body String
+
+  createdAt DateTime @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender       User         @relation(fields: [senderId], references: [id], onDelete: Cascade)
+
+  /// The history query, and the "what did I miss" query: one thread, by time.
+  @@index([conversationId, createdAt])
+}

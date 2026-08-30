@@ -32,9 +32,10 @@ Each package maps 1:1 to a **NestJS module** and owns a single resource group.
 | 07 | [Goal](./07-goal-endpoints.md) | `/api/v1/goals` | `GoalModule` | `Goal` |
 | 08 | [Memory](./08-memory-endpoints.md) | `/api/v1/memories` | `MemoryModule` | `Memory` |
 | 09 | [Media](./09-media-endpoints.md) | `/api/v1/media` | `MediaModule` | file storage |
-| 10 | [Realtime](./10-realtime-events.md) | `ws://…/world` | `RealtimeModule` | — (future) |
+| 10 | [Realtime](./10-realtime-events.md) | — | — | *superseded by 13* |
 | 11 | [Schema additions](./11-schema-additions.md) | — | — | proposed DB deltas |
 | 12 | [Focus](./12-focus-endpoints.md) | `/api/v1/focus` | `FocusModule` | `FocusSession`, `User.affection` |
+| 13 | [Social](./13-social-endpoints.md) | `/api/v1/users`, `/friends`, `/parks`, `/chat` + `ws://…/social` | `UsersModule`, `FriendsModule`, `ParksModule`, `ChatModule`, `RealtimeModule` | `User`, `Friendship`, `Park`, `ParkParticipant`, `ParkMessage`, `Conversation`, `DirectMessage`, `Memory.visibility` |
 
 ---
 
@@ -67,6 +68,12 @@ to a `Goal` and moves `User.affection`, and finishing a goal still runs through
 `Goal`+`Memory` exactly as before. "I did the time" and "I am done" are
 different sentences — see `12-focus-endpoints.md` §1.
 
+Social (13) sits *outside* it, and deliberately: nothing in the MVP loop needs a
+second person. It extends the loop at one point only — a memory made by
+finishing a goal can now be shared — and otherwise adds a place to go rather
+than a step to take. That is why the whole surface is behind one lazy boundary
+and opens no connection until somebody asks for it.
+
 ---
 
 ## 4. Endpoint count
@@ -83,4 +90,10 @@ different sentences — see `12-focus-endpoints.md` §1.
 | Memory | 6 | 1 | 7 |
 | Media | 3 | 0 | 3 |
 | Focus | 4 | 0 | 4 |
-| **Total** | **54** | **16** | **70** |
+| Social | 14 | 0 | 14 |
+| **Total** | **68** | **16** | **84** |
+
+Social's fourteen are REST only. Joining a park, moving a creature, saying
+something in one and two creatures interacting are socket events, not endpoints
+— see `13-social-endpoints.md` §8 for why joining in particular is not a
+request.

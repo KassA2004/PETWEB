@@ -1,0 +1,48 @@
+// ParkParticipant
+// Source: /Docs/API-endpoints/13-social-endpoints.md §6
+//
+// Who is currently in a park. The authoritative answer to "is this park full?"
+// and "may this socket speak here?".
+//
+// This row is *membership*, not presence. It says a user has been admitted; it
+// does not say where their creature is standing, which is the gateway's memory.
+//
+// Why membership is in Postgres and not only in the gateway
+// ---------------------------------------------------------
+// Because capacity has to be enforced against a lock, and a lock has to be
+// somewhere both racing requests can see. Two people taking the last slot at
+// the same moment is the canonical bug this feature has, and the fix is a
+// `SELECT ... FOR UPDATE` on the parent `Park` row inside the transaction that
+// inserts here (parks.service.ts). An in-memory counter in one process cannot
+// promise that, and across two processes it cannot even be asked.
+
+model ParkParticipant {
+  id     String @id @default(uuid()) @db.Uuid
+  parkId String @db.Uuid
+  userId String @db.Uuid
+
+  joinedAt DateTime @default(now())
+
+  /// The heartbeat.
+  ///
+  /// **This column is the whole disconnect story.** A "leave" event from a
+  /// client is a courtesy; a closed laptop, a dead wifi connection and a killed
+  /// tab all send nothing at all. So a live participant's socket touches this
+  /// column periodically, and the sweeper deletes rows that have stopped being
+  /// touched — which is the one definition of "gone" that does not depend on
+  /// the client agreeing to say goodbye.
+  lastSeenAt DateTime @default(now())
+
+  park Park @relation(fields: [parkId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// One membership per person per park. A refresh re-joins rather than
+  /// occupying a second slot, which is also what stops one user filling a park
+  /// on their own by opening tabs.
+  @@unique([parkId, userId])
+  @@index([parkId])
+  @@index([userId])
+
+  /// The sweeper's index: everything that has stopped breathing.
+  @@index([lastSeenAt])
+}

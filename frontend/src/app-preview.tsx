@@ -44,6 +44,8 @@ interface Store {
   activePetId: string | null;
   sessions: FocusRow[];
   affection: number;
+  /** Direct messages sent from the preview, so a reload still shows them. */
+  sent: Record<string, unknown>[];
 }
 
 const KEY = 'petweb.preview.store';
@@ -65,6 +67,7 @@ function load(): Store {
     activePetId: null,
     sessions: [],
     affection: 0.5,
+    sent: [],
   };
 }
 
@@ -140,6 +143,55 @@ async function handle(method: string, path: string, body: unknown): Promise<Resp
   if (path === '/pets' && method === 'GET') {
     return json({ items: store.pets, activePetId: store.activePetId });
   }
+  /*
+   * Saving a preset, which the Parks tab gates on.
+   *
+   * A park draws everybody's creature from their saved `Pet` row, so the panel
+   * refuses to open one until there is a row — which made the whole
+   * park-creation flow unreachable in this harness until the stub could answer
+   * this. Enough of a row to satisfy the gate; nothing here pretends to be the
+   * real editor's save path.
+   */
+  if (path === '/pets' && method === 'POST') {
+    const input = (body ?? {}) as { name?: string; appearanceData?: unknown };
+    const pet = {
+      id: `pet-${store.pets.length + 1}`,
+      name: input.name ?? 'Blorb',
+      species: 'blob',
+      appearanceData: input.appearanceData ?? {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    store.pets.push(pet);
+    store.activePetId = pet.id;
+    save();
+    return json(pet, 201);
+  }
+
+  if (path === '/pets/active' && method === 'PUT') {
+    const input = (body ?? {}) as { petId?: string | null };
+    store.activePetId = input.petId ?? null;
+    save();
+    return json({ items: store.pets, activePetId: store.activePetId });
+  }
+
+  if (path === '/parks' && method === 'POST') {
+    const input = (body ?? {}) as { name?: string; capacity?: number; isPrivate?: boolean };
+    return json(
+      {
+        id: '00000000-0000-4000-8000-000000000001',
+        name: input.name ?? 'A park',
+        hostId: 'user-preview',
+        hostUsername: 'you',
+        capacity: input.capacity ?? 6,
+        isPrivate: Boolean(input.isPrivate),
+        occupancy: 0,
+        createdAt: new Date().toISOString(),
+      },
+      201,
+    );
+  }
+
   if (path === '/pets/active' && method === 'GET') {
     return json(store.pets.find((p) => p.id === store.activePetId) ?? null);
   }
@@ -353,7 +405,98 @@ async function handle(method: string, path: string, body: unknown): Promise<Resp
     return json(null, 204);
   }
 
+  /*
+   * --- the social layer, enough of it to look at ---------------------------
+   *
+   * Not a simulation of other people: there is no socket here, so presence,
+   * parks and live delivery are all absent and the panel says so honestly
+   * ("Lost the thread"). What this covers is the part that is *layout* — a
+   * friend list, a conversation with a scrollback and a composer — which is
+   * the half that has to survive a phone keyboard and cannot be checked
+   * anywhere else without two real accounts and a WebSocket.
+   */
+  if (path === '/friends' && method === 'GET') {
+    return json({ friends: STUB_FRIENDS, incoming: [], outgoing: [] });
+  }
+
+  if (path === '/chat/conversations' && method === 'GET') {
+    return json(
+      STUB_FRIENDS.map((friend, index) => ({
+        id: `conversation-${index}`,
+        userId: friend.userId,
+        username: friend.username,
+        pet: friend.pet,
+        lastMessageAt: new Date(Date.now() - index * 60_000).toISOString(),
+        preview: index === 0 ? 'See you by the bench' : null,
+      })),
+    );
+  }
+
+  const thread = /^\/chat\/conversations\/([^/]+)\/messages$/.exec(path);
+  if (thread && method === 'GET') return json(stubMessages(thread[1]));
+
+  if (thread && method === 'POST') {
+    const sent = {
+      id: `dm-${Date.now()}`,
+      conversationId: 'conversation-0',
+      senderId: 'user-preview',
+      withUserId: thread[1],
+      body: String((body as { body?: string })?.body ?? ''),
+      createdAt: new Date().toISOString(),
+    };
+    store.sent.push(sent);
+    save();
+    return json(sent, 201);
+  }
+
+  if (path === '/parks' && method === 'GET') return json([]);
+
   return fail(404, 'NOT_FOUND', `No stub for ${method} ${path}`);
+}
+
+/** Two people to talk to, so the list and a thread both have something in them. */
+const STUB_FRIENDS = [
+  {
+    userId: 'friend-marlow',
+    username: 'marlow',
+    pet: { id: 'pet-marlow', name: 'Tuft', species: 'blob', appearanceData: { seed: 7, bodyType: 'pear' } },
+    since: new Date(Date.now() - 86_400_000).toISOString(),
+  },
+  {
+    userId: 'friend-quill',
+    username: 'quill',
+    pet: { id: 'pet-quill', name: 'Nib', species: 'blob', appearanceData: { seed: 21, earType: 'floppy' } },
+    since: new Date(Date.now() - 172_800_000).toISOString(),
+  },
+];
+
+/**
+ * A conversation long enough to scroll.
+ *
+ * Length is the point: a thread of two lines proves nothing about a log that
+ * has to stay pinned to its newest message while a keyboard takes half the
+ * screen. Twenty-four is more than fits any phone.
+ */
+function stubMessages(withUserId: string): Record<string, unknown>[] {
+  const lines = [
+    'are you about later',
+    'yes — the long grass?',
+    'Tuft has been asleep on the rug all morning',
+    'mine keeps knocking the ball behind the shelf',
+    'that is a whole personality',
+    'i have given up moving it',
+  ];
+
+  const history = Array.from({ length: 24 }, (_, index) => ({
+    id: `dm-stub-${index}`,
+    conversationId: 'conversation-0',
+    senderId: index % 2 === 0 ? withUserId : 'user-preview',
+    withUserId,
+    body: lines[index % lines.length],
+    createdAt: new Date(Date.now() - (24 - index) * 60_000).toISOString(),
+  }));
+
+  return [...history, ...store.sent.filter((m) => m.withUserId === withUserId)];
 }
 
 const realFetch = window.fetch.bind(window);
@@ -405,6 +548,7 @@ dev.__reset = () => {
     activePetId: null,
     sessions: [],
     affection: 0.5,
+    sent: [],
   };
   save();
 };
@@ -431,6 +575,12 @@ dev.__failNextUpload = (value: boolean) => {
 
 createRoot(document.getElementById('root') as HTMLElement).render(
   <StrictMode>
-    <Dashboard />
+    {/*
+      A fixed id: this harness stubs the network entirely and there is no
+      session behind it. The dashboard only uses the value to tell its own rows
+      apart from other people's in the social panel, which this harness does not
+      exercise.
+    */}
+    <Dashboard userId="00000000-0000-4000-8000-000000000000" />
   </StrictMode>,
 );

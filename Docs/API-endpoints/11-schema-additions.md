@@ -179,18 +179,81 @@ snapshots are the only frequent write to that row.
 
 ---
 
-## 6. Social / realtime `[LATER]` — do not build
+## 6. Social / realtime — **requested, approved, implemented**
 
-Required before `10-realtime-events.md` can be implemented:
+This section used to read *"do not build"*. Social features were then actually
+requested, the expansion was proposed in
+[`13-social-endpoints.md`](./13-social-endpoints.md), and it shipped as
+migration `20260829120000_social_layer`.
 
-| Change | Purpose |
-|--------|---------|
-| `Environment.visibility` Enum(`private`,`friends`,`public`) | who may join |
-| new table `Friendship(id, requesterId, addresseeId, status, createdAt)` | relationship model |
-| `User.displayName`, `User.avatarKey` | public profile without leaking email |
+The proposal above was three lines long and two of them turned out to be wrong.
+Recorded here rather than quietly replaced, because the difference is the useful
+part:
 
-This is a genuine schema expansion, not an additive tweak. It must be proposed and
-approved separately when social features are actually requested.
+| Proposed | Built | Why |
+|---|---|---|
+| `Environment.visibility` Enum | **nothing** | A room does not need one. Visiting somebody's room shows their creature and their arrangement, which is what the product already treats as public; what carries visibility is a *memory*, one at a time (`Memory.visibility`). A room-level flag would have been an access-control axis nobody asked for, guarding data that was never private |
+| `Friendship(requesterId, addresseeId, status, createdAt)` | **as proposed**, plus `updatedAt` and `acceptedAt` | Correct first time. One row per relationship rather than a request table and a friend table — see 13 §3.1 |
+| `User.displayName`, `User.avatarKey` | **neither** | Both exist to build a profile page, and there is no profile page. The product's answer to "who is this" is their creature (`project-overview.md` §16), so the public view carries a pet, not an avatar. `username` is the display name |
+
+### 6.1 What was actually added
+
+Two altered tables and six new ones. Every foreign key to `User` is
+`ON DELETE CASCADE`, matching `Goal` and `Memory`: deleting an account takes its
+side of every relationship with it.
+
+| Table | Change | Severity |
+|---|---|---|
+| `User` | `+ usernameKey TEXT NOT NULL UNIQUE` | blocking — the whole discovery model |
+| `Memory` | `+ visibility TEXT NOT NULL DEFAULT 'private'`, `+ index (ownerId, visibility, createdAt)` | blocking for public memories |
+| `Friendship` | new | blocking for friends |
+| `Park` | new | blocking for parks |
+| `ParkParticipant` | new | blocking — capacity and presence |
+| `ParkMessage` | new | blocking for park chat |
+| `Conversation` | new | blocking for direct messages |
+| `DirectMessage` | new | blocking for direct messages |
+
+### 6.2 `User.usernameKey` — two columns for one fact
+
+Deliberate, and the argument is the same one §6 of this document makes about
+`FocusSession`'s missing partial index.
+
+Uniqueness has to be **case-insensitive**: `Kass` and `kass` naming two accounts
+is the same failure as two `kass`es. The natural expression is a unique index on
+`lower(username)` — which **Prisma cannot declare**, so the next
+`prisma migrate dev` would generate a migration dropping it again. That is not a
+trap worth walking into for the one column the entire social layer is keyed on.
+
+So `username` holds what the owner typed and `usernameKey` holds it lowercased,
+with the constraint on the second. A plain column Prisma understands cannot be
+dropped behind our backs, and it makes the lookup an index hit rather than a
+`mode: 'insensitive'` scan. `UsersService.setUsername` is the only writer.
+
+### 6.3 `Memory.visibility` — the backfill is the decision
+
+`DEFAULT 'private'`, and the migration lets **every existing row take that
+default**. A visibility system that ships by publishing what people wrote before
+it existed is a leak with a changelog entry. Nobody's memory becomes visible to
+anybody until its owner says so, one memory at a time.
+
+The default is repeated in the DTO and in the service as well as in the column,
+because this is the one setting in the product that must never fail open.
+
+### 6.4 The migration is safe on a populated database
+
+`usernameKey` is the only column added `NOT NULL` without a default, and it is
+**backfilled before the constraint is applied**:
+
+```sql
+ALTER TABLE "User" ADD COLUMN "usernameKey" TEXT;
+UPDATE "User" SET "usernameKey" = lower("username") WHERE "usernameKey" IS NULL;
+ALTER TABLE "User" ALTER COLUMN "usernameKey" SET NOT NULL;
+CREATE UNIQUE INDEX "User_usernameKey_key" ON "User"("usernameKey");
+```
+
+If two accounts already differ only in case, the index creation fails and the
+migration stops — which is the right outcome. That is a collision a person has
+to resolve, not one to silently pick a winner for.
 
 ---
 
@@ -203,7 +266,7 @@ approved separately when social features are actually requested.
 | 2 | `ObjectDefinition` category/rarity/tags | packages 05, 06, 07 |
 | 3 | `Environment` bounds + background | package 04 |
 | 4 | `InventoryItem` unique `(ownerId, objectId)` | package 06 correctness |
-| 5 | Social tables | package 10 — deferred |
+| 5 | Social tables (`Friendship`, `Park`, `ParkParticipant`, `ParkMessage`, `Conversation`, `DirectMessage`, `User.usernameKey`, `Memory.visibility`) | package 13 — **implemented** |
 
 Once approved, `InitialDB-plan.md` should be updated in the same change so the two
 documents do not diverge.

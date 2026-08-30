@@ -1103,8 +1103,17 @@ world.
   createFloor({ pattern: 'tiles' })        ──→  a patch of tiled floor
 ```
 
-There is no icon set, and there must never be one — an icon is a second copy of
-a design that silently stops matching the first. `lib/preview.ts` owns the
+There is no icon set for *this*, and there must never be one — an icon standing
+in for an option is a second copy of a design that silently stops matching the
+first.
+
+> The boundary, since the product now has `lucide-react` in it: icons are for
+> **interface chrome** — the tab strips, the Home/Friends switch, buttons,
+> status lines, section headings — where the thing being named is a *place* or
+> an *action* that the renderer cannot draw, because it is not an object in the
+> world. The moment a preview of the actual thing is possible, the preview wins
+> and the icon is wrong. Nothing in the creature editor, the object catalog or
+> any option grid may ever be a glyph. `lib/preview.ts` owns the
 single offscreen `Application` every thumbnail is drawn by (one WebGL context,
 not one per tile: the browser drops the oldest at about sixteen, which looks
 exactly like a rendering bug and is not one) and caches by key.
@@ -1182,7 +1191,169 @@ and mood sit above it, and messages float over it — because every pixel of
 chrome inside the frame is a pixel off the room twice: once for the chrome, and
 again for refitting the room into a box whose shape the chrome changed.
 
-## 20.5 Skeletons
+> All of the above describes the **desktop** card. A phone gets a different
+> answer to the same question, for the same reason: see §20.5.
+
+## 20.5 A phone is a different shape, not a narrow desktop
+
+Three layouts, chosen by `lib/useViewport.ts`'s `useLayoutMode`:
+
+```text
+  desktop     ≥1024px wide       the world beside the tools, framed as a card
+  portrait    a phone upright    the world above the tools, edge to edge
+  landscape   short AND sideways  the world beside the tools, at phone scale
+```
+
+**Landscape is a real third case, not a narrow desktop.** A phone on its side is
+compact by width and has 375 pixels of height. Given the portrait layout — a
+header, then a full-width room, then a column of tools — the room alone is 457 of
+them, and everything under it is clipped out of a shell that is exactly one
+viewport tall and does not scroll. It reads as the page having frozen, because
+from the user's side that is what it is.
+
+The test is on height **and orientation**. Height alone describes the problem
+better and was wrong for the case that turns out to be the common one: a
+keyboard shrinks the layout viewport too, so a phone held upright at 375×470
+matched every sensible height threshold and flipped the whole interface
+mid-sentence. A small tablet at 1000×700 still wants the column and still gets
+it.
+
+### The frame comes off
+
+§20.4 is about the desktop card. On a phone the card is 48 pixels of a
+375-pixel screen — 24 of page padding, 24 of border and inset — which took the
+canvas to 327 wide and 184 tall, a room occupying 23% of a screen the creature
+is supposed to live in. Full-bleed is 375 and 211.
+
+The frame is not dropped so much as moved: the pet's name, its mood and the
+light switch become chips floating over the top of the room on a gradient scrim,
+which is where a game puts them and costs the room no height at all.
+
+A **4% overscale** goes with it (`PetRoomOptions.zoom`, multiplied into the fit
+so the projection, the pointer mapping and the depth scale all stay in
+agreement). What it spends is the empty plaster above the shelf line, which is
+the only part of the view nothing is ever placed in. Past about 1.06 it starts
+eating the wall-decor rail, so it is a nudge and not a camera.
+
+### One tree, two shapes — this rule is load-bearing
+
+Portrait and landscape are **one component tree** that differs only in classes
+and props. They must never become two `return`s again, and the reason is not
+tidiness.
+
+React reconciles by position. Two trees mean everything under them is unmounted
+and rebuilt when the shape changes: the PixiJS world, the social layer with
+whatever park the user was standing in, a half-typed form. That is expensive on
+a rotation and it was *catastrophic* on a phone, because a keyboard shrinks the
+layout viewport enough to look like one — so opening the keyboard to name a park
+or write a message tore the whole screen down and rebuilt it. Users reported it,
+accurately, as the app crashing and restarting.
+
+Both halves are fixed and both are worth keeping: `useLayoutMode` no longer
+mistakes a keyboard for a rotation (it requires `orientation: landscape`), and
+the tree no longer costs the world when the mode does legitimately change.
+
+The header stays at the top in both shapes. In landscape that spends 44 of 375
+pixels of height, which is the price of the tree being identical.
+
+### The keyboard is a third section the page cannot see
+
+A mobile browser does not shrink the layout viewport when the on-screen keyboard
+opens; only the *visual* viewport changes. So `100svh` keeps describing the whole
+screen and the bottom of the shell — where every composer in this product lives —
+ends up underneath the keyboard.
+
+`lib/useViewport.ts` publishes `--app-height` and `--keyboard-inset`, and it has
+to read **two** signals because the fix for one platform hides the symptom on it:
+
+```text
+  Android, with interactive-widget=resizes-content (index.html)
+    the LAYOUT viewport shrinks, so both measures agree and there is no
+    difference to subtract. The keyboard is found by noticing the screen lost a
+    third of itself without changing width
+
+  iOS, which honours no such thing
+    the layout viewport is unchanged and is scrolled up behind the keyboard, so
+    the visual viewport is what shrank and `offsetTop` is the push
+```
+
+And then the room **stands down**: while a keyboard is open the compact layout
+animates the room band to zero and gives the whole visible area to the
+conversation. Typing means you are writing rather than watching. The habitat is
+clipped rather than unmounted or resized — a PixiJS renderer asked to draw a
+zero-height box does not reliably come back.
+
+A conversation is a column, not a tall block: header pinned, log scrolling,
+composer at the bottom. `lib/useStickToBottom.ts` keeps the log on its newest
+line *including when the box shrinks*, which a `[messages]` effect cannot see.
+
+### While a keyboard is up, the thing being typed into owns the screen
+
+A phone with a keyboard has about 300 points left. The page was spending eighty
+of them on a title, a where-am-I switch and a row of tabs — none of which
+anybody looks at mid-sentence. So on a compact screen, `keyboardOpen` takes the
+header and the tab strip away, and the room band was already collapsing.
+
+They come back when the keyboard does. Nothing has to be dismissed and nothing
+can be got stuck in: the exit is the keyboard's own exit, which is the one
+control on a phone everybody already knows. Both are *unmounted* rather than
+hidden — a header that is merely invisible is still in the tab order.
+
+This is one rule, so it covers every field without being asked to: a message, a
+park's name, a goal, the creature's name.
+
+### Two jobs are screens, not panels
+
+`components/ui/sheet.tsx`. On a small screen, **a conversation** and **opening a
+park** take the whole viewport: one title bar, one way back, nothing else
+competing.
+
+Both are jobs you do with both hands and your whole attention, and both were
+being done inside a panel that was itself inside a page — a form you could not
+move around in and a conversation you could not read. It is also not a new idea
+here: it is what the social layer already does with the world column when you
+walk into a park.
+
+```text
+  a Sheet is        the viewport, portalled to <body> so no ancestor's
+                    overflow, transform or stacking context can clip it
+  a Sheet is not    a modal. No scrim, and it has not covered the page —
+                    it has replaced it
+  but it does       mark the app root `inert`, so Tab cannot walk into the
+                    page behind, and focus the back arrow on open
+```
+
+The park form's buttons live in the sheet's footer, outside the scrolling form
+and attached by `form=`. A commit button below the fold is a form people abandon.
+
+### A submit button says why, rather than going grey
+
+The Web Interface Guidelines are right and a phone makes it obvious: a
+greyed-out button at the bottom of a screen, whose reason is a field you have
+scrolled past, is a dead end with no explanation. "Open it" stays live and,
+pressed early, says what is missing.
+
+### Nothing autofocuses on a touch device
+
+`autoFocus` on a phone throws the keyboard up over the page before anybody has
+said they want to type. It is a courtesy on a pointer device and an ambush on a
+phone, so it is gated on `(pointer: coarse)`.
+
+### The renderer follows its host
+
+`resizeTo` sounds like it does this and does not: PixiJS reads the element on
+`init` and then only on a *window* resize. An application that started life
+inside a box of no size stays at no size forever.
+
+Which is how the park came out wrong on a desktop. The social layer renders a
+park through a portal into a host the dashboard was still hiding, so the canvas
+initialised at 0×0 and no window resize followed. Two changes, and both are
+worth having: the host now hides with `empty:hidden` — CSS `:empty` stops
+applying in the same commit React appends the portal's child, a render earlier
+than any state could — and `PetHabitat` observes its own host, so a canvas that
+starts at no size recovers instead of staying wrong.
+
+## 20.6 Skeletons
 
 `components/ui/skeleton.tsx` is the one placeholder shape in the product —
 shadcn's `Skeleton`, hand-written to match `card.tsx`'s conventions (there is
@@ -1208,7 +1379,7 @@ never flashes a skeleton for three frames), and once shown it stays at least
 flicker in the other direction). Every skeleton in the product is gated by
 this hook rather than reimplementing its own timing.
 
-## 20.6 The loading screen
+## 20.7 The loading screen
 
 `features/habitat/WorldLoader.tsx` is what covers the habitat frame — and
 **only** the frame, never the tools beside it — while the room is still being

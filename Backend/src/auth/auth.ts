@@ -1,8 +1,16 @@
 import 'dotenv/config';
 import { randomUUID } from 'node:crypto';
+import { Prisma } from '@prisma/client';
 import { betterAuth } from 'better-auth';
 import { prismaAdapter } from 'better-auth/adapters/prisma';
 import { prismaService } from '../prisma/prisma.service';
+import {
+  USERNAME_MAX,
+  deriveUsername,
+  uniqueUsername,
+  usernameKeyOf,
+} from '../users/username';
+import 'dotenv/config';
 
 export const getCorsOrigins = (): string[] => {
   const origins = new Set<string>();
@@ -93,20 +101,30 @@ export const auth = betterAuth({
          * note in 11-schema-additions.md §0.
          */
         after: async (authUser) => {
-          const username = deriveUsername(authUser.name, authUser.email);
+          // A username is unique now (user.prisma), and sign-up is where two
+          // accounts most plausibly collide — two people called "sam", or the
+          // same person's `sam@work` and `sam@home`. So the derived name is
+          // walked until it is free rather than inserted and hoped for.
+          //
+          // There is still a race between the check and the insert, and the
+          // database is what closes it: `usernameKey` is UNIQUE, so a loser
+          // gets a constraint violation and retries with the next candidate.
+          const username = await uniqueUsername(
+            deriveUsername(authUser.name, authUser.email),
+            async (key) =>
+              (await prismaService.user.count({ where: { usernameKey: key } })) > 0,
+          );
 
-          const user = await prismaService.user.create({
-            data: {
-              id: authUser.id,
-              username,
-              email: authUser.email,
-            },
-          });
+          const user = await createUserWithUniqueName(authUser.id, authUser.email, username);
 
+          // `user.username`, not the candidate above: the insert may have had
+          // to take a different name after a collision, and a room called
+          // "sam's Room" belonging to `sam3` is a small lie the product would
+          // then be stuck with.
           await prismaService.environment.create({
             data: {
               ownerId: user.id,
-              name: `${username}'s Room`,
+              name: `${user.username}'s Room`,
             },
           });
         },
@@ -115,8 +133,41 @@ export const auth = betterAuth({
   },
 });
 
-function deriveUsername(name: string, email: string): string {
-  const trimmed = name?.trim();
-  if (trimmed) return trimmed;
-  return email.split('@')[0] ?? 'newcomer';
+/**
+ * Insert the domain `User`, retrying past a username collision.
+ *
+ * `uniqueUsername` above asks the database whether each candidate is free, and
+ * between that answer and this insert another sign-up can take the name. The
+ * window is small and the consequence is a failed registration, which is not a
+ * thing to leave to luck — so a `P2002` on `usernameKey` is caught and the next
+ * candidate tried.
+ *
+ * Bounded, and the bound is generous: five collisions in a row on a name that
+ * was free a millisecond ago is not contention, it is a bug somewhere else, and
+ * failing loudly is better than looping.
+ */
+async function createUserWithUniqueName(
+  id: string,
+  email: string,
+  candidate: string,
+): Promise<{ id: string; username: string }> {
+  let username = candidate;
+
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      return await prismaService.user.create({
+        data: { id, username, usernameKey: usernameKeyOf(username), email },
+        select: { id: true, username: true },
+      });
+    } catch (error) {
+      const taken =
+        error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
+      if (!taken) throw error;
+
+      const suffix = Math.random().toString(36).slice(2, 6);
+      username = `${candidate.slice(0, USERNAME_MAX - suffix.length)}${suffix}`;
+    }
+  }
+
+  throw new Error('Could not allocate a unique username for a new account.');
 }

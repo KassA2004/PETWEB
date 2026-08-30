@@ -87,7 +87,21 @@ export function AuthGate() {
 
   return (
     <Suspense fallback={<Waiting />}>
-      {session ? <Dashboard /> : <AuthScreen onAuthenticated={() => void refetch()} />}
+      {session ? (
+        /*
+         * The id, handed down rather than looked up again.
+         *
+         * `useSession` is a subscription that can refetch, and a refetch flips
+         * `isPending` — which, from *this* component, means the branch below
+         * unmounts and the whole world is rebuilt. Calling it a second time
+         * anywhere under here is therefore not a free read: opening the social
+         * panel did exactly that once, and cost a full dashboard remount and
+         * five refetched requests. Measured, then fixed by passing the value.
+         */
+        <Dashboard userId={session.user.id} />
+      ) : (
+        <AuthScreen onAuthenticated={() => void refetch()} />
+      )}
     </Suspense>
   );
 }

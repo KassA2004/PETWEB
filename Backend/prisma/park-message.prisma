@@ -1,0 +1,29 @@
+// ParkMessage
+// Source: /Docs/API-endpoints/13-social-endpoints.md §9
+//
+// What was said in a park. Persisted, so a refresh does not empty the window
+// and somebody who reconnects can ask for what they missed.
+//
+// It dies with the park (`ON DELETE CASCADE`), and that is correct rather than
+// lossy: a park is a place that existed for an afternoon, and the conversation
+// in it is part of the place. A conversation meant to be kept is a direct
+// message, which has its own table and its own lifetime.
+
+model ParkMessage {
+  id       String @id @default(uuid()) @db.Uuid
+  parkId   String @db.Uuid
+  senderId String @db.Uuid
+
+  /// 1-400 chars, trimmed. Stored exactly as typed; escaping belongs to the
+  /// renderer, and a database that stores pre-escaped text is a database that
+  /// eventually shows somebody an ampersand entity.
+  body String
+
+  createdAt DateTime @default(now())
+
+  park   Park @relation(fields: [parkId], references: [id], onDelete: Cascade)
+  sender User @relation(fields: [senderId], references: [id], onDelete: Cascade)
+
+  /// The history query: one park, newest first.
+  @@index([parkId, createdAt])
+}

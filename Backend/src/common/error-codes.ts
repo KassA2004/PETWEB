@@ -22,6 +22,25 @@ export const ErrorCode = {
   FOCUS_NOT_FINISHED: 'FOCUS_NOT_FINISHED',
   /** An upload cannot be deleted because a memory still points at it. */
   FILE_IN_USE: 'FILE_IN_USE',
+
+  // --- The social layer (13-social-endpoints.md) ---------------------------
+  /** Somebody already has that username. Distinct from a plain CONFLICT. */
+  USERNAME_TAKEN: 'USERNAME_TAKEN',
+  /**
+   * The friendship cannot be in the state that was asked for.
+   *
+   * Covers adding yourself, adding somebody you are already friends with, and
+   * accepting a request that is not yours to accept. One code rather than
+   * three, because the client's response to all of them is the same — show the
+   * message and re-read the relationship — and the message says which it was.
+   */
+  FRIENDSHIP_INVALID: 'FRIENDSHIP_INVALID',
+  /** The park is full. Counted under a row lock, never by the client. */
+  PARK_FULL: 'PARK_FULL',
+  /** Wrong or missing passcode for a private park. */
+  PARK_PASSCODE_REQUIRED: 'PARK_PASSCODE_REQUIRED',
+  /** The park stopped existing — everybody left while this request was in flight. */
+  PARK_CLOSED: 'PARK_CLOSED',
   INTERNAL_ERROR: 'INTERNAL_ERROR',
 } as const;
 

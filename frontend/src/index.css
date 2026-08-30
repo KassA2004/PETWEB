@@ -59,6 +59,38 @@ body {
 }
 
 /*
+ * The height the page may actually use.
+ *
+ * `100svh` until `lib/useViewport.ts` measures something better — which it does
+ * on the first frame, and again whenever a keyboard opens or a phone is turned
+ * over. The fallback is what renders during that first frame and on any browser
+ * without `visualViewport`, and `svh` is the right one to fall back to: it is
+ * the *small* viewport, so a page sized by it is never taller than the screen
+ * even while the address bar is expanded.
+ */
+:root {
+  --app-height: 100svh;
+  --keyboard-inset: 0px;
+}
+
+/*
+ * A phone is a thing you touch, and touching it must not do browser things.
+ *
+ * `overscroll-behavior: none` kills pull-to-refresh and the rubber-band at the
+ * ends of the tools column — both of which, in a shell that does not scroll,
+ * read as the page coming loose. `-webkit-tap-highlight-color` removes the grey
+ * flash Safari paints over every tap target, which fights every hover and press
+ * state in `components/ui`.
+ */
+@media (pointer: coarse) {
+  html,
+  body {
+    overscroll-behavior: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
+/*
  * Range inputs are the customizer's main control, so they get styled once here
  * rather than per component.
  */
@@ -287,6 +319,23 @@ input[type='range']:focus-visible::-webkit-slider-thumb {
  * the pointer rather than the click. Two per cent is not visible as movement —
  * it is felt as give.
  */
+/*
+ * No double-tap-to-zoom delay on anything you press.
+ *
+ * A browser waits ~300ms after a tap on an element that could be double-tapped
+ * to zoom, in case a second tap is coming. On a control it is a control that
+ * feels broken. `manipulation` keeps panning and pinch-zoom and gives up only
+ * the double-tap gesture, which nothing here uses.
+ */
+button,
+[role='tab'],
+[role='button'],
+label,
+input[type='range'],
+input[type='checkbox'] {
+  touch-action: manipulation;
+}
+
 .press {
   transition:
     transform 90ms cubic-bezier(0.2, 0.8, 0.3, 1),

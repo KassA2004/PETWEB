@@ -1,0 +1,30 @@
+// Conversation
+// Source: /Docs/API-endpoints/13-social-endpoints.md §9
+//
+// The direct-message thread between two people.
+//
+// The pair is stored **ordered** — `userAId` is always the lexicographically
+// smaller uuid — which is what makes the unique constraint mean "one thread per
+// pair" rather than "one thread per pair per direction". Without the ordering,
+// A messaging B and B messaging A at the same moment produce two threads and
+// neither person ever sees the other's messages.
+
+model Conversation {
+  id      String @id @default(uuid()) @db.Uuid
+  userAId String @db.Uuid
+  userBId String @db.Uuid
+
+  createdAt DateTime @default(now())
+
+  /// Bumped on every message, so the conversation list can sort by activity
+  /// without an aggregate over the messages.
+  lastMessageAt DateTime @default(now())
+
+  userA    User            @relation("ConversationA", fields: [userAId], references: [id], onDelete: Cascade)
+  userB    User            @relation("ConversationB", fields: [userBId], references: [id], onDelete: Cascade)
+  messages DirectMessage[]
+
+  @@unique([userAId, userBId])
+  @@index([userAId, lastMessageAt])
+  @@index([userBId, lastMessageAt])
+}

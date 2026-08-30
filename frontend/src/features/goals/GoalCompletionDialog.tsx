@@ -109,6 +109,22 @@ function CompletionForm({
 }) {
   const [picked, setPicked] = useState<Picked | null>(null);
   const [note, setNote] = useState('');
+  /**
+   * Whether anybody who looks this account up may see the memory.
+   *
+   * **Off.** Private is the default here, in the DTO, in the column and in the
+   * migration that backfilled every memory written before this existed — four
+   * places agreeing, because this is the one setting in the product that must
+   * never fail open. A memory is something somebody kept for themselves until
+   * they say otherwise.
+   *
+   * Asked here rather than in the memory book because this is the only moment
+   * the user is actually thinking about the thing they just finished. A
+   * visibility switch buried in a list is a switch nobody ever finds — and the
+   * book can still change it afterwards, which is what keeps this decision
+   * cheap to make.
+   */
+  const [share, setShare] = useState(false);
   const [stage, setStage] = useState<Stage>('asking');
   const [error, setError] = useState<string | null>(null);
   /** Set once an upload has failed, so the retry can offer to give up on it. */
@@ -192,7 +208,14 @@ function CompletionForm({
     const keepMemory = Boolean(imageUrl) || trimmed.length > 0;
 
     const completed = await onConfirm(
-      keepMemory ? { title: goal.title, description: trimmed, imageUrl } : undefined,
+      keepMemory
+        ? {
+            title: goal.title,
+            description: trimmed,
+            imageUrl,
+            visibility: share ? 'public' : 'private',
+          }
+        : undefined,
     );
 
     if (!completed) {
@@ -296,6 +319,37 @@ function CompletionForm({
           disabled={busy}
         />
       </div>
+
+      {/*
+        Only offered once there is a memory to share. A switch above an empty
+        note is a question about something that does not exist yet, and the
+        answer to it would be silently discarded — the completion sends no
+        memory at all when there is nothing in it.
+      */}
+      {(picked || note.trim()) && (
+        <label
+          className={cn(
+            'animate-rise flex cursor-pointer items-start gap-3 rounded-xl border p-3 transition-colors',
+            share ? 'border-primary/50 bg-primary/5' : 'border-border hover:bg-muted/40',
+          )}
+        >
+          <input
+            type="checkbox"
+            checked={share}
+            onChange={(event) => setShare(event.target.checked)}
+            disabled={busy}
+            className="mt-0.5 size-4 shrink-0 accent-[var(--color-primary)]"
+          />
+          <span className="min-w-0">
+            <span className="block text-sm font-medium">Let visitors see this one</span>
+            <span className="block text-xs text-muted-foreground">
+              {share
+                ? 'Anyone who looks you up will find it. You can take it back later.'
+                : 'Kept to yourself. Only you will see it in your book.'}
+            </span>
+          </span>
+        </label>
+      )}
 
       {error && (
         <div className="animate-shake space-y-2 rounded-xl border border-destructive/40 bg-destructive/10 p-3">

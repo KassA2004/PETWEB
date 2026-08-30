@@ -183,7 +183,28 @@ export function createLighting(options: LightingOptions): LightingLayers {
   );
   ambient.addChild(spill);
 
-  // --- Overlay: the mood sheet and the frame ------------------------------
+  return { haze, ambient, overlay: createMoodOverlay(ambience, width, height) };
+}
+
+/**
+ * The mood sheet and the frame — the two things that go over *everything*.
+ *
+ * Split out of `createLighting` when the park arrived. The rest of that
+ * function is about a window: a shaft through the glass, a pool where it lands,
+ * a spill down the wall beneath it. Outdoors has none of those and still needs
+ * these two, because the wash and the vignette are what make the hour read at
+ * all — a park at midnight without them is a park at noon with green grass.
+ *
+ * So this is one function rather than a copy, and both environments call it.
+ * The alternative was a park that reimplemented a vignette slightly
+ * differently, which is exactly the drift `AGENTS.md` means by duplicate
+ * systems.
+ */
+export function createMoodOverlay(
+  ambience: Ambience,
+  width: number,
+  height: number,
+): Container {
   const overlay = new Container();
   overlay.label = 'lighting-overlay';
 
@@ -216,7 +237,7 @@ export function createLighting(options: LightingOptions): LightingLayers {
   }
   overlay.addChild(vignette);
 
-  return { haze, ambient, overlay };
+  return overlay;
 }
 
 /** Where the window's light lands, for a window at this place on the wall. */

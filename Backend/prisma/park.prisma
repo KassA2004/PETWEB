@@ -1,0 +1,61 @@
+// Park
+// Source: /Docs/API-endpoints/13-social-endpoints.md §5-7
+//
+// A temporary shared space. Somebody opens one, other people's creatures walk
+// into it, and when the last person leaves it stops existing.
+//
+// Why a table at all, for something temporary
+// -------------------------------------------
+// Three of a park's facts have to be answered by something other than a live
+// socket, and each one is a security decision rather than a convenience:
+//
+//   capacity      enforced by a row lock on THIS row inside the joining
+//                 transaction, which is what makes "the last free slot" safe
+//                 when two people race for it (see parks.service.ts)
+//   the passcode  a private park's credential is a scrypt hash, and a hash held
+//                 only in a process's memory is a hash that a restart turns
+//                 into "anyone may enter"
+//   discovery     a list of parks has to survive the moment between one client
+//                 creating one and another client asking what is open
+//
+// What is NOT here is presence: where a creature is standing, what it is doing
+// and which way it is facing are per-frame facts. They live in the gateway's
+// memory and are never written down (10-realtime-events.md §1).
+//
+// Lifecycle: `ParksService.sweep()` deletes parks nobody is in, on an interval
+// and on boot. Nothing here is expected to outlive the people in it — see the
+// note on `ParkParticipant.lastSeenAt`.
+
+model Park {
+  id     String @id @default(uuid()) @db.Uuid
+  hostId String @db.Uuid
+
+  /// What it is called in the list. 1-40 chars.
+  name String
+
+  /// How many creatures may be in it at once, including the host's.
+  capacity Int @default(6)
+
+  /// `public` | `private`.
+  ///
+  /// A public park is listed and joinable by anyone signed in. A private one is
+  /// listed by name only — never with its credential — and needs the passcode.
+  visibility String @default("public")
+
+  /// scrypt hash of the passcode, or null for a public park.
+  ///
+  /// Never leaves the backend. No route, view or socket payload includes this
+  /// column, and `toParkView` is built field by field rather than by spreading
+  /// the row, so a column added later cannot leak by being forgotten about.
+  passcodeHash String?
+
+  createdAt DateTime @default(now())
+
+  host         User              @relation(fields: [hostId], references: [id], onDelete: Cascade)
+  participants ParkParticipant[]
+  messages     ParkMessage[]
+
+  /// The list query: open parks, newest first.
+  @@index([visibility, createdAt])
+  @@index([hostId])
+}

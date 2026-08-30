@@ -67,6 +67,8 @@ import {
   createShakeClip,
 } from '../animation/clips/Handling';
 import { createInteractionClip } from '../animation/clips/Interactions';
+import { createSocialClip } from '../animation/clips/Social';
+import type { SocialClipKind, SocialRole } from '../animation/clips/Social';
 import { PetBrain } from '../simulation/PetBrain';
 import type { Intent, PetBehavior, PerceivedObject } from '../simulation/PetBrain';
 import { NavGrid, Navigator } from '../simulation/navigation';
@@ -132,8 +134,57 @@ import type { RoomSound, RoomSoundKind } from './room/RoomSound';
 import { createWallGuide } from './room/WallGuide';
 import type { WallGuideView } from './room/WallGuide';
 import { PropMotion, motionStyleFor } from './room/PropMotion';
+import { VisitorPets } from './room/Visitors';
+import type {
+  VisitorHit,
+  VisitorSpec,
+  VisitorState,
+  VisitorTransform,
+} from './room/Visitors';
 
 const PET_SCALE = 0.8;
+
+/**
+ * How often the local creature's position leaves the machine, in a park.
+ *
+ * Ten a second. Not sixty, because the receiving end interpolates anyway
+ * (`room/Visitors.ts`) and fifty of those updates would be discarded by the
+ * smoothing; not two, because at that rate the smoothing has to guess for half
+ * a second at a time and a creature changing direction visibly overshoots.
+ *
+ * `10-realtime-events.md` §1 forbids per-frame animation data over the socket.
+ * This is not that: it is a position and a word for what the creature is doing,
+ * which the far end animates itself.
+ */
+const TRANSMIT_HZ = 10;
+
+/**
+ * The animation controller's vocabulary, narrowed to the network's.
+ *
+ * Two vocabularies rather than one, and the mapping is deliberately lossy: the
+ * wire format has to survive this codebase adding an animation state without
+ * every other client in the world needing to understand it, and several states
+ * are nobody else's business. Being *held* is between a creature and the person
+ * holding it; being dizzy is a private matter.
+ */
+function syncStateFor(state: PetStateName): VisitorState {
+  switch (state) {
+    case 'hop':
+      return 'walk';
+    case 'run':
+      return 'run';
+    case 'sit':
+      return 'sit';
+    case 'sleep':
+      return 'sleep';
+    case 'play':
+      return 'play';
+    case 'discover':
+      return 'notice';
+    default:
+      return 'idle';
+  }
+}
 
 /**
  * How fast a contact has to be before the room reports it as a noise.
@@ -336,6 +387,21 @@ export interface PlacedObjectSnapshot {
 export interface PetRoomOptions {
   appearance?: PetAppearanceInput;
   fit?: 'cover' | 'contain';
+  /**
+   * How much larger than the fit the room is drawn. 1 is exactly fitted.
+   *
+   * A phone's problem is that a 16:9 room in a 9:19.5 screen is a letterbox
+   * however wide it is made, and the interesting part of the room — the floor,
+   * and the creature standing on it — is in the middle. A few percent of
+   * overscale spends the top of the back wall, which is empty plaster, on making
+   * everything else bigger. Anything past about 1.06 starts eating the wall
+   * decor rail, so this is a nudge and not a camera.
+   *
+   * Multiplied into the fit rather than applied to the container, so the
+   * projection, the pointer mapping (`root.toLocal`) and the depth scale all
+   * stay in agreement — there is one transform, and this is part of it.
+   */
+  zoom?: number;
   onStatus?: (status: RoomStatus) => void;
   /** Which room the creature lives in. Defaults to the farmhouse. */
   environment?: EnvironmentDefinition;
@@ -363,6 +429,25 @@ export interface PetRoomOptions {
   onObjectRemoved?: (id: string) => void;
   /** Somewhere for the room to send things worth hearing. */
   onSound?: (event: RoomSound) => void;
+  /**
+   * Where the local creature is, for the network to relay.
+   *
+   * Fired on a fixed schedule (`TRANSMIT_HZ`) rather than every frame, because
+   * this is the one thing in the room that leaves the machine and the receiving
+   * end interpolates anyway (`room/Visitors.ts`). Sixty updates a second would
+   * be fifty of them thrown away by the smoothing at the far end.
+   *
+   * Absent outside a park, and then nothing is sent at all.
+   */
+  onTransform?: (transform: VisitorTransform) => void;
+  /**
+   * Somebody tapped another person's creature.
+   *
+   * The room reports the hit and has no opinion about what it means — whether
+   * an interaction is allowed is the server's decision, and the panel beside
+   * the room is where it is asked for.
+   */
+  onVisitorPicked?: (hit: VisitorHit | null) => void;
 }
 
 /**
@@ -393,12 +478,32 @@ export class PetRoom {
   private nightOverlay: Graphics;
   private tick: (ticker: { deltaMS: number }) => void;
   private fit: 'cover' | 'contain';
+  private zoom: number;
   private onStatus?: (status: RoomStatus) => void;
   private onObjectRemoved?: (id: string) => void;
   private onWallDecorChange?: (decor: WallDecorPlacement[]) => void;
   private onRemovedChange?: (removed: string[]) => void;
   private onArrangementChange?: () => void;
   private onSound?: (event: RoomSound) => void;
+  private onTransform?: (transform: VisitorTransform) => void;
+  private onVisitorPicked?: (hit: VisitorHit | null) => void;
+
+  /**
+   * Other people's creatures, when there are any.
+   *
+   * Built unconditionally and empty outside a park, because a `Map` with
+   * nothing in it costs one allocation and the alternative is a null check on
+   * the hot path of every frame and every pointer event. See `room/Visitors.ts`
+   * for why they are puppets rather than simulations.
+   */
+  private visitors: VisitorPets;
+
+  /** Seconds until the local creature's position is next sent. */
+  private transmitIn = 0;
+  /** What was last sent, so an unchanged creature is not re-sent. */
+  private lastSent: VisitorTransform | null = null;
+  /** The last direction the local creature was travelling, for the network. */
+  private facing: -1 | 1 = 1;
 
   /**
    * The room the creature is currently living in, and the containers it built.
@@ -486,6 +591,22 @@ export class PetRoom {
   private lightsOn = true;
   /** True while a focus session owns the room. See `setFocus`. */
   private focused = false;
+  /**
+   * Whether anything in the room answers the pointer.
+   *
+   * False while visiting somebody else's room, and that is the whole of the
+   * read-only mode: you can look at their creature and their arrangement, and
+   * you cannot pick either up. Enforced here rather than by not attaching the
+   * page's pointer handlers, for the same reason `focused` is — this is the
+   * trust boundary, and a lock that lives in a React component is a lock the
+   * next entry point forgets about (there are three ways in: the canvas, the
+   * wall palette and the habitat's own imperative handle).
+   *
+   * Not the same switch as `focused`, deliberately. A focus session also turns
+   * the lights out and puts the creature to bed; a visit changes nothing about
+   * the room except that it is not yours to rearrange.
+   */
+  private interactive = true;
   /**
    * True while the user is rearranging rather than playing.
    *
@@ -593,12 +714,15 @@ export class PetRoom {
   constructor(app: Application, options: PetRoomOptions = {}) {
     this.app = app;
     this.fit = options.fit ?? 'cover';
+    this.zoom = options.zoom ?? 1;
     this.onStatus = options.onStatus;
     this.onWallDecorChange = options.onWallDecorChange;
     this.onRemovedChange = options.onRemovedChange;
     this.onArrangementChange = options.onArrangementChange;
     this.onObjectRemoved = options.onObjectRemoved;
     this.onSound = options.onSound;
+    this.onTransform = options.onTransform;
+    this.onVisitorPicked = options.onVisitorPicked;
     this.environment = options.environment ?? DEFAULT_ENVIRONMENT;
     this.style = normalizeRoomStyle(options.style ?? DEFAULT_ROOM_STYLE);
     this.mood = resolveMood(this.style);
@@ -642,6 +766,10 @@ export class PetRoom {
     this.stageLayer.label = 'stage';
     this.stageLayer.sortableChildren = true;
     this.root.addChild(this.stageLayer);
+
+    // Visitors go into the same sortable layer as the furniture and the local
+    // creature, which is the whole reason they sort correctly against both.
+    this.visitors = new VisitorPets(this.stageLayer);
 
     this.atmosphereLayer = new Container();
     this.atmosphereLayer.label = 'atmosphere';
@@ -1418,6 +1546,203 @@ export class PetRoom {
   }
 
   /** Every lamp in the room, whichever room it is. */
+  // --- Other people's creatures ---------------------------------------------
+
+  /**
+   * Somebody else's creature walks in.
+   *
+   * The appearance comes from the caller, which got it from the *server*, which
+   * read it from that user's own `Pet` row. Nothing on this path ever takes a
+   * rig from a client — see the gateway's class comment for why that matters.
+   *
+   * Arrivals are spread around the environment's `petStart` rather than dropped
+   * on it, so six creatures joining a park in the same second do not appear as
+   * one creature with a lot of ears. The spread is deterministic in the user's
+   * id, so everybody watching sees each arrival in the same place.
+   */
+  addVisitor(spec: VisitorSpec, at?: { x: number; z: number }): void {
+    this.visitors.add(spec, at ?? this.arrivalSpot(spec.userId));
+  }
+
+  /** A position update from the network. */
+  moveVisitor(userId: string, transform: VisitorTransform): void {
+    this.visitors.move(userId, transform);
+  }
+
+  /** Somebody else's creature walks out. */
+  removeVisitor(userId: string): void {
+    this.visitors.remove(userId);
+    if (this.selectedVisitor === userId) this.selectVisitor(null);
+  }
+
+  /** Everybody leaves — the park closed, or this client did. */
+  clearVisitors(): void {
+    this.visitors.clear();
+    this.selectVisitor(null);
+  }
+
+  /** Where a visitor's creature is, so the caller can measure a distance. */
+  visitorPosition(userId: string): { x: number; z: number } | null {
+    return this.visitors.positionOf(userId);
+  }
+
+  /** Where the local creature is, in the same terms a visitor reports. */
+  localPosition(): { x: number; z: number } {
+    const body = this.petEntity.body;
+    return { x: body.position.x, z: body.position.z };
+  }
+
+  /**
+   * Two creatures do something to each other.
+   *
+   * The server said it happened; this makes it visible. Both halves are played
+   * from here — the local creature's on its own controller, a visitor's on
+   * theirs — because they are one event and their timing has to agree: the same
+   * clip factory, the same duration, and each one turned toward the other.
+   *
+   * Silently does nothing when neither party is in this room. That is not a
+   * swallowed error: a `park:interaction` is broadcast to everybody in the
+   * park, and a client that has just left is entitled to receive one for two
+   * creatures it no longer has.
+   */
+  playInteraction(
+    fromUserId: string | null,
+    toUserId: string | null,
+    kind: SocialClipKind,
+    durationMs: number,
+  ): void {
+    const at = (userId: string | null) =>
+      userId === null ? this.localPosition() : this.visitors.positionOf(userId);
+
+    const from = at(fromUserId);
+    const to = at(toUserId);
+    if (!from || !to) return;
+
+    const half = (userId: string | null, role: SocialRole, self: { x: number; z: number }, other: { x: number; z: number }) => {
+      if (userId === null) {
+        this.animation.play(
+          createSocialClip({
+            kind,
+            role,
+            direction: this.visitors.screenDirection(self, other),
+            duration: durationMs / 1000,
+          }),
+        );
+        // The creature stops what it was doing to do this. Without it the brain
+        // walks it away mid-greeting, which reads as being snubbed.
+        this.brain.noticeObject(`visitor:${toUserId ?? fromUserId ?? ''}`, 0.3);
+        return;
+      }
+
+      this.visitors.play(userId, kind, role, other, durationMs);
+    };
+
+    half(fromUserId, 'actor', from, to);
+    half(toUserId, 'target', to, from);
+
+    // Something happened between two creatures; the room says so, and the
+    // mixer decides what that sounds like (AGENTS.md — Audio Rules).
+    this.emitSound('pet-happy', 0.5, from);
+  }
+
+  /**
+   * Which visitor the user currently has selected, if any.
+   *
+   * Held here rather than in React because the selection is made *in the room*,
+   * by tapping a creature, and the ring drawn under it is part of the room.
+   */
+  private selectedVisitor: string | null = null;
+
+  private selectVisitor(userId: string | null): void {
+    if (this.selectedVisitor === userId) return;
+    this.selectedVisitor = userId;
+
+    const hit = userId ? this.visitors.hitFor(userId) : null;
+    this.onVisitorPicked?.(hit);
+  }
+
+  /**
+   * Where an arriving creature stands.
+   *
+   * Deterministic in the user's id, so every client places the same arrival in
+   * the same spot without the server having to say — one less thing to
+   * synchronise, and one less packet on a join.
+   */
+  private arrivalSpot(userId: string): { x: number; z: number } {
+    let hash = 0;
+    for (let i = 0; i < userId.length; i += 1) {
+      hash = (hash * 31 + userId.charCodeAt(i)) | 0;
+    }
+
+    const spread = Math.abs(hash % 1000) / 1000;
+    const start = this.environment.petStart;
+    const bounds = this.world.bounds;
+
+    return {
+      x: Math.min(
+        bounds.maxX - 60,
+        Math.max(bounds.minX + 60, start.x + (spread - 0.5) * 620),
+      ),
+      z: Math.min(
+        bounds.maxZ - 40,
+        Math.max(bounds.minZ + 40, start.z - ((hash >> 10) % 3) * 110),
+      ),
+    };
+  }
+
+  /**
+   * Send where the local creature is, at a fixed rate.
+   *
+   * Two things keep this cheap. It runs on a timer rather than every frame, and
+   * it does not send an update that says the same thing as the last one — a
+   * creature asleep in the corner of a park costs nothing at all, which matters
+   * because most creatures in most parks are doing nothing most of the time.
+   */
+  private transmit(dt: number): void {
+    if (!this.onTransform) return;
+
+    this.transmitIn -= dt;
+    if (this.transmitIn > 0) return;
+    this.transmitIn = 1 / TRANSMIT_HZ;
+
+    const body = this.petEntity.body;
+
+    // Screen velocity, not world x: a creature walking straight at the viewer
+    // has no world-x velocity at all, and the last non-zero sign is kept so a
+    // creature that has stopped still reports which way it came to rest — the
+    // same reasoning `PetRoom.update` gives for driving the lean from this
+    // number rather than from `velocity.x`.
+    const vx = screenVelocityX(
+      body.position.x,
+      body.position.z,
+      body.velocity.x,
+      body.velocity.z,
+    );
+
+    if (Math.abs(vx) > 12) this.facing = vx > 0 ? 1 : -1;
+
+    const next: VisitorTransform = {
+      x: Math.round(body.position.x),
+      z: Math.round(body.position.z),
+      facing: this.facing,
+      state: syncStateFor(this.animation.state),
+    };
+
+    const last = this.lastSent;
+    if (
+      last &&
+      last.state === next.state &&
+      last.facing === next.facing &&
+      Math.abs(last.x - next.x) < 2 &&
+      Math.abs(last.z - next.z) < 2
+    ) {
+      return;
+    }
+
+    this.lastSent = next;
+    this.onTransform(next);
+  }
+
   private lamps(): Entity[] {
     return [...this.entities.values()].filter((entity) => entity.type === 'lamp');
   }
@@ -1500,6 +1825,29 @@ export class PetRoom {
    * always let you pick a chair up. This adds one thing: somewhere to put it
    * down that means "away".
    */
+  /**
+   * Look, but do not touch.
+   *
+   * Turns the pointer off across the whole room — dragging, tapping, the wall
+   * palette and the light switch — without changing anything about how the room
+   * looks or what the creature is doing. It carries on living its life; you are
+   * simply a visitor.
+   */
+  setInteractive(on: boolean): void {
+    if (this.interactive === on) return;
+    this.interactive = on;
+
+    // Anything in hand is put back where it came from. Leaving a chair floating
+    // because the mode changed mid-drag would be a room the user cannot fix.
+    if (!on) {
+      if (this.grabbed) this.pointerUp();
+      this.wallDragCancel();
+      this.hover = null;
+    }
+
+    this.emitStatus();
+  }
+
   setEditing(on: boolean): void {
     if (this.editing === on) return;
     this.editing = on;
@@ -1689,9 +2037,31 @@ export class PetRoom {
     // this is the trust boundary: the habitat, the wall palette and the room's
     // own canvas all arrive through these three methods, and a lock that lives
     // in a React component is a lock the next entry point forgets about.
-    if (this.focused) return false;
+    //
+    // Two ways to be unavailable, and they mean different things: an hour is
+    // running (`focused`), or this room belongs to somebody else
+    // (`interactive`).
+    if (this.focused || !this.interactive) return false;
 
     const point = this.root.toLocal({ x: canvasX, y: canvasY });
+
+    // Other people's creatures first. They stand in front of the furniture
+    // rather than among it — they have no physics body, so `pickAt` cannot see
+    // them at all — and a tap on somebody's pet has to mean *that pet* even
+    // where it is overlapping a chair.
+    //
+    // Selecting is all that happens here. Whether an interaction is allowed is
+    // the server's decision (proximity, cooldown, membership), and it is asked
+    // for from the panel beside the room. A scene that decided for itself would
+    // be the client claiming an authority it does not have.
+    const visitor = this.visitors.pick(point.x, point.y);
+    if (visitor) {
+      this.selectVisitor(visitor.userId);
+      // The creature looks over at whoever was just pointed at, which is the
+      // whole of "my pet noticed the one you tapped".
+      this.brain.noticeObject(`visitor:${visitor.userId}`, 0.35);
+      return false;
+    }
 
     const bodies = this.world.bodies;
     const body = pickAt(bodies, point.x, point.y, (candidate) => {
@@ -1699,7 +2069,12 @@ export class PetRoom {
       return entity !== undefined && entity.reachable;
     });
 
-    if (!body) return false;
+    if (!body) {
+      // Tapping the grass deselects. A selection you cannot clear is a
+      // selection that eventually points at somebody who has left.
+      this.selectVisitor(null);
+      return false;
+    }
 
     const entity = this.entities.get(body.id);
     if (!entity) return false;
@@ -2118,7 +2493,7 @@ export class PetRoom {
 
   /** Start hanging a new piece, or picking up an already-hung one to move it. */
   wallDragStart(kind: WallDecorKind, existingId?: string): void {
-    if (this.focused) return;
+    if (this.focused || !this.interactive) return;
 
     this.wallDrag = {
       kind,
@@ -2446,6 +2821,14 @@ export class PetRoom {
       this.syncEntity(entity, ghosts);
     }
 
+    // Other people's creatures, on the same clock as everything else in the
+    // room. A separate ticker would drift, and drift between a creature and the
+    // ground it is standing on is visible immediately.
+    this.visitors.update(dt);
+
+    // And ours, going the other way. Rate-limited and change-gated inside.
+    this.transmit(dt);
+
     this.updateGuide(dt);
 
     // Night fades rather than snaps: the switch is instant, the room settling
@@ -2494,6 +2877,39 @@ export class PetRoom {
         affordance: entity.affordance
           ? { ...entity.affordance, supply: this.supplyOf(entity) }
           : null,
+      });
+    }
+
+    // Other people's creatures, offered to the brain as things standing in the
+    // room. Not a new kind of perception and not a new behaviour: "go and see
+    // what that is" is a decision the brain already makes, and what is
+    // different about another creature is only how interesting it is
+    // (`PetBrain`'s ANOTHER_CREATURE). That one weight is the whole behavioural
+    // half of the park — a creature wanders over to the others because they are
+    // the most interesting things on the lawn, and nothing about it is scripted.
+    //
+    // `reachable` and nothing else: a visitor has no collider here, so the
+    // navigator routes *to* it and the physics never has to resolve two
+    // creatures occupying one another. Two simulations arguing about a contact
+    // neither of them owns is exactly the class of bug this avoids.
+    for (const userId of this.visitors.ids()) {
+      const at = this.visitors.positionOf(userId);
+      if (!at) continue;
+
+      objects.push({
+        id: `visitor:${userId}`,
+        x: at.x,
+        z: at.z,
+        height: 0,
+        speed: 0,
+        radius: 42,
+        isToy: false,
+        isCritter: false,
+        isPet: true,
+        restHeight: null,
+        comfort: 0,
+        reachable: true,
+        affordance: null,
       });
     }
 
@@ -2578,6 +2994,12 @@ export class PetRoom {
    * stopped moving.
    */
   pointerHover(canvasX: number, canvasY: number): void {
+    // Somebody else's creature does not react to *your* hand. Their pet's
+    // fondness is a relationship with them, and having it come over to a
+    // visitor's cursor would be the product telling a small lie about who it
+    // likes.
+    if (!this.interactive) return;
+
     const point = this.root.toLocal({ x: canvasX, y: canvasY });
     this.hover = { x: point.x, y: point.y, at: this.time };
   }
@@ -3414,12 +3836,27 @@ export class PetRoom {
     this.layout();
   };
 
+  /**
+   * Change the overscale after the room has been built.
+   *
+   * Focus mode needs this: the room grows to fill the screen and shrinks back,
+   * and rebuilding the scene to do it would put the creature back where it
+   * started — which is the one thing a "look closer" gesture must not do.
+   */
+  setZoom(zoom: number): void {
+    if (zoom === this.zoom) return;
+    this.zoom = zoom;
+    this.layout();
+  }
+
   private layout(): void {
     const { width, height } = this.app.screen;
-    const scale =
+    const fitted =
       this.fit === 'contain'
         ? Math.min(width / SCREEN_WIDTH, height / SCREEN_HEIGHT)
         : Math.max(width / SCREEN_WIDTH, height / SCREEN_HEIGHT);
+
+    const scale = fitted * this.zoom;
 
     this.root.scale.set(scale);
     this.root.position.set(

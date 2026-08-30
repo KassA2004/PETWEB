@@ -17,6 +17,8 @@ export interface GoalMemory {
   title: string;
   description: string;
   imageUrl: string | null;
+  /** Whether the user chose to show this one to visitors. */
+  visibility: 'private' | 'public';
   createdAt: string;
 }
 
@@ -58,6 +60,14 @@ export interface CompletionMemory {
   description?: string;
   /** A path from `uploadImage`, never a URL the client invented. */
   imageUrl?: string;
+  /**
+   * Whether anybody who looks this account up may see it. Defaults to private.
+   *
+   * Asked at the moment the memory is made rather than afterwards, because that
+   * is the only moment the user is thinking about the thing they just finished.
+   * A visibility setting buried in a list is one nobody ever finds.
+   */
+  visibility?: 'private' | 'public';
 }
 
 export function fetchGoals(signal?: AbortSignal): Promise<GoalList> {

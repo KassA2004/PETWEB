@@ -3,7 +3,26 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      `interactive-widget=resizes-content` is the load-bearing part.
+
+      By default a mobile browser leaves the layout viewport at full height when
+      the on-screen keyboard opens and simply covers the bottom of it, so a shell
+      that is exactly one viewport tall puts its composer underneath the
+      keyboard. This asks the browser to shrink the layout viewport instead,
+      which makes `--app-height` correct without any script at all.
+
+      Chrome on Android honours it; iOS does not, and `lib/useViewport.ts` is the
+      fallback that measures `visualViewport` for everything that does not.
+
+      `viewport-fit=cover` lets the page paint under the notch and the home
+      indicator, which is what makes an edge-to-edge room actually reach the
+      edges. Everything that must stay tappable is padded by `env(safe-area-*)`.
+    -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content"
+    />
     <!--
       The API is a different origin, and `get-session` is the request the whole
       dashboard waits behind. Opening the connection while the entry chunk is still

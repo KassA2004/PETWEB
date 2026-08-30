@@ -1,8 +1,38 @@
-# 10 — REALTIME EVENTS `[LATER]`
+# 10 — REALTIME EVENTS — **superseded by [13](./13-social-endpoints.md)**
 
-**Namespace:** `ws://localhost:3000/world`
+**Namespace:** `ws://localhost:3000/world` — built as `/social`
 **Module:** `RealtimeModule`
-**Status:** specified, **not to be implemented now**
+**Status:** the feature was requested and built. This document is kept as the
+design it was built against, not as a description of what exists.
+
+> **Read [13-social-endpoints.md](./13-social-endpoints.md) for the real thing.**
+>
+> This page was written so that shipping realtime later would not require
+> redesigning the REST API. It did not, and that is the one claim here worth
+> keeping: every REST route the social layer needed was either already
+> specified or a clean addition.
+>
+> What it got right, and the implementation kept: the socket authenticates from
+> the same session cookie as REST; §1's list of what must never cross the
+> boundary; and §5's judgement that Redis stays out until more than one process
+> serves sockets.
+>
+> What it got wrong, and why:
+>
+> - **The namespace.** `/world` described visiting an environment. What was
+>   actually built is broader — parks, friends, presence and two kinds of chat
+>   over one connection — so it is `/social`.
+> - **`presence:move { x, y }` as a cursor.** The unit of presence turned out
+>   to be a *creature*, not a cursor: `park:move { x, z, facing, state }`, in
+>   room coordinates, because the thing being synchronised stands on a floor
+>   with depth.
+> - **`room:join { environmentId }`.** Visiting somebody's room is a plain REST
+>   read (`GET /users/:userId/room`) and needs no socket at all — a visitor
+>   watches a creature that is being simulated in their own browser. The socket
+>   is for *parks*, which are the places two people are in at once.
+> - **§6's sharing model.** The proposal was `Environment.visibility`. A room
+>   turned out not to need one: a room is visitable, its *memories* are what
+>   carry visibility. That column was never added.
 
 WebSockets are in the stack (`techStack.md`) but exist for shared environments and
 presence — a future feature (`project-overview.md` §12). The MVP is single-user and

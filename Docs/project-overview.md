@@ -256,6 +256,7 @@ the object store and the Pet panel the wardrobe. See `room-and-objects.md` §7c.
 * Generate a memory from important events
 * View memories
 * Attach images/photos where applicable
+* Choose whether a memory is private (the default) or shared
 
 ---
 
@@ -438,21 +439,36 @@ AI should not control every pet action or every animation frame.
 
 # 12. Social Features
 
-Social functionality is a future feature.
+**Built.** See `API-endpoints/13-social-endpoints.md` for the whole surface.
 
-Possible future features include:
+This section used to say social functionality was a future feature and that it
+should not complicate the initial architecture. It was requested, and the second
+half of that sentence turned out to be the useful part: almost nothing had to
+change to accommodate it.
 
-* Shared rooms
-* Visiting another user's environment
-* Seeing other pets
-* Pet interactions
-* Shared events
-* Public spaces
-* Trading objects
+| Listed as possible | Built as |
+|---|---|
+| Visiting another user's environment | `GET /users/:userId/room`, rendered through the **same** `PetHabitat` the owner uses, read-only |
+| Seeing other pets | Visitors in the same PixiJS scene, depth-sorted with the furniture, drawn by the same `PetRenderer` |
+| Pet interactions | Four kinds, server-arbitrated, eight animation clips |
+| Public spaces | Parks — temporary, capacity-bounded, optionally passcode-protected |
+| Shared rooms | *not* built. A room belongs to one person; a park is the shared place |
+| Shared events | *not* built |
+| Trading objects | *not* built — there is no item ownership to trade. See 13 §12.1 |
 
-These should not complicate the initial architecture unnecessarily.
+What the social layer is **not**, and this is the load-bearing constraint:
 
-The MVP is primarily single-user.
+> There is no profile, no feed, no follower count and no posts.
+
+The product's answer to "who is this person" is their creature and the room it
+lives in (§16). You find somebody by username, and what you find is a pet.
+Everything a person does to another person, they do to an animal — which is the
+difference between this and a social network with a game attached.
+
+**The MVP loop is unchanged.** The social layer extends it at exactly one point:
+a memory made by finishing a goal can now be shared. Otherwise it adds a place
+to go rather than a step to take, which is why the whole surface sits behind one
+lazy boundary and opens no connection until somebody asks for it.
 
 ---
 

@@ -2,9 +2,34 @@
 // Source: /Docs/InitialDB-plan.md - "User"
 
 model User {
-  id       String @id @default(uuid()) @db.Uuid
+  id String @id @default(uuid()) @db.Uuid
+
+  /// The name other people find this account by, spelled the way its owner
+  /// spells it. 3-24 chars, `[a-zA-Z0-9_-]`.
+  ///
+  /// **Unique, at the database level** — see `usernameKey`, which is what the
+  /// constraint is actually on. The social layer's whole discovery model is
+  /// "type a username", and a username that can name two accounts is not a way
+  /// to find someone; it is a way to visit the wrong person's room.
   username String
-  email    String
+
+  /// `username` lowercased. The column the uniqueness is really on.
+  ///
+  /// Two columns for one fact, deliberately, and this is the argument. The
+  /// constraint has to be **case-insensitive** — `Kass` and `kass` naming two
+  /// accounts is the same failure as two `kass`es — and the natural expression
+  /// of that is a unique index on `lower(username)`. Prisma cannot declare a
+  /// functional index, so the next `prisma migrate dev` would generate a
+  /// migration dropping it again; that is the same trap documented on
+  /// `FocusSession` (11-schema-additions.md §6), and it is not a trap worth
+  /// walking into for the one column the entire social layer is keyed on.
+  ///
+  /// A plain column Prisma understands cannot be dropped behind our backs, and
+  /// it makes the lookup an index hit rather than a `mode: 'insensitive'` scan.
+  /// `UsersService.setUsername` is the only writer, and it writes both.
+  usernameKey String @unique
+
+  email String
 
   /// Which saved pet the user is currently looking after.
   ///
@@ -50,4 +75,19 @@ model User {
   inventoryItems InventoryItem[]
   goals          Goal[]
   focusSessions  FocusSession[]
+
+  // --- The social layer (13-social-endpoints.md) ---------------------------
+  // Two relations per symmetric relationship, because a relationship between
+  // two users is one row that both of them are on, and Prisma needs a name for
+  // each side of it.
+  friendshipsSent     Friendship[] @relation("FriendshipRequester")
+  friendshipsReceived Friendship[] @relation("FriendshipAddressee")
+
+  parksHosted      Park[]
+  parkMemberships  ParkParticipant[]
+  parkMessages     ParkMessage[]
+
+  conversationsAsA Conversation[]  @relation("ConversationA")
+  conversationsAsB Conversation[]  @relation("ConversationB")
+  directMessages   DirectMessage[]
 }

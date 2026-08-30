@@ -1,4 +1,5 @@
 import * as React from 'react';
+import type { LucideIcon } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
 /**
@@ -8,18 +9,45 @@ import { cn } from '../../lib/utils';
  * options and no menus, and the project already avoids adding dependencies it
  * does not need. Keyboard support is the part people actually notice, so arrow
  * keys and Home/End work.
+ *
+ * ## The icon, and the rule it is not breaking
+ *
+ * theme-and-design.md §20.1 says there is no icon set and there must never be
+ * one. That rule is about *choosing things*: an ear option must be a picture of
+ * the ear, never a glyph standing in for it, because a glyph is a second copy
+ * of a design that silently stops matching the first.
+ *
+ * Navigation is not choosing a thing. A tab strip names five places, and the
+ * places are Goals, Memories, a creature, a room and other people — none of
+ * which is drawable by the renderer, because none of them is an object in the
+ * world. Here a small consistent mark is what makes the strip scannable at a
+ * glance and legible when the labels are squeezed on a phone. So icons are
+ * allowed on interface chrome (tabs, buttons, statuses) and remain forbidden
+ * wherever a preview of the actual thing is possible.
  */
 export interface TabItem<T extends string> {
   value: T;
   label: string;
   /** Optional count badge, e.g. the number of open goals. */
   count?: number;
+  /** A small mark before the label. Chrome only — see the note above. */
+  icon?: LucideIcon;
 }
 
 interface TabsProps<T extends string> {
   items: readonly TabItem<T>[];
   value: T;
   onValueChange: (value: T) => void;
+  /**
+   * Tighter padding, for a strip that has to fit a phone.
+   *
+   * Four labelled tabs want 338 pixels at their comfortable size, and a phone
+   * on its side has 283 to give them — so the strip scrolled, and a tab you
+   * have to swipe sideways to find is a tab most people never find. Squeezing
+   * the padding rather than the label is the right thing to give up: the label
+   * is the part that says what the tab is.
+   */
+  dense?: boolean;
   className?: string;
 }
 
@@ -27,6 +55,7 @@ export function Tabs<T extends string>({
   items,
   value,
   onValueChange,
+  dense = false,
   className,
 }: TabsProps<T>) {
   const move = (delta: number) => {
@@ -44,7 +73,8 @@ export function Tabs<T extends string>({
         // and do not fit a 375-pixel phone: the strip was pushing the whole
         // page eleven pixels wide, which is the kind of horizontal scroll
         // nobody reports and everybody feels.
-        'no-scrollbar flex gap-1 overflow-x-auto rounded-xl bg-muted/70 p-1 text-sm font-medium',
+        'no-scrollbar flex overflow-x-auto rounded-xl bg-muted/70 text-sm font-medium',
+        dense ? 'gap-0.5 p-0.5' : 'gap-1 p-1',
         className,
       )}
       onKeyDown={(event) => {
@@ -65,6 +95,7 @@ export function Tabs<T extends string>({
     >
       {items.map((item) => {
         const selected = item.value === value;
+        const Icon = item.icon;
         return (
           <button
             key={item.value}
@@ -77,13 +108,24 @@ export function Tabs<T extends string>({
               // `flex-1` to share the width when there is enough of it,
               // `shrink-0` so they keep their labels when there is not and the
               // strip scrolls instead of squeezing "Inventory" into six pixels.
-              'flex flex-1 shrink-0 items-center justify-center gap-1.5 rounded-lg px-3 py-2 transition-colors outline-none',
+              'flex flex-1 shrink-0 items-center justify-center rounded-lg transition-colors outline-none',
+              dense ? 'gap-1 px-1.5 py-2' : 'gap-1.5 px-3 py-2',
               'focus-visible:ring-2 focus-visible:ring-ring',
               selected
                 ? 'bg-card text-foreground shadow-sm'
                 : 'text-muted-foreground hover:text-foreground',
             )}
           >
+            {Icon && (
+              <Icon
+                aria-hidden
+                className={cn(
+                  'size-4 shrink-0 transition-colors',
+                  selected ? 'text-primary' : 'text-muted-foreground/80',
+                )}
+                strokeWidth={2}
+              />
+            )}
             {item.label}
             {item.count !== undefined && item.count > 0 && (
               <span

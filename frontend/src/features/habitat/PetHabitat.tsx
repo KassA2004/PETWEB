@@ -10,6 +10,9 @@ import type { ReactNode } from 'react';
 import { Application } from 'pixi.js';
 import { PetRoom } from '../../scenes/PetRoom';
 import type { PetReaction, PlacedObjectSnapshot, RoomStatus } from '../../scenes/PetRoom';
+import type { SocialClipKind } from '../../animation/clips/Social';
+import type { VisitorHit, VisitorSpec, VisitorTransform } from '../../scenes/room/Visitors';
+import type { EnvironmentDefinition } from '../../world/environments';
 import { audio } from '../../lib/audio';
 import type { ObjectType } from '../../assets/objects/ObjectRenderer';
 import type { WallDecorKind } from '../../assets/environment/walls/WallDecor';
@@ -101,6 +104,26 @@ export interface PetHabitatHandle {
   snapshotObjects: () => PlacedObjectSnapshot[];
   /** Make the creature respond to something that happened on the page. */
   react: (kind: PetReaction) => void;
+
+  // --- Other people's creatures, in a park ---------------------------------
+  // Imperative rather than declarative, and deliberately: these arrive from a
+  // socket at ten events a second, and routing them through React state would
+  // mean a render per packet per creature for something PixiJS is going to draw
+  // sixty times a second anyway. The scene is the right owner of a stream.
+  addVisitor: (spec: VisitorSpec) => void;
+  moveVisitor: (userId: string, transform: VisitorTransform) => void;
+  removeVisitor: (userId: string) => void;
+  clearVisitors: () => void;
+  /** Play both halves of an interaction the server has confirmed. */
+  playInteraction: (
+    fromUserId: string | null,
+    toUserId: string | null,
+    kind: SocialClipKind,
+    durationMs: number,
+  ) => void;
+  /** Where the local creature is, for a proximity check before asking. */
+  localPosition: () => { x: number; z: number };
+  visitorPosition: (userId: string) => { x: number; z: number } | null;
 }
 
 interface PetHabitatProps {
@@ -151,8 +174,87 @@ interface PetHabitatProps {
   editing?: boolean;
   /** Something was dragged out and put away. */
   onObjectRemoved?: (id: string) => void;
+  /**
+   * Nothing in the room answers the pointer.
+   *
+   * True while visiting somebody else's room: you can watch their creature and
+   * see how they have arranged things, and you cannot pick either up. Passed
+   * through to the scene rather than handled here, because the scene is the
+   * trust boundary — see `PetRoom.setInteractive`.
+   */
+  readOnly?: boolean;
+  /**
+   * Which environment to build. Defaults to the farmhouse.
+   *
+   * The definition itself rather than an id, so that a caller who needs an
+   * environment the first screen does not — the park — can `import` it in their
+   * own lazily-loaded chunk instead of the registry pulling it onto everybody's
+   * load path (`world/environments/index.ts` documents the measurement).
+   *
+   * Read once, at mount, and never again: the room is built from it, and
+   * swapping it live would tear the world down and put the creature back where
+   * it started. Not a limitation in practice — the park and the room are
+   * different screens, so entering one is a fresh mount either way.
+   */
+  environment?: EnvironmentDefinition;
+  /**
+   * Where the local creature is, ten times a second, for the network.
+   *
+   * Absent outside a park, and then nothing is sent at all. Must be stable —
+   * the scene is built once and will hold the first one forever (AGENTS.md,
+   * Rendering).
+   */
+  onTransform?: (transform: VisitorTransform) => void;
+  /** Somebody tapped another person's creature in the room. */
+  onVisitorPicked?: (hit: VisitorHit | null) => void;
   /** Small screen: a taller frame and touch-shaped hints. */
   compact?: boolean;
+  /**
+   * The room reaches the edges of the screen instead of sitting in a card.
+   *
+   * A phone's version of the frame, and the reason is arithmetic rather than
+   * taste. On a 375-pixel screen the card cost 48 pixels of width — 24 of page
+   * padding and 24 of border and inset — which took the canvas to 327 wide and
+   * therefore 184 tall: a room occupying 23% of a screen the creature is
+   * supposed to *live* in. Full-bleed is 375 and 211, a third more room for
+   * nothing but the removal of a picture frame around a window.
+   *
+   * The frame is not merely dropped: it moves. The pet's name, its mood and the
+   * light switch become chips floating over the top of the room, which is where
+   * a game puts them and which costs the room no height at all.
+   */
+  bleed?: boolean;
+  /**
+   * How much larger than its box the room is drawn. 1 is exactly fitted.
+   *
+   * See `PetRoomOptions.zoom`. Used for two things: a few percent on a phone,
+   * where a 16:9 room in a 9:19.5 screen is a letterbox however wide it is made
+   * and the top of the back wall is the cheapest thing to spend; and focus mode,
+   * which changes it live.
+   */
+  zoom?: number;
+  /**
+   * Size the room to the box it is given, rather than to its own width.
+   *
+   * The difference between the two sizing strategies, and why both exist:
+   *
+   * ```text
+   *   fluid (default on a phone)   width is whatever the column gives; height
+   *                                follows from the 16:9 ratio. No measuring,
+   *                                no ResizeObserver, correct before paint
+   *   fill                         measure the box and take the largest 16:9
+   *                                that fits BOTH axes. Needed the moment
+   *                                height is the constraint — a phone on its
+   *                                side, and focus mode
+   * ```
+   *
+   * A phone held upright has more height than it knows what to do with, so the
+   * cheap strategy is the right one. Turn it sideways and height is suddenly
+   * the scarce axis: a fluid room at 812 wide is 457 tall inside a 375-tall
+   * screen, which is how the landscape layout used to push everything below it
+   * off the bottom of a shell that does not scroll.
+   */
+  fill?: boolean;
   className?: string;
   /**
    * The world exists and has drawn. Fired once per mount, after the scene is
@@ -182,7 +284,14 @@ export const PetHabitat = forwardRef<PetHabitatHandle, PetHabitatProps>(function
     affection = 0.5,
     editing = false,
     onObjectRemoved,
+    readOnly = false,
+    environment,
+    onTransform,
+    onVisitorPicked,
     compact = false,
+    bleed = false,
+    zoom = 1,
+    fill = false,
     className,
     onReady,
     overlay,
@@ -223,6 +332,40 @@ export const PetHabitat = forwardRef<PetHabitatHandle, PetHabitatProps>(function
    * One deep, not a list. If two things happened, the creature does the second.
    */
   const pendingReaction = useRef<PetReaction | null>(null);
+  /**
+   * Park traffic that arrived before the world existed.
+   *
+   * The same queue the placements and the reaction use, for the same reason and
+   * against a sharper deadline. `Application.init` is asynchronous and takes
+   * tens of milliseconds; a `park:join` round trip to a server on the same
+   * machine takes fewer. So on any fast connection the admission reply — which
+   * carries *everybody already in the park* — arrives before there is a scene
+   * to put them in, and without this every creature present at the moment of
+   * joining is silently dropped. The park looks empty and stays empty until
+   * somebody else walks in.
+   *
+   * That was a real bug, found by joining a park a second client was already
+   * standing in, and it is exactly the failure the placement queue above was
+   * written to prevent for furniture.
+   *
+   * Operations rather than state, so they replay in the order they happened: an
+   * add followed by a move followed by a remove has to end with the creature
+   * gone, and a set of "latest values" cannot express that.
+   */
+  const pendingWorld = useRef<((room: PetRoom) => void)[]>([]);
+
+  /** Run something against the scene, or queue it until there is one. */
+  const withRoom = useCallback((run: (room: PetRoom) => void) => {
+    const room = roomRef.current;
+    if (room) {
+      run(room);
+      return;
+    }
+
+    // Bounded. A park whose scene never initialises should not accumulate a
+    // position update ten times a second for ever.
+    if (pendingWorld.current.length < 200) pendingWorld.current.push(run);
+  }, []);
   /** True while a wall-decor piece is being dragged, from anywhere. */
   const wallDragging = useRef(false);
 
@@ -240,6 +383,20 @@ export const PetHabitat = forwardRef<PetHabitatHandle, PetHabitatProps>(function
   const onArrangementChangeRef = useRef(onArrangementChange);
   const onObjectRemovedRef = useRef(onObjectRemoved);
   const onReadyRef = useRef(onReady);
+  const onTransformRef = useRef(onTransform);
+  const onVisitorPickedRef = useRef(onVisitorPicked);
+  /** Read once, at mount. Swapping environments live is not a thing. */
+  const environmentRef = useRef(environment);
+  /**
+   * The overscale the scene is built with.
+   *
+   * A ref for the *first* value only — unlike the environment, this one does
+   * change afterwards, through `setZoom` in the effect below. It has to be a ref
+   * as well as a prop because the scene is built inside an async effect that
+   * runs once, and reading the prop there would bake in whatever it was when
+   * the component first rendered.
+   */
+  const zoomRef = useRef(zoom);
 
   useEffect(() => {
     styleRef.current = roomStyle;
@@ -260,6 +417,14 @@ export const PetHabitat = forwardRef<PetHabitatHandle, PetHabitatProps>(function
   useEffect(() => {
     onReadyRef.current = onReady;
   }, [onReady]);
+
+  useEffect(() => {
+    onTransformRef.current = onTransform;
+  }, [onTransform]);
+
+  useEffect(() => {
+    onVisitorPickedRef.current = onVisitorPicked;
+  }, [onVisitorPicked]);
 
   const [status, setStatus] = useState<RoomStatus>({
     mood: 'settling in',
@@ -303,14 +468,15 @@ export const PetHabitat = forwardRef<PetHabitatHandle, PetHabitatProps>(function
    * and never padded.
    */
   useEffect(() => {
-    if (compact) return;
+    if (compact && !fill) return;
 
     const box = boxRef.current;
     if (!box) return;
 
     const measure = () => {
       const { width, height } = box.getBoundingClientRect();
-      const available = { w: width - FRAME, h: height - FRAME };
+      const chrome = bleed ? 0 : FRAME;
+      const available = { w: width - chrome, h: height - chrome };
       if (available.w <= 0 || available.h <= 0) return;
 
       // Whichever axis runs out first decides the size.
@@ -334,7 +500,7 @@ export const PetHabitat = forwardRef<PetHabitatHandle, PetHabitatProps>(function
     const observer = new ResizeObserver(measure);
     observer.observe(box);
     return () => observer.disconnect();
-  }, [compact]);
+  }, [compact, fill, bleed]);
 
   // --- Mount the world -----------------------------------------------------
   useEffect(() => {
@@ -343,6 +509,7 @@ export const PetHabitat = forwardRef<PetHabitatHandle, PetHabitatProps>(function
 
     let disposed = false;
     let app: Application | null = null;
+    let hostObserver: ResizeObserver | null = null;
 
     const start = async () => {
       const instance = new Application();
@@ -366,6 +533,14 @@ export const PetHabitat = forwardRef<PetHabitatHandle, PetHabitatProps>(function
       const scene = new PetRoom(instance, {
         appearance: initialAppearance.current,
         style: styleRef.current,
+        environment: environmentRef.current,
+        zoom: zoomRef.current,
+        // Both of these go through refs for the reason AGENTS.md gives: the
+        // scene is built once and will hold whatever function it was handed
+        // forever, so handing it a fresh closure every render would leave it
+        // calling the first one for the rest of the session.
+        onTransform: (transform) => onTransformRef.current?.(transform),
+        onVisitorPicked: (hit) => onVisitorPickedRef.current?.(hit),
         // The frame is a window into the room, so show all of it.
         fit: 'contain',
         onStatus: setStatus,
@@ -387,6 +562,11 @@ export const PetHabitat = forwardRef<PetHabitatHandle, PetHabitatProps>(function
         pendingReaction.current = null;
       }
 
+      // Everybody who was already in the park when we joined, plus wherever
+      // they have moved since. Replayed in order — see `pendingWorld`.
+      for (const run of pendingWorld.current) run(scene);
+      pendingWorld.current = [];
+
       // Anything placed before the world existed — which, on a normal load, is
       // the whole saved arrangement: the room's objects come back from the
       // network long before PixiJS has finished initialising, and an imperative
@@ -400,6 +580,38 @@ export const PetHabitat = forwardRef<PetHabitatHandle, PetHabitatProps>(function
           definition: placement.definition,
         });
       }
+
+      /*
+       * Keep the renderer the size of its host.
+       *
+       * PixiJS's `resizeTo` sounds like it does this and does not: it reads the
+       * element on `init` and then only on a *window* resize. An application
+       * that started life inside a box of no size therefore stays at no size
+       * forever, however large the box becomes.
+       *
+       * Which is not hypothetical. The social layer renders a park through a
+       * portal into a host the dashboard is still hiding — it stops hiding it
+       * one render later, when the layer reports where the user is standing —
+       * so the park's canvas initialises at 0×0 and, on a desktop where no
+       * window resize follows, never recovers. That is the reported "the park
+       * does not fill the room properly", and it was intermittent because it
+       * depended on which side of that render the async `Application.init`
+       * happened to land.
+       *
+       * A `ResizeObserver` closes it for every cause rather than that one: a
+       * portal that was hidden, a phone turning over, a keyboard opening under
+       * a room that is still on screen. `app.resize()` re-reads `resizeTo`, so
+       * this is the mechanism PixiJS already has, merely told when to run.
+       */
+      const canvasBox = new ResizeObserver(() => {
+        // A box that has gone to nothing is one that has been hidden, not one
+        // that has been resized. Drawing into it is a renderer allocating a
+        // zero-sized buffer, which some drivers do not come back from.
+        if (host.clientWidth <= 0 || host.clientHeight <= 0) return;
+        instance.resize();
+      });
+      canvasBox.observe(host);
+      hostObserver = canvasBox;
 
       // The world is on the stage and the saved room is in it. Anything the
       // dashboard wants to do in the background can start now, and not before —
@@ -416,6 +628,16 @@ export const PetHabitat = forwardRef<PetHabitatHandle, PetHabitatProps>(function
         dev.__petApp = instance;
         dev.__petRoom = scene;
         dev.__audio = audio;
+        // Every *live* world, in mount order, so a page with two of them — the
+        // room and a park — can be inspected one at a time rather than through
+        // whichever handle happened to be written last. Destroyed ones are
+        // dropped on each push, so an afternoon of opening and closing parks
+        // does not leave a console handle full of corpses.
+        const worlds = (
+          (dev.__petWorlds as { app: Application; scene: PetRoom }[]) ?? []
+        ).filter((world) => world.app.renderer);
+        worlds.push({ app: instance, scene });
+        dev.__petWorlds = worlds;
       }
     };
 
@@ -423,11 +645,26 @@ export const PetHabitat = forwardRef<PetHabitatHandle, PetHabitatProps>(function
 
     return () => {
       disposed = true;
+      hostObserver?.disconnect();
+      hostObserver = null;
       roomRef.current = null;
       app?.destroy(true, { children: true });
       app = null;
     };
   }, []);
+
+  /*
+   * Focus mode, and the phone's few percent.
+   *
+   * `setZoom` rather than a rebuild, and that is the whole point of it being a
+   * method on the scene: growing the room to fill the screen must not put the
+   * creature back at the door. The scene re-lays-out around the same centre and
+   * everything in it carries on doing what it was doing.
+   */
+  useEffect(() => {
+    zoomRef.current = zoom;
+    roomRef.current?.setZoom(zoom);
+  }, [zoom]);
 
   // --- Style: everything the user has decided about the room ---------------
   // The scene redresses itself and repaints the canvas behind it; the page only
@@ -493,6 +730,11 @@ export const PetHabitat = forwardRef<PetHabitatHandle, PetHabitatProps>(function
   useEffect(() => {
     roomRef.current?.setEditing(editing);
   }, [editing]);
+
+  // Visiting: look, do not touch.
+  useEffect(() => {
+    roomRef.current?.setInteractive(!readOnly);
+  }, [readOnly]);
 
   // How the creature feels about the user. Pushed in on every change, including
   // the first — a fond creature should already be fond when the page loads,
@@ -589,8 +831,27 @@ export const PetHabitat = forwardRef<PetHabitatHandle, PetHabitatProps>(function
         if (roomRef.current) roomRef.current.react(kind);
         else pendingReaction.current = kind;
       },
+
+      // Park traffic. Every one of these is a no-op before the scene exists,
+      // and that is correct rather than a gap: the park view only starts
+      // listening once it has joined, and a join cannot complete before the
+      // frame it is rendered inside has mounted.
+      addVisitor: (spec) => withRoom((room) => room.addVisitor(spec)),
+      moveVisitor: (userId, transform) =>
+        withRoom((room) => room.moveVisitor(userId, transform)),
+      removeVisitor: (userId) => withRoom((room) => room.removeVisitor(userId)),
+      clearVisitors: () => {
+        // Also drops anything queued: "forget everybody" has to mean the
+        // arrivals that have not been applied yet as well as the ones that have.
+        pendingWorld.current = [];
+        roomRef.current?.clearVisitors();
+      },
+      playInteraction: (fromUserId, toUserId, kind, durationMs) =>
+        withRoom((room) => room.playInteraction(fromUserId, toUserId, kind, durationMs)),
+      localPosition: () => roomRef.current?.localPosition() ?? { x: 0, z: 0 },
+      visitorPosition: (userId) => roomRef.current?.visitorPosition(userId) ?? null,
     }),
-    [beginWallDrag],
+    [beginWallDrag, withRoom],
   );
 
   const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -647,64 +908,108 @@ export const PetHabitat = forwardRef<PetHabitatHandle, PetHabitatProps>(function
     roomRef.current?.pointerUp();
   };
 
+  /*
+   * What the creature is called, and what it is up to.
+   *
+   * Two placements of the same information, and which one is used is the whole
+   * difference between the framed room and the full-bleed one:
+   *
+   * ```text
+   *   card    a line ABOVE the frame. The frame then contains the room and
+   *           nothing else, which is what makes it read as a window
+   *   bleed   chips floating OVER the room, on a scrim. The room has already
+   *           taken the whole width, and a bar above it would be forty pixels
+   *           of a phone screen spent saying something two pills say inside
+   * ```
+   */
+  const identity = (
+    <div className="flex min-w-0 items-baseline gap-2">
+      <h2 className="truncate text-base font-semibold tracking-tight">{petName}</h2>
+      <span className="truncate text-xs text-muted-foreground">is {status.mood}</span>
+    </div>
+  );
+
+  const lights = (
+    <span
+      className={cn(
+        'rounded-full px-2.5 py-1 text-[0.65rem] font-medium tracking-wide uppercase transition-colors',
+        status.lightsOn && !focused
+          ? 'bg-muted text-muted-foreground'
+          : 'bg-foreground text-background',
+      )}
+    >
+      {focused ? 'Do not disturb' : status.lightsOn ? 'Lights on' : 'Lights out'}
+    </span>
+  );
+
+  const placementPill = placementLabel ? (
+    <span className="rounded-full bg-primary/15 px-2.5 py-1 text-[0.65rem] font-medium tracking-wide text-primary uppercase">
+      {placementLabel}
+    </span>
+  ) : null;
+
   return (
     <div
-      className={cn('flex flex-col gap-2', !compact && 'min-h-0 flex-1', className)}
+      className={cn(
+        'flex flex-col',
+        !bleed && 'gap-2',
+        (!compact || fill) && 'min-h-0 flex-1',
+        className,
+      )}
     >
+      {!bleed && (
+        <div className="flex shrink-0 items-center justify-between gap-2 px-2">
+          {identity}
+
+          <div className="flex shrink-0 items-center gap-2">
+            {placementPill}
+            {lights}
+          </div>
+        </div>
+      )}
+
       {/*
-        The creature's name and what it is up to, above the frame rather than
-        inside it.
+        The space the frame is measured against, and centred in.
 
-        It used to be a bar within the card, and that cost the room height
-        twice: the bar took the pixels, and then the room had to be fitted into
-        what was left of a box whose shape the bar had changed. Outside it, the
-        frame contains the room and nothing else.
+        In bleed it also carries the room's own field colour. That is what makes
+        the expanded room read as a *room* rather than as a picture of one on a
+        card: a 16:9 world in a 9:19.5 screen has to letterbox, and a letterbox
+        painted in the light the room is lit by is the wall carrying on past the
+        edge of the view. Painted in `bg-card` it was two cream slabs with a
+        photograph between them.
+
+        It follows the hour, like every other surface here — see `fieldFor`.
       */}
-      <div className="flex shrink-0 items-center justify-between gap-2 px-2">
-        <div className="flex min-w-0 items-baseline gap-2">
-          <h2 className="truncate text-base font-semibold tracking-tight">{petName}</h2>
-          <span className="truncate text-xs text-muted-foreground">is {status.mood}</span>
-        </div>
-
-        <div className="flex shrink-0 items-center gap-2">
-          {placementLabel ? (
-            <span className="rounded-full bg-primary/15 px-2.5 py-1 text-[0.65rem] font-medium tracking-wide text-primary uppercase">
-              {placementLabel}
-            </span>
-          ) : null}
-          <span
-            className={cn(
-              'rounded-full px-2.5 py-1 text-[0.65rem] font-medium tracking-wide uppercase transition-colors',
-              status.lightsOn && !focused
-                ? 'bg-muted text-muted-foreground'
-                : 'bg-foreground text-background',
-            )}
-          >
-            {focused ? 'Do not disturb' : status.lightsOn ? 'Lights on' : 'Lights out'}
-          </span>
-        </div>
-      </div>
-
-      {/* The space the frame is measured against, and centred in. */}
       <div
         ref={boxRef}
+        style={bleed ? { backgroundColor: field } : undefined}
         className={cn(
-          'flex justify-center',
+          'flex justify-center transition-colors duration-700',
           // Centred in both axes: when the column's width is what limits the
           // room, the height left over is shared above and below rather than
           // pooled underneath, where it reads as the frame having slipped.
-          !compact && 'min-h-0 flex-1 items-center',
+          (!compact || fill) && 'min-h-0 flex-1 items-center',
         )}
       >
         <div
           className={cn(
-            'relative rounded-[2rem] border-8 border-card bg-card p-1 shadow-xl shadow-foreground/10 ring-1 ring-border',
-            compact && 'w-full',
+            'relative',
+            bleed
+              ? // No border, no padding, no radius, no ring: every one of those
+                // is a pixel of width the room does not get, and the shadow of
+                // a card that touches both edges falls off the screen anyway.
+                'w-full bg-card'
+              : 'rounded-[2rem] border-8 border-card bg-card p-1 shadow-xl shadow-foreground/10 ring-1 ring-border',
+            !bleed && compact && !fill && 'w-full',
+            bleed && compact && !fill && 'w-full',
           )}
           style={
-            compact || !frame
+            (compact && !fill) || !frame
               ? undefined
-              : { width: frame.width + FRAME, height: frame.height + FRAME }
+              : {
+                  width: frame.width + (bleed ? 0 : FRAME),
+                  height: frame.height + (bleed ? 0 : FRAME),
+                }
           }
         >
           {/*
@@ -755,18 +1060,21 @@ export const PetHabitat = forwardRef<PetHabitatHandle, PetHabitatProps>(function
             onPointerLeave={handlePointerLeave}
             style={{
               backgroundColor: field,
-              // On a phone the width is the constraint and there is nothing to
-              // measure against, so the shape is stated and the height follows
-              // from it. On a desktop the card has already been sized to the
-              // room's ratio and the canvas simply fills it.
-              ...(compact ? { aspectRatio: ROOM_ASPECT } : null),
+              // On a phone held upright the width is the constraint and there
+              // is nothing to measure against, so the shape is stated and the
+              // height follows from it. Everywhere height can be the limit — a
+              // desktop column, a phone on its side, focus mode — the card has
+              // already been measured to the room's ratio and the canvas simply
+              // fills it.
+              ...(compact && !fill ? { aspectRatio: ROOM_ASPECT } : null),
             }}
             className={cn(
-              'relative h-full w-full touch-none overflow-hidden rounded-[1.4rem]',
+              'relative h-full w-full touch-none overflow-hidden',
+              bleed ? 'rounded-none' : 'rounded-[1.4rem]',
               'transition-colors duration-700',
               // Nothing in here can be picked up while the hour is running, and
               // the cursor has to say so before the user finds out by trying.
-              focused
+              focused || readOnly
                 ? 'cursor-default'
                 : status.holding
                   ? 'cursor-grabbing'
@@ -774,6 +1082,42 @@ export const PetHabitat = forwardRef<PetHabitatHandle, PetHabitatProps>(function
             )}
             role="presentation"
           />
+
+          {/*
+            The name and the light switch, over the room.
+
+            Only in bleed. The scrim is a gradient rather than a bar because the
+            room behind it is a different colour at every hour of its day, and a
+            solid strip that matched the noon wall would be a stripe at
+            midnight. It is `pointer-events-none` down to the chips themselves,
+            so the top of the room is still somewhere you can throw a ball.
+          */}
+          {bleed && (
+            <div className="pointer-events-none absolute inset-x-0 top-0 z-10">
+              <div className="absolute inset-x-0 top-0 h-20 bg-gradient-to-b from-black/25 to-transparent" />
+
+              <div className="relative flex items-start justify-between gap-2 p-2.5">
+                <span
+                  className={cn(
+                    'flex min-w-0 items-baseline gap-1.5 rounded-full px-2.5 py-1',
+                    'bg-background/80 backdrop-blur-sm',
+                  )}
+                >
+                  <span className="truncate text-sm font-semibold tracking-tight">
+                    {petName}
+                  </span>
+                  <span className="truncate text-[0.7rem] text-muted-foreground">
+                    is {status.mood}
+                  </span>
+                </span>
+
+                <span className="flex shrink-0 items-center gap-1.5">
+                  {placementPill}
+                  {lights}
+                </span>
+              </div>
+            </div>
+          )}
 
           {overlay}
         </div>

@@ -48,12 +48,12 @@ export function useMediaQuery(query: string): boolean {
   return matches;
 }
 
-/**
- * The one breakpoint the product actually branches on.
+/*
+ * The breakpoints themselves live in `useViewport.ts`.
  *
- * Matches Tailwind's `lg`, so the CSS and the component tree agree about where
- * the interface changes shape rather than disagreeing by a few pixels.
+ * There used to be a `useIsCompact` here, and one breakpoint was enough right up
+ * until a phone was turned on its side: it is compact by width and has no height
+ * to give, which is a third shape rather than a narrower second one. Keeping the
+ * three together with the viewport measuring — `useLayoutMode` — is what stops
+ * them drifting apart. This file is now just the primitive they are built on.
  */
-export function useIsCompact(): boolean {
-  return useMediaQuery('(max-width: 1023px)');
-}

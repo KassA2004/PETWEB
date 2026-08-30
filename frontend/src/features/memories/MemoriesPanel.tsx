@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError } from '../../lib/api';
 import { imageSrc } from '../media/api';
 import { cn } from '../../lib/utils';
-import { deleteMemory, fetchMemories } from './api';
+import { deleteMemory, fetchMemories, setMemoryVisibility } from './api';
 import type { Memory } from './api';
 import { Skeleton } from '../../components/ui/skeleton';
 import { useDelayedVisible } from '../../lib/useDelayedVisible';
@@ -40,6 +40,8 @@ export function MemoriesPanel({ refreshToken }: MemoriesPanelProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [removing, setRemoving] = useState<string | null>(null);
+  /** The memory whose visibility is in flight, so its switch can be gated. */
+  const [sharing, setSharing] = useState<string | null>(null);
   const alive = useRef(true);
 
   useEffect(() => {
@@ -80,6 +82,33 @@ export function MemoriesPanel({ refreshToken }: MemoriesPanelProps) {
       if (alive.current) setError('That memory could not be removed.');
     } finally {
       if (alive.current) setRemoving(null);
+    }
+  }, []);
+
+  /**
+   * Show a memory to visitors, or take it back.
+   *
+   * Optimistic in neither direction: the switch waits for the server, because
+   * the one thing worse than a slow toggle is a toggle that says "shared" for a
+   * second and then quietly is not. The server is the only thing that decides
+   * what a visitor can see, and the interface should agree with it rather than
+   * predict it.
+   */
+  const toggleShared = useCallback(async (memory: Memory) => {
+    setSharing(memory.id);
+    const next = memory.visibility === 'public' ? 'private' : 'public';
+
+    try {
+      const updated = await setMemoryVisibility(memory.id, next);
+      if (alive.current) {
+        setMemories((current) =>
+          current.map((item) => (item.id === updated.id ? updated : item)),
+        );
+      }
+    } catch {
+      if (alive.current) setError('That could not be changed. Try again in a moment.');
+    } finally {
+      if (alive.current) setSharing(null);
     }
   }, []);
 
@@ -166,6 +195,35 @@ export function MemoriesPanel({ refreshToken }: MemoriesPanelProps) {
                   {memory.type === 'goal_completed' ? 'Finished' : 'Kept'} ·{' '}
                   {when(memory.createdAt)}
                 </p>
+
+                {/*
+                  Whether anybody else can see it, and a way to change your
+                  mind. Stated in words rather than as an icon: "shared" and
+                  "private" are the two things a person actually wants to know
+                  about a memory of their own life, and a small symbol makes
+                  that a guess.
+                */}
+                <button
+                  type="button"
+                  onClick={() => void toggleShared(memory)}
+                  disabled={sharing === memory.id}
+                  aria-pressed={memory.visibility === 'public'}
+                  className={cn(
+                    'press mt-2 inline-flex items-center gap-1.5 rounded-full px-2.5 py-1',
+                    'text-[0.65rem] font-medium transition-colors disabled:opacity-50',
+                    'focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none',
+                    memory.visibility === 'public'
+                      ? 'bg-primary/15 text-primary hover:bg-primary/25'
+                      : 'bg-muted text-muted-foreground hover:bg-muted/70',
+                  )}
+                >
+                  <span aria-hidden>{memory.visibility === 'public' ? '◉' : '○'}</span>
+                  {sharing === memory.id
+                    ? 'Saving…'
+                    : memory.visibility === 'public'
+                      ? 'Visitors can see this'
+                      : 'Just for you'}
+                </button>
               </div>
 
               <button

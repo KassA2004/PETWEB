@@ -7,6 +7,8 @@ import { AppException } from '../common/app.exception';
 import { ErrorCode } from '../common/error-codes';
 import { FocusService } from '../focus/focus.service';
 import { isStoredMediaPath } from '../media/media-paths';
+import { readVisibility } from '../memories/memories.service';
+import type { MemoryVisibility } from '../memories/memories.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { GOAL_LIMIT_MESSAGE, MAX_OPEN_GOALS } from './goal-limit';
 
@@ -48,6 +50,8 @@ export interface GoalMemoryView {
   title: string;
   description: string;
   imageUrl: string | null;
+  /** Whether the user chose to show this one to visitors. */
+  visibility: MemoryVisibility;
   createdAt: string;
 }
 
@@ -59,6 +63,7 @@ function toMemoryView(memory: Memory): GoalMemoryView {
     title: memory.title,
     description: memory.description,
     imageUrl: memory.imageUrl,
+    visibility: readVisibility(memory.visibility),
     createdAt: memory.createdAt.toISOString(),
   };
 }
@@ -200,7 +205,12 @@ export class GoalsService {
     ownerId: string,
     goalId: string,
     input: {
-      memory?: { title?: string; description?: string; imageUrl?: string };
+      memory?: {
+        title?: string;
+        description?: string;
+        imageUrl?: string;
+        visibility?: MemoryVisibility;
+      };
     } = {},
   ): Promise<GoalCompletionView> {
     const existing = await this.owned(ownerId, goalId);
@@ -248,6 +258,10 @@ export class GoalsService {
             title: (input.memory.title?.trim() || goal.title).slice(0, 120),
             description: input.memory.description?.trim() ?? '',
             imageUrl: image ?? null,
+            // Private unless this completion said otherwise. The default lives
+            // in three places that agree — here, the column, and the migration
+            // — because this is the setting that must never fail open.
+            visibility: input.memory.visibility ?? 'private',
           },
         });
       }

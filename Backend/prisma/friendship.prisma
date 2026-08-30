@@ -1,0 +1,58 @@
+// Friendship
+// Source: /Docs/API-endpoints/13-social-endpoints.md §3,
+//         /Docs/API-endpoints/11-schema-additions.md §6 (the deferred social
+//         table, now requested and therefore built).
+//
+// One row per *relationship*, not per direction.
+//
+// A request and a friendship are the same row at two points in its life, which
+// is the whole reason there is one table rather than a `FriendRequest` and a
+// `Friend`. Two tables would have to be kept in step by application code, and
+// the one bug that model always produces — a friendship that exists in one
+// direction only — is exactly the bug a single row cannot have.
+//
+// `requesterId` is who asked and `addresseeId` is who was asked; both survive
+// the accept, because "who reached out" is a fact about the relationship and
+// answering it later must not require a second table.
+
+model Friendship {
+  id          String @id @default(uuid()) @db.Uuid
+  requesterId String @db.Uuid
+  addresseeId String @db.Uuid
+
+  /// `pending` | `accepted` | `declined`.
+  ///
+  /// A string rather than a Postgres enum, matching `Goal.status` and
+  /// `FocusSession.status`: the service is the only writer and an enum's
+  /// migration cost is paid every time the set changes.
+  ///
+  /// `declined` is kept rather than deleted, and deliberately: deleting it
+  /// would let a refused request be re-sent immediately and for ever, which is
+  /// the shape of harassment. The pair can still become friends — the person
+  /// who declined may send their own request, and the service reuses the row —
+  /// but the one who was told no cannot ask again.
+  status String @default("pending")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+
+  /// When it became a friendship. Null while pending or declined.
+  acceptedAt DateTime?
+
+  requester User @relation("FriendshipRequester", fields: [requesterId], references: [id], onDelete: Cascade)
+  addressee User @relation("FriendshipAddressee", fields: [addresseeId], references: [id], onDelete: Cascade)
+
+  /// The duplicate-request defence, and it is the database's rather than the
+  /// service's: two tabs pressing Add at the same moment cannot make two rows.
+  ///
+  /// Directional, because the pair (a to b) and (b to a) are different rows to
+  /// Postgres. The service normalizes: before inserting (a to b) it looks for
+  /// (b to a), and if one is pending it *accepts* it instead — which is the
+  /// behaviour a user expects anyway ("we both added each other, so we are
+  /// friends now").
+  @@unique([requesterId, addresseeId])
+
+  /// The two lists: who asked me, and who I asked.
+  @@index([addresseeId, status])
+  @@index([requesterId, status])
+}

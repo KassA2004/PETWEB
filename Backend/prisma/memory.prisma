@@ -33,6 +33,21 @@ model Memory {
   /// is the common case — adding one is optional at every step.
   imageUrl String?
 
+  /// `private` | `public`.
+  ///
+  /// Who else may see this. **Private is the default and the migration
+  /// backfills every existing row to it**, because a visibility system that
+  /// ships by publishing what people wrote before it existed is not a
+  /// visibility system — it is a leak with a changelog entry.
+  ///
+  /// Enforced in the query, never in the client: `MemoriesService.listPublic`
+  /// filters on this column, so a private memory is not fetched-and-hidden but
+  /// genuinely never read. Nothing about the owner's own list changes; they
+  /// still see everything they kept.
+  ///
+  /// A string rather than a Postgres enum, matching `Goal.status`.
+  visibility String @default("private")
+
   createdAt DateTime @default(now())
 
   owner User  @relation(fields: [ownerId], references: [id], onDelete: Cascade)
@@ -42,4 +57,6 @@ model Memory {
 
   @@index([ownerId, createdAt])
   @@index([petId])
+  /// The visitor's query: somebody else's public memories, newest first.
+  @@index([ownerId, visibility, createdAt])
 }

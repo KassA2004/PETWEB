@@ -65,6 +65,23 @@ export interface PerceivedObject {
   /** Beetles, moths, dust — worth chasing, impossible to catch. */
   isCritter: boolean;
   /**
+   * Another creature.
+   *
+   * The park's whole subject, expressed as one flag rather than as a second
+   * kind of perception. A pet is a thing standing in the room that can be
+   * looked at, walked to and wondered about — which is precisely what
+   * `investigate` already does — so the only thing the brain needs to know is
+   * that this particular thing is *worth* it, which is what `pickCuriosity`
+   * uses this for.
+   *
+   * Deliberately not a new behaviour. "Go and see what that is" is a decision
+   * the brain already makes well, and adding a `socialise` branch beside it
+   * would be two implementations of one idea with a coin flip between them.
+   * What differs about another creature is only how interesting it is, and
+   * interest is a weight.
+   */
+  isPet?: boolean;
+  /**
    * How high its resting surface is, or null if there is nowhere to sit.
    *
    * This is how the environment offers itself to the creature: the bed, the
@@ -278,6 +295,20 @@ const MOUNT_RANGE = 70;
 
 /** A critter further away than this is somebody else's problem. */
 const CRITTER_RANGE = 260;
+
+/**
+ * How much more interesting another creature is than a bookshelf.
+ *
+ * Six, and the number is doing real work: at parity a pet in a park full of
+ * furniture would be visited about as often as the plant, which is a park where
+ * nothing appears to happen. Much higher and a creature would ignore the world
+ * entirely and stare at whoever walked in, which is a park where nothing else
+ * happens.
+ *
+ * Six leaves a creature obviously drawn to the others while still occasionally
+ * wandering off to look at a bush, which is what an animal in a park does.
+ */
+const ANOTHER_CREATURE = 6;
 
 /* -------------------------------------------------------------------------- */
 /* How it feels about you                                                     */
@@ -1469,9 +1500,17 @@ export class PetBrain {
 
     // Nearer things are likelier, but nothing is impossible: a creature that
     // always visited the closest object would wear a groove in the floor.
+    //
+    // Another creature is worth several bookshelves, and `ANOTHER_CREATURE` is
+    // how much. This one number is the entire behavioural half of the park: a
+    // pet that wanders into one finds that the most interesting things on the
+    // lawn are the other pets, and goes to have a look at them — which reads
+    // as two animals noticing each other and is not scripted anywhere.
     const weighted = pool.map((object) => ({
       object,
-      weight: 1 / (120 + planarDistance(perception.pet, object)),
+      weight:
+        (object.isPet ? ANOTHER_CREATURE : 1) /
+        (120 + planarDistance(perception.pet, object)),
     }));
 
     const total = weighted.reduce((sum, item) => sum + item.weight, 0);
