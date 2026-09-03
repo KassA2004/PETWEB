@@ -1,8 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import { Button } from '../../components/ui/button';
 import { Dialog } from '../../components/ui/dialog';
 import { Input } from '../../components/ui/input';
-import { ACCEPTED_IMAGE_TYPES, MAX_IMAGE_BYTES, uploadImage } from '../media/api';
+import { uploadImage } from '../media/api';
+import { PicturePicker } from '../memories/PicturePicker';
+import type { Picked } from '../memories/PicturePicker';
 import { ApiError } from '../../lib/api';
 import { cn } from '../../lib/utils';
 import type { CompletionMemory, Goal } from './api';
@@ -21,14 +23,18 @@ import type { CompletionMemory, Goal } from './api';
  *                       ↓
  *              ┌── this dialog ──┐
  *              │                 │
- *          add a picture      skip it
+ *      take or choose one     skip it
  *              │                 │
- *          preview it            │
+ *      rotate, shrink, preview   │
  *              └────── ↓ ────────┘
  *                   Complete
  *                       ↓
  *          upload (if any) → complete → memory
  * ```
+ *
+ * The picture half of that is `features/memories/PicturePicker` — including the
+ * camera, which is why a phone can finish a goal with a photograph of the thing
+ * it was rather than only with one it already had.
  *
  * Three rules it exists to keep:
  *
@@ -92,12 +98,6 @@ export function GoalCompletionDialog({
 
 type Stage = 'asking' | 'uploading' | 'saving';
 
-/** A chosen file and the object URL previewing it, which live and die together. */
-interface Picked {
-  file: File;
-  url: string;
-}
-
 function CompletionForm({
   goal,
   onCancel,
@@ -130,54 +130,7 @@ function CompletionForm({
   /** Set once an upload has failed, so the retry can offer to give up on it. */
   const [uploadFailed, setUploadFailed] = useState(false);
 
-  const fileInput = useRef<HTMLInputElement>(null);
   const busy = stage !== 'asking';
-
-  /**
-   * Object URLs leak, and this is where.
-   *
-   * Each one pins its File in memory until it is revoked, so a user who tries
-   * four photographs before settling on one has four of them held. The URL is
-   * created in the event handler that chose the file — a side effect belongs in
-   * the handler that caused it — and revoked the moment it is replaced, cleared,
-   * or the form goes away.
-   */
-  const latest = useRef<Picked | null>(null);
-
-  useEffect(() => {
-    return () => {
-      if (latest.current) URL.revokeObjectURL(latest.current.url);
-    };
-  }, []);
-
-  /** Swap the chosen picture, revoking whatever it replaces. */
-  const replace = (next: Picked | null) => {
-    // Written here rather than during render: the ref is the unmount cleanup's
-    // only view of what is currently held, and the one place it changes is the
-    // one place the picture changes.
-    latest.current = next;
-    setPicked((current) => {
-      if (current) URL.revokeObjectURL(current.url);
-      return next;
-    });
-  };
-
-  const choose = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const chosen = event.target.files?.[0] ?? null;
-    // Let the same file be picked again after being removed; without this the
-    // input's value is unchanged and `change` never fires a second time.
-    event.target.value = '';
-    if (!chosen) return;
-
-    if (chosen.size > MAX_IMAGE_BYTES) {
-      setError('That picture is over 5 MB. Try a smaller one.');
-      return;
-    }
-
-    setError(null);
-    setUploadFailed(false);
-    replace({ file: chosen, url: URL.createObjectURL(chosen) });
-  };
 
   /** @param withPicture false to finish without the picture that just failed. */
   const submit = async (withPicture: boolean) => {
@@ -240,67 +193,14 @@ function CompletionForm({
 
   return (
     <div className="space-y-4">
-      {picked ? (
-        <figure className="animate-pop-in space-y-2">
-          <img
-            src={picked.url}
-            alt="The picture you chose"
-            className="max-h-56 w-full rounded-xl border border-border object-cover"
-          />
-          <figcaption className="flex items-center justify-between gap-2">
-            <span className="truncate text-xs text-muted-foreground">
-              {picked.file.name}
-            </span>
-            <div className="flex shrink-0 gap-1">
-              <button
-                type="button"
-                onClick={() => fileInput.current?.click()}
-                disabled={busy}
-                className="press rounded-full px-2 py-1 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50"
-              >
-                Replace
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  replace(null);
-                  setUploadFailed(false);
-                }}
-                disabled={busy}
-                className="press rounded-full px-2 py-1 text-xs text-muted-foreground hover:text-destructive disabled:opacity-50"
-              >
-                Remove
-              </button>
-            </div>
-          </figcaption>
-        </figure>
-      ) : (
-        <button
-          type="button"
-          onClick={() => fileInput.current?.click()}
-          disabled={busy}
-          className={cn(
-            'press flex w-full flex-col items-center gap-1 rounded-xl border-2 border-dashed border-border',
-            'p-6 text-sm text-muted-foreground outline-none',
-            'hover:border-primary/50 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring',
-            'disabled:opacity-50',
-          )}
-        >
-          <span aria-hidden className="text-xl">
-            ＋
-          </span>
-          Add a picture
-          <span className="text-[0.65rem]">PNG, JPEG or WebP · up to 5 MB</span>
-        </button>
-      )}
-
-      <input
-        ref={fileInput}
-        type="file"
-        accept={ACCEPTED_IMAGE_TYPES}
-        onChange={choose}
-        className="hidden"
-        tabIndex={-1}
+      <PicturePicker
+        picked={picked}
+        busy={busy}
+        onPick={(next) => {
+          setPicked(next);
+          setUploadFailed(false);
+        }}
+        onError={setError}
       />
 
       <div className="space-y-1">

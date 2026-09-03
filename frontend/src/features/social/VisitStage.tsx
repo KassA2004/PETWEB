@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ArrowLeft, BookHeart, MessageCircle, Sparkles } from 'lucide-react';
+import { ArrowLeft, BarChart3, BookHeart, MessageCircle, Sparkles } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import { Skeleton } from '../../components/ui/skeleton';
+import { Tabs } from '../../components/ui/tabs';
+import type { TabItem } from '../../components/ui/tabs';
 import { ApiError } from '../../lib/api';
 import { cn } from '../../lib/utils';
 import { createPetAppearance } from '../../assets/pets/customization/PetAppearance';
@@ -11,6 +13,8 @@ import { OBJECT_TYPES } from '../../assets/objects/ObjectRenderer';
 import type { ObjectType } from '../../assets/objects/ObjectRenderer';
 import { PetHabitat } from '../habitat/PetHabitat';
 import type { Placement } from '../habitat/PetHabitat';
+import { ProgressStats } from '../progress/ProgressStats';
+import { METRIC_COPY, NO_PROGRESS, PROGRESS_METRICS, formatMetric } from '../../lib/progress';
 import { imageSrc } from '../media/api';
 import type { Memory } from '../memories/api';
 import { fetchProfile, fetchPublicMemories, fetchVisitableRoom } from './api';
@@ -54,6 +58,18 @@ import type { WorldChrome } from './SocialLayer';
  *                here; they were never fetched
  * ```
  *
+ * ## Two tabs: what they kept, and what they have done
+ *
+ * The panel beside the room is a visit's whole answer to "who is this", and it
+ * now has two halves. **Shared memories** is what they chose to show. **Stats**
+ * is the three counters the reward system runs on — time focused, goals
+ * finished, memories shared — the same three numbers they see on their own room
+ * panel, drawn by the same component so the two can never disagree.
+ *
+ * It costs no request. All three arrive on the profile, which this screen was
+ * already fetching for the friendship state, because the server reads them off
+ * the row it was already reading for the username.
+ *
  * ## Three requests, started together
  *
  * The profile, the room and the memories have no dependency on one another —
@@ -74,6 +90,13 @@ interface VisitStageProps {
   /** Offer to message them, when they are a friend. */
   onMessage?: (user: { id: string; username: string }) => void;
 }
+
+type VisitTab = 'memories' | 'stats';
+
+const VISIT_TABS: TabItem<VisitTab>[] = [
+  { value: 'memories', label: 'Memories', icon: BookHeart },
+  { value: 'stats', label: 'Stats', icon: BarChart3 },
+];
 
 const OBJECT_TYPE_SET = new Set<string>(OBJECT_TYPES);
 
@@ -96,6 +119,7 @@ export function VisitStage({
   const [memories, setMemories] = useState<Memory[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [tab, setTab] = useState<VisitTab>('memories');
 
   const habitatRef = useRef(null);
 
@@ -262,14 +286,17 @@ export function VisitStage({
           </Button>
         )}
 
-        {/* --- What they have chosen to remember ---------------------------- */}
-        <section className="flex min-h-0 flex-1 flex-col gap-2">
-          <h4 className="flex shrink-0 items-center gap-1.5 text-[0.65rem] font-medium tracking-wide text-muted-foreground uppercase">
-            <BookHeart aria-hidden className="size-3.5" />
-            Shared memories
-          </h4>
+        <Tabs
+          items={VISIT_TABS}
+          value={tab}
+          onValueChange={setTab}
+          dense={compact}
+          className="shrink-0"
+        />
 
-          {memories.length === 0 ? (
+        {/* --- What they have chosen to remember ---------------------------- */}
+        {tab === 'memories' &&
+          (memories.length === 0 ? (
             <p className="rounded-xl border border-dashed border-border p-4 text-center text-xs text-muted-foreground">
               {room.username} hasn't shared any memories yet.
             </p>
@@ -302,8 +329,39 @@ export function VisitStage({
                 </li>
               ))}
             </ul>
-          )}
-        </section>
+          ))}
+
+        {/* --- What they have done ------------------------------------------ */}
+        {tab === 'stats' && (
+          <div className="relative min-h-0 flex-1 space-y-3 overflow-y-auto pr-0.5">
+            <ProgressStats progress={profile?.progress ?? NO_PROGRESS} />
+
+            {/*
+              The same three numbers again, spelled out.
+
+              Not a repetition: the block above is scannable and abbreviated
+              ("3h 20m", "Focused"), and this says what each one actually
+              counts. A visitor who has never seen the locked half of the
+              catalogue has no reason to know that "Shared" means public
+              memories, and a stat nobody can read is decoration.
+            */}
+            <dl className="space-y-2">
+              {PROGRESS_METRICS.map((metric) => (
+                <div
+                  key={metric}
+                  className="flex items-baseline justify-between gap-3 rounded-xl border border-border bg-card/60 px-3 py-2"
+                >
+                  <dt className="min-w-0 truncate text-xs text-muted-foreground">
+                    {METRIC_COPY[metric].unit}
+                  </dt>
+                  <dd className="shrink-0 text-sm font-semibold tabular-nums">
+                    {formatMetric(metric, profile?.progress[metric] ?? 0)}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          </div>
+        )}
       </div>
     </>
   );

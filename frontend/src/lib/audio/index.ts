@@ -49,7 +49,26 @@ const MATERIAL: Partial<Record<ObjectType, 'bounce' | 'knock' | 'pat' | 'thud'>>
   basket: 'knock',
   bowl: 'knock',
   musicbox: 'knock',
-  tunnel: 'pat',
+  // Canvas over sticks: soft, with a little of the frame in it.
+  teepee: 'pat',
+
+  // The 2026 additions. Wood knocks, cloth pats, and anything hollow or
+  // glazed rings — `bounce` is the nearest thing the synth has to a chime.
+  stool: 'knock',
+  cabinet: 'knock',
+  desk: 'knock',
+  loveseat: 'pat',
+  rug: 'pat',
+  candles: 'knock',
+  hourglass: 'bounce',
+  terrarium: 'bounce',
+  crystal: 'bounce',
+  mushrooms: 'pat',
+  yarn: 'pat',
+  hoop: 'knock',
+  top: 'knock',
+  rattle: 'knock',
+  star: 'pat',
 };
 
 class Audio {

@@ -50,7 +50,24 @@ export function AffectionMeter({ petName, affection, className }: AffectionMeter
         // interface deliberately does not.
         aria-valuetext={affectionLine(petName, affection.level)}
         aria-label={`How ${petName} feels about you`}
-        className="relative h-2.5 w-full rounded-full bg-muted"
+        /*
+          `overflow-clip`, and it is not decoration — it is the fix for a
+          horizontal scrollbar that ran the length of the whole tools column.
+ 
+          The rail below is `absolute inset-0` pushed along by `translateX`, so
+          at 50% affection a full-width invisible box hangs 200 points off the
+          right-hand edge of the track. Nothing between it and the tools
+          scroller clipped, so the scroller grew to fit it: measured on this
+          panel, `scrollWidth` 604 against a `clientWidth` of 405, and a
+          scrollbar under every panel in the column as a result.
+ 
+          `clip` rather than `hidden` because `hidden` would make this a scroll
+          container of its own, and rather than `contain: paint` because the
+          marker is *supposed* to overhang — it is 16px across on a 10px track
+          and sits centred on both ends of the scale. `overflow-clip-margin`
+          keeps that overhang and throws away everything past it.
+        */
+        className="relative h-2.5 w-full overflow-clip rounded-full bg-muted [overflow-clip-margin:0.625rem]"
       >
         {/*
           A gradient across the whole track rather than a fill that changes
@@ -67,16 +84,27 @@ export function AffectionMeter({ petName, affection, className }: AffectionMeter
           }}
         />
 
+        {/*
+          The marker rides a full-width rail rather than being positioned by
+          `left`, and the indirection is the whole point.
+
+          `left: 74%` is a layout property: animating it relayouts the bar and
+          everything beside it on every frame of the seven hundred milliseconds
+          it takes. A percentage `translateX` resolves against the *element's
+          own* width, so a rail stretched across the whole track can be pushed
+          along by exactly that fraction of the track — the same arithmetic,
+          done by the compositor.
+
+          Long, because affection moves in hundredths and a marker that snapped
+          would make a gradual change look like a glitch.
+        */}
         <span
           aria-hidden
-          style={{ left: `${percent}%` }}
-          className={cn(
-            'absolute top-1/2 size-4 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-card bg-primary shadow',
-            // Long, because affection moves in hundredths and a marker that
-            // snapped would make a gradual change look like a glitch.
-            'transition-[left] duration-700 ease-out',
-          )}
-        />
+          style={{ transform: `translateX(${percent}%)` }}
+          className="pointer-events-none absolute inset-0 transition-transform duration-700 ease-out motion-reduce:transition-none"
+        >
+          <span className="absolute top-1/2 left-0 size-4 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-card bg-primary shadow" />
+        </span>
       </div>
 
       <p className="text-xs text-muted-foreground">

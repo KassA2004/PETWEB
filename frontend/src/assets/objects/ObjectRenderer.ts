@@ -41,8 +41,18 @@ import { createBookshelf } from './furniture/Bookshelf';
 import { createChair } from './furniture/Chair';
 import { createHammock } from './furniture/Hammock';
 import { createTable } from './furniture/Table';
-import { createTunnel } from './furniture/Tunnel';
+import { createCabinet } from './furniture/Cabinet';
+import { createDesk } from './furniture/Desk';
+import { createLoveseat } from './furniture/Loveseat';
+import { createRug } from './furniture/Rug';
+import { createStool } from './furniture/Stool';
+import { createTeepee } from './furniture/Teepee';
 import { createAquarium } from './decorations/Aquarium';
+import { createCandles } from './decorations/Candles';
+import { createCrystal } from './decorations/Crystal';
+import { createHourglass } from './decorations/Hourglass';
+import { createMushrooms } from './decorations/Mushrooms';
+import { createTerrarium } from './decorations/Terrarium';
 import { createLamp } from './decorations/Lamp';
 import { createMusicBox } from './decorations/MusicBox';
 import { createPlant } from './decorations/Plant';
@@ -52,6 +62,12 @@ import { createBall } from './toys/Ball';
 import { createCube } from './toys/Cube';
 import { createPillow } from './toys/Pillow';
 import { createPlush } from './toys/Plush';
+import { createBone } from './toys/bone';
+import { createHoop } from './toys/Hoop';
+import { createRattle } from './toys/Rattle';
+import { createStar } from './toys/Star';
+import { createTop } from './toys/Top';
+import { createYarn } from './toys/Yarn';
 
 export * from './ObjectCatalog';
 export { colliderFor, renderBoxFor };
@@ -121,14 +137,31 @@ const RENDERERS: Record<ObjectType, ObjectFactory> = {
   plant: createPlant,
   lamp: createLamp,
   aquarium: createAquarium,
+  candles: createCandles,
+  hourglass: createHourglass,
+  terrarium: createTerrarium,
+  crystal: createCrystal,
+  mushrooms: createMushrooms,
   scratcher: createScratcher,
   bowl: createBowl,
   musicbox: createMusicBox,
-  tunnel: createTunnel,
+  teepee: createTeepee,
+  rug: createRug,
+  stool: createStool,
+  cabinet: createCabinet,
+  loveseat: createLoveseat,
+  desk: createDesk,
   ball: createBall,
   plush: createPlush,
   cube: createCube,
   pillow: createPillow,
+  bone: createBone,
+  yarn: createYarn,
+  hoop: createHoop,
+  top: createTop,
+  rattle: createRattle,
+  star: createStar,
+
 };
 
 /**

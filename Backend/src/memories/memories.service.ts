@@ -1,10 +1,12 @@
 import { rm } from 'node:fs/promises';
 import { HttpStatus, Injectable, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import type { Memory } from '@prisma/client';
 import { AppException } from '../common/app.exception';
 import { ErrorCode } from '../common/error-codes';
 import { isStoredMediaPath, storedFilePath } from '../media/media-paths';
 import { PrismaService } from '../prisma/prisma.service';
+import { progressUpdate } from '../progress/progress';
 
 /** `private` | `public` — who else may see a memory. */
 export type MemoryVisibility = 'private' | 'public';
@@ -96,19 +98,25 @@ export class MemoriesService {
       );
     }
 
-    const memory = await this.prisma.memory.create({
-      data: {
-        ownerId,
-        type: input.type,
-        title: input.title.trim(),
-        description: input.description?.trim() ?? '',
-        imageUrl: input.imageUrl ?? null,
-        // Private unless the user said otherwise, here and in the column's
-        // default and in the migration's backfill. Three places agreeing is
-        // not redundancy: it is the one direction this setting must never fail
-        // open in.
-        visibility: input.visibility ?? 'private',
-      },
+    // Private unless the user said otherwise, here and in the column's default
+    // and in the migration's backfill. Three places agreeing is not
+    // redundancy: it is the one direction this setting must never fail open in.
+    const visibility = input.visibility ?? 'private';
+
+    const memory = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.memory.create({
+        data: {
+          ownerId,
+          type: input.type,
+          title: input.title.trim(),
+          description: input.description?.trim() ?? '',
+          imageUrl: input.imageUrl ?? null,
+          visibility,
+        },
+      });
+
+      if (visibility === 'public') await this.countShared(tx, ownerId, 1);
+      return created;
     });
 
     return toView(memory);
@@ -127,17 +135,35 @@ export class MemoriesService {
     memoryId: string,
     input: { title?: string; description?: string; visibility?: MemoryVisibility },
   ): Promise<MemoryView> {
-    await this.owned(ownerId, memoryId);
+    const existing = await this.owned(ownerId, memoryId);
 
-    const updated = await this.prisma.memory.update({
-      where: { id: memoryId },
-      data: {
-        ...(input.title !== undefined ? { title: input.title.trim() } : {}),
-        ...(input.description !== undefined
-          ? { description: input.description.trim() }
-          : {}),
-        ...(input.visibility !== undefined ? { visibility: input.visibility } : {}),
-      },
+    /*
+     * How far the shared count moves, worked out from the row we already hold.
+     *
+     * Compared against the stored value rather than applied blindly, and that
+     * is what makes the control idempotent: pressing "share" on something
+     * already shared — a double tap, a retried request, two tabs — is a change
+     * of nothing and must count as nothing. `owned` fetched the whole row a
+     * line above, so this costs no query.
+     */
+    const was = readVisibility(existing.visibility);
+    const now = input.visibility ?? was;
+    const shared = was === now ? 0 : now === 'public' ? 1 : -1;
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const next = await tx.memory.update({
+        where: { id: memoryId },
+        data: {
+          ...(input.title !== undefined ? { title: input.title.trim() } : {}),
+          ...(input.description !== undefined
+            ? { description: input.description.trim() }
+            : {}),
+          ...(input.visibility !== undefined ? { visibility: input.visibility } : {}),
+        },
+      });
+
+      if (shared !== 0) await this.countShared(tx, ownerId, shared);
+      return next;
     });
 
     return toView(updated);
@@ -176,11 +202,37 @@ export class MemoriesService {
    */
   async remove(ownerId: string, memoryId: string): Promise<void> {
     const memory = await this.owned(ownerId, memoryId);
+    const wasPublic = readVisibility(memory.visibility) === 'public';
 
-    await this.prisma.memory.delete({ where: { id: memoryId } });
+    await this.prisma.$transaction(async (tx) => {
+      await tx.memory.delete({ where: { id: memoryId } });
+      // Deleting a shared memory un-shares it. The counter describes what is
+      // public *right now*, so a row that no longer exists cannot be one of
+      // them — see `user.prisma` for why this is the one counter that falls.
+      if (wasPublic) await this.countShared(tx, ownerId, -1);
+    });
 
     const file = memory.imageUrl ? storedFilePath(memory.imageUrl) : null;
     if (file) await rm(file, { force: true }).catch(() => undefined);
+  }
+
+  /**
+   * Move the owner's shared-memory count, inside the caller's transaction.
+   *
+   * One line, and it exists so the three places that publish or unpublish a
+   * memory cannot disagree about which column or which direction. The write
+   * rides in the same transaction as the row it describes, so there is no
+   * window in which a memory is public and the number says otherwise.
+   */
+  private countShared(
+    tx: Prisma.TransactionClient,
+    ownerId: string,
+    by: number,
+  ): Promise<unknown> {
+    return tx.user.update({
+      where: { id: ownerId },
+      data: progressUpdate({ memoriesShared: by }),
+    });
   }
 
   private async owned(ownerId: string, memoryId: string): Promise<Memory> {

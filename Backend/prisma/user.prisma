@@ -69,6 +69,49 @@ model User {
   /// neglect (`affection.ts`, GRACE_DAYS).
   lastFollowThroughAt DateTime?
 
+  /// --- Progress (the rewarding system) -------------------------------------
+  ///
+  /// Three counters, and they are the *only* thing standing between a user and
+  /// the locked half of the object catalog. Stored rather than aggregated on
+  /// demand, for the same reason `affection` is stored rather than replayed
+  /// from the sessions that caused it: they are read on every room panel and on
+  /// every visit, they are written by exactly the code that causes them, and a
+  /// `SUM` over a lifetime of focus sessions is a query that gets slower every
+  /// week the product succeeds.
+  ///
+  /// The rule that keeps them honest: **nothing that arrives in a request body
+  /// can move these.** `FocusService.seal`, `GoalsService.complete` /
+  /// `reopen`, and `MemoriesService` are the four writers, each inside the
+  /// transaction that records the thing the number is about — so a session that
+  /// was served but not counted, or counted twice by a double-clicked button,
+  /// is not a state this schema can be left in.
+
+  /// Minutes actually served, summed over every completed focus session.
+  ///
+  /// Only ever goes up. A session abandoned half way adds nothing (the time was
+  /// not served) and deleting the goal it was against adds nothing back — the
+  /// afternoon still happened, which is the same reasoning that makes
+  /// `FocusSession.goalId` nullable rather than cascading.
+  focusMinutes Int @default(0)
+
+  /// Goals finished. Decremented by `reopen`, floored at zero.
+  ///
+  /// Symmetric with affection, and for the same reason: without the decrement,
+  /// a checkbox pressed forty times unlocks the whole catalog in a minute.
+  /// Deleting a completed goal does *not* decrement it — tidying a list is not
+  /// un-finishing the thing.
+  goalsCompleted Int @default(0)
+
+  /// How many memories are public **right now**.
+  ///
+  /// The one counter that can go down, because it is a description of a current
+  /// state rather than a tally of past events: a user who takes a memory back
+  /// has one fewer shared, and a stats tab that claimed otherwise would be
+  /// lying to the visitor reading it. This is also the column
+  /// `PublicUserView.publicMemories` is built from — there is one number for
+  /// "how many has this person shared", not two that can disagree.
+  memoriesShared Int @default(0)
+
   pets           Pet[]
   environments   Environment[]
   memories       Memory[]

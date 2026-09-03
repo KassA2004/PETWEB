@@ -100,6 +100,14 @@ export interface PetHabitatHandle {
    * the drag has to be able to start somewhere else and still land here.
    */
   startWallDrag: (kind: WallDecorKind, existingId?: string) => void;
+  /**
+   * Hang a piece in the first free space.
+   *
+   * The tap half of the same catalogue the drag serves — see
+   * `PetRoom.hangWallDecor`. Returns false when the wall is full, so the panel
+   * can say so rather than looking broken.
+   */
+  hangWallDecor: (kind: WallDecorKind) => boolean;
   /** Everything in the room, for saving. */
   snapshotObjects: () => PlacedObjectSnapshot[];
   /** Make the creature respond to something that happened on the page. */
@@ -826,6 +834,7 @@ export const PetHabitat = forwardRef<PetHabitatHandle, PetHabitatProps>(function
     ref,
     () => ({
       startWallDrag: beginWallDrag,
+      hangWallDecor: (kind) => roomRef.current?.hangWallDecor(kind) ?? false,
       snapshotObjects: () => roomRef.current?.snapshotObjects() ?? [],
       react: (kind) => {
         if (roomRef.current) roomRef.current.react(kind);
@@ -929,7 +938,16 @@ export const PetHabitat = forwardRef<PetHabitatHandle, PetHabitatProps>(function
     </div>
   );
 
-  const lights = (
+  /*
+   * Whether "Lights on" is a thing worth saying here.
+   *
+   * The habitat is mounted for a park and for somebody else's room as well as
+   * for your own, and a lawn does not have a switch — the chip read "Lights on"
+   * over an outdoor scene at three in the afternoon, which is the interface
+   * saying something true about a different place. `lamps` is the
+   * environment's own answer (`world/environments/types.ts`).
+   */
+  const lights = (environmentRef.current?.lamps ?? true) && (
     <span
       className={cn(
         'rounded-full px-2.5 py-1 text-[0.65rem] font-medium tracking-wide uppercase transition-colors',
@@ -1029,7 +1047,8 @@ export const PetHabitat = forwardRef<PetHabitatHandle, PetHabitatProps>(function
             <div
               aria-hidden
               className={cn(
-                'pointer-events-none absolute inset-1 z-10 rounded-[1.4rem] transition-all duration-200',
+                'pointer-events-none absolute inset-1 z-10 rounded-[1.4rem] duration-200',
+                'transition-[opacity,background-color,box-shadow]',
                 status.discarding
                   ? 'bg-destructive/15 ring-4 ring-destructive ring-inset'
                   : 'ring-2 ring-primary/40 ring-inset',
@@ -1038,7 +1057,8 @@ export const PetHabitat = forwardRef<PetHabitatHandle, PetHabitatProps>(function
               <span
                 className={cn(
                   'absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full px-3 py-1.5',
-                  'text-[0.7rem] font-medium whitespace-nowrap transition-all duration-200',
+                  'text-[0.7rem] font-medium whitespace-nowrap duration-200',
+                  'transition-[opacity,transform,color]',
                   status.discarding
                     ? 'scale-105 bg-destructive text-destructive-foreground shadow-lg'
                     : 'bg-foreground/80 text-background',

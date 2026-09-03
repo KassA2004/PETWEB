@@ -36,7 +36,13 @@ import { Container, Graphics } from 'pixi.js';
 import type { FillGradient } from 'pixi.js';
 import { darken, lighten, mix, outline, tones } from '../../shared/color';
 import type { Tones } from '../../shared/color';
-import { createRng, drawSquircle, rngRange, verticalGradient } from '../../shared/shapes';
+import {
+  createRng,
+  drawSquircle,
+  radialGradient,
+  rngRange,
+  verticalGradient,
+} from '../../shared/shapes';
 import { createContactShadow } from '../../environment/Shadows';
 
 export type { Tones };
@@ -438,9 +444,42 @@ export function glowPool(
 }
 
 /**
+ * A smooth halo, for anything that emits rather than reflects.
+ *
+ * `glowPool` and `glowBall` below stack hard-edged shapes at stepped alphas,
+ * which is fine at the strength the floor lamp uses and shows its rings the
+ * moment anything brighter needs one — a candle flame or a lit crystal came out
+ * looking like a dartboard. This is one shape with a radial ramp instead:
+ * smooth at any strength, one draw call, and still not a filter.
+ *
+ * Squashed by `FLOOR_SQUASH` when `depth` is given, so a glow lying *on* the
+ * floor agrees with every contact shadow in the room; left circular when it is
+ * not, for a light in the air.
+ */
+export function softGlow(
+  radius: number,
+  color: number,
+  strength = 0.3,
+  onFloor = false,
+): Graphics {
+  const g = new Graphics();
+  g.ellipse(0, 0, radius, onFloor ? radius * FLOOR_SQUASH : radius);
+  g.fill(
+    radialGradient([
+      { offset: 0, color, alpha: strength },
+      { offset: 0.45, color, alpha: strength * 0.5 },
+      { offset: 0.75, color, alpha: strength * 0.16 },
+      { offset: 1, color, alpha: 0 },
+    ]),
+  );
+  return g;
+}
+
+/**
  * A vertical soft glow, for anything that emits rather than reflects.
  *
- * Same trick as `glowPool`, stacked as circles instead of ovals.
+ * Same trick as `glowPool`, stacked as circles instead of ovals. Kept for the
+ * places already using it; `softGlow` is the better shape for anything new.
  */
 export function glowBall(radius: number, color: number, strength = 0.35, bands = 4): Graphics {
   const g = new Graphics();

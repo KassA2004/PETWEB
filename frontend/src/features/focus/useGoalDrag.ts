@@ -24,6 +24,26 @@ import { sfx } from '../../lib/audio';
  * far enough to mean it, which is what lets a list row still be scrolled on a
  * phone and still be picked up with a mouse. Until that threshold nothing has
  * happened at all — no ghost, no sound, no state.
+ *
+ * ## The ghost is moved without React, and the slot is measured once
+ *
+ * The obvious shape — hold the pointer position in state, position the ghost
+ * with `left`/`top`, hit-test with `getBoundingClientRect()` — stacks three
+ * per-frame costs on the one interaction in this product that a thumb performs:
+ *
+ * ```text
+ *   a React render and commit per pointermove
+ *   left/top, which are layout properties, animated at pointer rate
+ *   a layout read taken straight after that commit wrote to the DOM, which is
+ *   a forced synchronous reflow on every single move
+ * ```
+ *
+ * So none of those happen now. The ghost's element is written directly —
+ * `transform: translate3d(...)`, a compositor property, with no React in the
+ * loop — and the slot's rectangle is measured **once** when the drag starts,
+ * refreshed only if the page scrolls or resizes under it. React state is left
+ * holding the two things that change rarely: what is being carried, and whether
+ * it is over the slot.
  */
 
 export interface DraggedGoal {
@@ -34,12 +54,17 @@ export interface DraggedGoal {
 export interface GoalDrag {
   /** What is in the user's hand, or null. */
   goal: DraggedGoal | null;
-  /** Where the pointer is, in client coordinates, for drawing the ghost. */
-  at: { x: number; y: number };
   /** True while the pointer is over the slot. */
   over: boolean;
   /** The Focus slot registers itself here so the drag can hit-test it. */
   slotRef: React.RefObject<HTMLDivElement | null>;
+  /**
+   * The ghost registers itself here so the drag can move it.
+   *
+   * Written to directly rather than re-rendered — see the note above. The ghost
+   * is fixed at the origin, so the transform *is* its position.
+   */
+  ghostRef: React.RefObject<HTMLDivElement | null>;
   /** Call from a goal row's `onPointerDown`. */
   begin: (goal: DraggedGoal, event: React.PointerEvent) => void;
 }
@@ -49,10 +74,10 @@ const THRESHOLD = 6;
 
 export function useGoalDrag(onDrop: (goal: DraggedGoal) => void): GoalDrag {
   const [goal, setGoal] = useState<DraggedGoal | null>(null);
-  const [at, setAt] = useState({ x: 0, y: 0 });
   const [over, setOver] = useState(false);
 
   const slotRef = useRef<HTMLDivElement | null>(null);
+  const ghostRef = useRef<HTMLDivElement | null>(null);
   /** Read by the window listeners, which are set up once and never re-bound. */
   const drop = useRef(onDrop);
   useEffect(() => {
@@ -68,9 +93,24 @@ export function useGoalDrag(onDrop: (goal: DraggedGoal) => void): GoalDrag {
     cleanup: () => void;
   } | null>(null);
 
+  /**
+   * Where the slot is, remembered.
+   *
+   * Cleared by a scroll or a resize, which are the only two things that move it
+   * while somebody is holding a goal — and both are far rarer than a pointer
+   * move. Re-measured lazily on the next hit test, so a scroll costs one read
+   * rather than one per event for the rest of the drag.
+   */
+  const slotBox = useRef<DOMRect | null>(null);
+
   const isOverSlot = (x: number, y: number): boolean => {
-    const rect = slotRef.current?.getBoundingClientRect();
-    if (!rect) return false;
+    if (!slotBox.current) {
+      const element = slotRef.current;
+      if (!element) return false;
+      slotBox.current = element.getBoundingClientRect();
+    }
+
+    const rect = slotBox.current;
     return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
   };
 
@@ -92,6 +132,9 @@ export function useGoalDrag(onDrop: (goal: DraggedGoal) => void): GoalDrag {
           return;
         }
         state.started = true;
+        // Measured on the next hit test rather than now: `scrollIntoView` below
+        // may still be about to move it.
+        slotBox.current = null;
         setGoal(state.goal);
         // The sound belongs to the moment it comes off the list, not to the
         // press — a press that turns out to be a scroll never made a noise.
@@ -115,7 +158,15 @@ export function useGoalDrag(onDrop: (goal: DraggedGoal) => void): GoalDrag {
       // clearest possible tell that a drag was bolted on afterwards.
       moved.preventDefault();
 
-      setAt(point);
+      /*
+       * Straight onto the element, and this is the whole reason the position is
+       * not state: this runs at pointer rate, and a transform written here goes
+       * to the compositor, where a React render plus a `left`/`top` layout would
+       * each have cost a frame's budget on a phone.
+       */
+      const ghost = ghostRef.current;
+      if (ghost) ghost.style.transform = `translate3d(${point.x}px, ${point.y}px, 0)`;
+
       const nowOver = isOverSlot(point.x, point.y);
       if (nowOver !== state.over) {
         state.over = nowOver;
@@ -145,14 +196,22 @@ export function useGoalDrag(onDrop: (goal: DraggedGoal) => void): GoalDrag {
       if (event_.key === 'Escape') cancel();
     };
 
+    // The slot moves when the page under it does, and only then.
+    const invalidate = () => {
+      slotBox.current = null;
+    };
+
     const cleanup = () => {
       gesture.current = null;
+      slotBox.current = null;
       setGoal(null);
       setOver(false);
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', end);
       window.removeEventListener('pointercancel', cancel);
       window.removeEventListener('keydown', onKey);
+      window.removeEventListener('scroll', invalidate, true);
+      window.removeEventListener('resize', invalidate);
     };
 
     gesture.current = { goal: next, from, started: false, over: false, cleanup };
@@ -163,10 +222,14 @@ export function useGoalDrag(onDrop: (goal: DraggedGoal) => void): GoalDrag {
     window.addEventListener('pointerup', end);
     window.addEventListener('pointercancel', cancel);
     window.addEventListener('keydown', onKey);
+    // Capturing, because what scrolls is the tools column rather than the
+    // window, and a scroll event does not bubble.
+    window.addEventListener('scroll', invalidate, true);
+    window.addEventListener('resize', invalidate);
   }, []);
 
   // A drag must not outlive the panel it started in.
   useEffect(() => () => gesture.current?.cleanup(), []);
 
-  return { goal, at, over, slotRef, begin };
+  return { goal, over, slotRef, ghostRef, begin };
 }

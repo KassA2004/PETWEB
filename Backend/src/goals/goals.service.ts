@@ -249,7 +249,14 @@ export class GoalsService {
         data: { status: 'completed', completedAt: new Date() },
       });
 
+      let shared = 0;
+
       if (input.memory) {
+        // Private unless this completion said otherwise. The default lives
+        // in three places that agree — here, the column, and the migration
+        // — because this is the setting that must never fail open.
+        const visibility = input.memory.visibility ?? 'private';
+
         await tx.memory.create({
           data: {
             ownerId,
@@ -258,12 +265,15 @@ export class GoalsService {
             title: (input.memory.title?.trim() || goal.title).slice(0, 120),
             description: input.memory.description?.trim() ?? '',
             imageUrl: image ?? null,
-            // Private unless this completion said otherwise. The default lives
-            // in three places that agree — here, the column, and the migration
-            // — because this is the setting that must never fail open.
-            visibility: input.memory.visibility ?? 'private',
+            visibility,
           },
         });
+
+        // Publishing from the completion dialog counts exactly as publishing
+        // from the memory book does. It is the same act, and a user who found
+        // the switch in one place should not have a different number from one
+        // who found it in the other.
+        if (visibility === 'public') shared = 1;
       }
 
       // The largest single thing that happens to the relationship, and it belongs
@@ -274,6 +284,12 @@ export class GoalsService {
       // was a third `User.findUnique` for a number this call already produced.
       const applied = await this.affection.apply(tx, ownerId, GOAL_DELTA, {
         followedThrough: true,
+        // The counters the object catalog is unlocked against, moved in the
+        // same statement and therefore under the same all-or-nothing as the
+        // completion itself (`progress/progress.ts`). The early return above
+        // is what makes this exactly-once: a retried completion never reaches
+        // here, so a double-clicked button cannot count a goal twice.
+        progress: { goalsCompleted: 1, memoriesShared: shared },
       });
 
       return {
@@ -330,7 +346,14 @@ export class GoalsService {
       // gains are scaled by the room above and losses by the value below
       // (`affection.ts`), so a complete/reopen cycle costs a fraction of a
       // percent. Churning slowly loses; doing the thing wins.
-      await this.affection.apply(tx, ownerId, -GOAL_DELTA);
+      await this.affection.apply(tx, ownerId, -GOAL_DELTA, {
+        // And the count goes back with it, for the same reason. Without the
+        // decrement, complete/reopen pressed twenty times is the whole locked
+        // catalog in a minute — a progress bar you can scrub is not progress.
+        // The memory keeps its visibility, so `memoriesShared` does not move:
+        // taking a goal back is not un-sharing the photograph.
+        progress: { goalsCompleted: -1 },
+      });
 
       return tx.goal.update({
         where: { id: goalId },

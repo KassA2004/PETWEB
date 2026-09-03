@@ -21,7 +21,7 @@ import {
   edge,
   floorOval,
   formFill,
-  glowBall,
+  softGlow,
   groundShadow,
   post,
 } from '../shared/Surface';
@@ -76,7 +76,10 @@ export function createLamp(ctx: ObjectRenderContext): Container {
   // --- Glow ----------------------------------------------------------------
   // Labelled because the room switches it off when the lights go out — the
   // lamp *is* the light switch.
-  const glow = glowBall(shadeWidth * 1.25, ctx.color, 0.26, 4);
+  // A radial ramp rather than the older stacked circles: at this radius the
+  // stacked version's four steps were visible as concentric rings around the
+  // shade, which is the one thing a light must not look like.
+  const glow = softGlow(shadeWidth * 1.5, ctx.color, 0.26);
   glow.label = 'lamp-glow';
   glow.position.set(0, -height + shadeHeight * 0.2);
   root.addChild(glow);

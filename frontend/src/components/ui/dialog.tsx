@@ -178,16 +178,29 @@ export function Dialog({
         aria-labelledby={titleId}
         aria-describedby={description ? descriptionId : undefined}
         tabIndex={-1}
+        /*
+         * Never taller than the screen, and never taller than what is left of
+         * the screen once a keyboard is up.
+         *
+         * `--app-height` is what `lib/useViewport.ts` publishes: the part of
+         * the display the page may actually use, keyboard excluded. A dialog
+         * sized by `100svh` is the right height on a desktop and half of it is
+         * behind the keyboard on a phone the moment somebody types into the
+         * note field — which is exactly what the memory dialog asks people to
+         * do. Only the body scrolls, so the title stays legible and the
+         * commit buttons stay on screen rather than below the fold.
+         */
+        style={{ maxHeight: 'calc(var(--app-height, 100svh) - 2rem)' }}
         className={cn(
-          'relative w-full max-w-sm rounded-2xl border border-border bg-card p-6',
+          'relative flex w-full max-w-sm flex-col rounded-2xl border border-border bg-card p-6',
           'text-card-foreground shadow-2xl shadow-black/40 outline-none',
           leaving
-            ? 'scale-97 opacity-0 transition-all duration-150'
+            ? 'scale-97 opacity-0 transition-[transform,opacity] duration-150'
             : 'animate-pop-in',
           className,
         )}
       >
-        <div className="space-y-1 text-center">
+        <div className="shrink-0 space-y-1 text-center">
           <h2 id={titleId} className="text-lg font-semibold tracking-tight">
             {title}
           </h2>
@@ -198,9 +211,15 @@ export function Dialog({
           )}
         </div>
 
-        <div className="mt-5">{children}</div>
+        {/*
+          `relative`, because this clips: an absolutely positioned descendant
+          without a positioned ancestor lays out against <html> and escapes the
+          dialog entirely (AGENTS.md, Layout Rules). `-mr-2 pr-2` keeps the
+          scrollbar off the content rather than off the panel's padding.
+        */}
+        <div className="relative mt-5 -mr-2 min-h-0 flex-1 overflow-y-auto pr-2">{children}</div>
 
-        {footer && <div className="mt-6 flex gap-3">{footer}</div>}
+        {footer && <div className="mt-6 flex shrink-0 gap-3">{footer}</div>}
       </div>
     </div>
   );

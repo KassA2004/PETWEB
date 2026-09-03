@@ -105,6 +105,8 @@ export const farmhouse: EnvironmentDefinition = {
 
   light: WINDOW,
   night: { color: 0x241636, alpha: 0.62 },
+  // There is a lamp in the corner, and clicking it works.
+  lamps: true,
   ceiling: 430,
 
   // The window is a hole, not hanging space: the wall guide strikes these

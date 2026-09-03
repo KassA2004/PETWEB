@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import { OptionGrid } from '../../components/ui/option-grid';
 import type { GridOption } from '../../components/ui/option-grid';
 import type { PetAppearance } from '../../assets/pets/customization/PetAppearance';
+import { previewKey } from './catalogue';
 import { PREVIEW_BASE, renderOptionPreview } from './previews';
 import type { PreviewFocus } from './previews';
 
@@ -20,10 +21,24 @@ import type { PreviewFocus } from './previews';
  *
  * Scale, for context: eyes have 39 options, bodies 24, mouths 24, ears 22. None
  * of those fit a grid — which is the entire reason `OptionGrid` pages.
+ *
+ * Every prop but `label`, `value` and `onChange` comes from one category object
+ * in `catalogue.ts`, spread in whole. That is not a tidiness preference: the
+ * background prewarm draws these same tiles from those same objects, and a
+ * category described twice is a prewarm that fills the cache with keys the grid
+ * never asks for.
  */
 
 interface PartGridProps<T extends string> {
   label?: string;
+  /**
+   * What this category is.
+   *
+   * Namespaces the preview cache. Six categories frame on `face`, and several
+   * of them share option names — without this, Brows' "None" and Teeth's "None"
+   * are one cache entry and one of them shows the other's picture.
+   */
+  id: string;
   /** The option keys, in display order. */
   keys: readonly T[];
   /** The library they come from, for labels and hover hints. */
@@ -40,6 +55,7 @@ interface PartGridProps<T extends string> {
 
 export function PartGrid<T extends string>({
   label,
+  id,
   keys,
   table,
   patch,
@@ -67,12 +83,20 @@ export function PartGrid<T extends string>({
         value: key,
         label: table[key].label,
         hint: table[key].hint,
-        preview: () => renderOptionPreview(PREVIEW_BASE, patch(key), focus, undefined, key),
+        preview: () =>
+          renderOptionPreview(
+            PREVIEW_BASE,
+            patch(key),
+            focus,
+            undefined,
+            previewKey(id, key),
+          ),
       })),
-    // `patch` is defined inline by every call site and would defeat the memo;
-    // it is a pure function of `key`, so it is deliberately not a dependency.
+    // `patch` comes from the category object and is a pure function of `key`,
+    // so it is deliberately not a dependency: including it would be harmless
+    // now and a memo that never holds the moment somebody passes a closure.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [keys, table, focus],
+    [id, keys, table, focus],
   );
 
   return (

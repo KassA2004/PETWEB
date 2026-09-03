@@ -1402,6 +1402,122 @@ The overlay fades over 200 ms rather than disappearing on one frame, and is
 held for a minimum visible time the same way a skeleton is (§20.5) — a room
 that loads instantly should not flash a loading screen either.
 
+**The front door has one too** (`features/auth/AuthGate.tsx`). It is the
+wordmark and a sweep, both fading in after 400 ms so a warm cache goes straight
+past it, and it has a *third* state the rest of the product does not need: if
+`get-session` has not answered within eight seconds, the page says so and offers
+to try again. The failure that actually happens is neither an answer nor an
+error — an API host that has moved leaves the request hanging until the
+operating system gives up, `isPending` stays true throughout, and the page used
+to sit on the word "Loading…" for a minute and a half.
+
+---
+
+## 20.8 A memory is a page, not a row
+
+`features/memories/MemoriesPanel.tsx`. The book is the one screen in the product
+that is *read* rather than operated, and it was laid out like a file list: a
+cropped strip of photograph, a truncated title, "Finished · today" in 10px grey,
+and a Remove link that only existed on hover.
+
+It is now the same object the signed-out page shows
+(`features/home/sections.tsx` — the Memories section), with a photograph added:
+
+```text
+  ┌──────────────────────────────────┐
+  │  the photograph, if there is one │   4:3, cropped, one shape for every
+  ├──────────────────────────────────┤   entry so the column has a rhythm
+  │ ╭────╮   TODAY · FINISHED        │   the date is an eyebrow, not a
+  │ │ :) │   Wrote 300 words         │   footnote — in a diary it is the
+  │ ╰────╯   Twenty-five minutes…    │   first thing on the page
+  │                                  │
+  │ [ Just for you ]         [bin]   │
+  └──────────────────────────────────┘
+```
+
+The title wraps instead of truncating (it is a sentence about somebody's day,
+not a filename) and the creature is there at 40px, because the home page's
+version of this card has it and the two should be recognisably the same thing.
+
+Two of the changes were bugs rather than plainness, and both are rules now:
+
+- **A control that only exists on hover does not exist on a phone.** Remove was
+  `opacity-0 group-hover:opacity-100`, so on the device most of these
+  photographs are taken on there was no way to delete one at all.
+- **The one row in this product that cannot be recreated asks first.** Inline,
+  in the space the button was in — a modal for this would be heavier than the
+  thing it is protecting.
+
+## 20.8b The signed-out page stands things in the room with the camera
+
+`features/home/sections.tsx` — the "And then the room fills up" section — lays
+object pictures over a rendered picture of the room. Those pictures used to be
+positioned with four hand-tuned screen percentages each, and running them back
+through `world/Projection.ts` shows what was wrong with them: `left: 9%` on the
+back row is world **x = −353**, a third of a room *inside the left wall*. The
+plant and the lamp were drawn standing on the side walls, the bookshelf floated
+at the wall/floor crease, and the near row was drawn half again too large.
+
+A slot now says only **where the thing stands** — `(x, z)` in room coordinates,
+two plain numbers with no imports — and the camera works out the rest:
+
+```text
+  (x, z) ──project──→ the floor point on screen
+     └───scaleAt(z)──→ how big the thing is at that depth
+     └──objectArtBox─→ where inside its square tile its feet are
+```
+
+That last one is the part that is easy to miss. An object tile is a square with
+the artwork centred in it at `OBJECT_ICON_FILL`, so anchoring the *tile's*
+bottom to the floor leaves a floor lamp hovering a fifth of its own height above
+the boards — and the offset is different for every object, because a lamp's
+artwork includes a shade twice the width of its collider and a glow around that.
+`objectArtBox` measures the built artwork once per type and answers the question
+the catalog cannot (`features/habitat/objectPreviews.ts`).
+
+The arithmetic lives in `features/home/homeArt.ts`, on the *far* side of the art
+boundary, and the page reaches it through `HomeArt.placement`. That is
+deliberate: `ObjectCatalog` is 31 kB of value imports, and the signed-out page is
+the one page in the product that is supposed to be small. Same reason
+`creatures.ts` exists.
+
+**The general rule:** anything laid over a picture of the room is positioned by
+the projection that drew it. A percentage that approximates the camera is a
+second copy of the camera, and it stops matching the first the day somebody
+changes `BACK_SCALE`.
+
+## 20.9 Attaching a photograph
+
+`features/memories/PicturePicker.tsx`. A dashed rectangle with a plus in it is
+the shape every file upload on the internet has, and it says nothing about what
+is being asked for. What is being asked for is *a picture of the thing you just
+did*, so the control asks for that, in the two ways somebody actually has one:
+
+```text
+  phone     [ Take a photo ]  [ Choose one ]     the camera is first
+  desktop   [ Choose a picture ]  · or drop one here
+```
+
+**The camera is a second `<input>`, not a mode.** `capture="environment"` is an
+attribute, so a browser that honours it opens the camera straight from the tap —
+no `getUserMedia`, no viewfinder to build, no stream to remember to stop, and no
+permission prompt of ours. Cancelling, or refusing the permission, comes back
+through the same `change` event with no file and nothing happens, which is what
+the user asked for. **The camera button is only offered where `(pointer: coarse)`
+matches**: on a desktop `capture` is ignored, so a "Take a photo" button there is
+a lie that opens a file dialog.
+
+The chosen picture is shown as a print — a white mount, `object-contain` on a
+soft field — rather than as a file preview. `object-cover` here would be the
+product deciding which part of somebody's afternoon was the important part.
+
+What makes the camera actually work is not in this file:
+`features/media/prepare.ts` rotates the picture the right way up and brings it
+down to 1600px before anything is shown, so the preview is the thing that will
+be uploaded. Without it every photograph taken in portrait arrives sideways —
+the server strips EXIF, orientation included — and most are refused for being
+over 5 MB. See `Docs/API-endpoints/09-media-endpoints.md`.
+
 ---
 
 # 21. UI vs World

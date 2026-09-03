@@ -3,6 +3,7 @@ import { Armchair, BookHeart, Home, PawPrint, Sparkles, Target, Users } from 'lu
 import { Tabs } from '../../components/ui/tabs';
 import type { TabItem } from '../../components/ui/tabs';
 import { UserBadge } from '../auth/UserBadge';
+import { ShopButton } from '../shop/ShopButton';
 import { AffectionMeter } from '../focus/AffectionMeter';
 import { useFocus } from '../focus/useFocus';
 import { CelebrationDialog } from '../goals/CelebrationDialog';
@@ -18,8 +19,10 @@ import { useRoomStyle } from '../habitat/useRoomStyle';
 import type { PlacedObject } from '../habitat/api';
 import { PetLibraryPanel } from '../pets/PetLibraryPanel';
 import { usePetLibrary } from '../pets/usePetLibrary';
-import { CustomizerSkeleton } from '../customization/CustomizerSkeleton';
+import { useProgress } from '../progress/useProgress';
+import { Customizer } from '../customization/Customizer';
 import { prefetchPanels } from './prefetch';
+import type { PrefetchHandle } from './prefetch';
 import { useWorldProgress } from '../habitat/useWorldProgress';
 import { WorldLoader } from '../habitat/WorldLoader';
 import { useDelayedVisible } from '../../lib/useDelayedVisible';
@@ -40,19 +43,6 @@ import type { SocialPlace } from '../social/SocialLayer';
  * load the chunk.
  */
 import { rememberedPark } from '../social/parkMemory';
-
-/**
- * The editor, and Splide with it, fetched when the Pet tab is opened.
- *
- * Not on the load path: the dashboard opens on Goals, and nothing in the
- * room needs the part catalogs to draw. This is the largest thing behind a
- * tab the user may never press.
- */
-const CustomizerPanel = lazy(() =>
-  import('../customization/CustomizerPanel').then((m) => ({
-    default: m.CustomizerPanel,
-  })),
-);
 
 /** The book of memories — a secondary tab, not on the load path. */
 const MemoriesPanel = lazy(() =>
@@ -259,6 +249,25 @@ export function Dashboard({ userId }: DashboardProps) {
   // going. Owned here because a session is a fact about the whole page: it
   // darkens the room, locks the world and takes the tools away.
   const focus = useFocus();
+  /**
+   * What the user has earned, and therefore what the object catalogue offers.
+   *
+   * Owned here for the same reason the focus session is: the three events that
+   * move it all pass through this component. It is read once on load and then
+   * only when one of them happens — a session ended, a goal was finished, a
+   * memory was shared or taken back — so there is no polling and no second
+   * copy of the numbers anywhere below.
+   */
+  const rewards = useProgress();
+  /*
+   * Pulled out so the effects below can depend on it by name.
+   *
+   * `refresh` is a `useCallback` with no dependencies and therefore stable for
+   * the life of the page; naming it here is what lets the exhaustive-deps rule
+   * see that, instead of asking for the whole handle in a dependency array and
+   * re-running the effect on every progress read.
+   */
+  const refreshRewards = rewards.refresh;
   const habitatRef = useRef<PetHabitatHandle>(null);
 
   /** True once the room has drawn. Gates background work. */
@@ -310,12 +319,32 @@ export function Dashboard({ userId }: DashboardProps) {
    */
   const showLoader = useDelayedVisible(progress.loading, { delay: 150, minVisible: 300 });
 
-  // Background-load the tabs the user is most likely to open next, once the room
-  // they are actually looking at has finished. See `prefetch.ts`.
+  /*
+   * Background-load the tabs the user is most likely to open next, once the
+   * room they are actually looking at has finished. See `prefetch.ts`.
+   *
+   * The paint is handed over as a getter rather than a value, and the effect
+   * deliberately does not depend on it: a room pass previews floors and walls
+   * in whatever colour the room is *now*, but repainting must not tear the
+   * whole queue down and start it again from the first hat.
+   */
+  const tintRef = useRef(room.style.tint);
+  const prefetch = useRef<PrefetchHandle | null>(null);
+
+  useEffect(() => {
+    tintRef.current = room.style.tint;
+  }, [room.style.tint]);
+
   useEffect(() => {
     if (!worldReady) return;
-    const handle = prefetchPanels();
-    return () => handle.cancel();
+
+    const handle = prefetchPanels(() => tintRef.current);
+    prefetch.current = handle;
+
+    return () => {
+      prefetch.current = null;
+      handle.cancel();
+    };
   }, [worldReady]);
 
   // --- What is standing in the room ----------------------------------------
@@ -410,6 +439,11 @@ export function Dashboard({ userId }: DashboardProps) {
 
     // And it hears about it, so the affection meter moves too.
     focus.refresh();
+    // A goal just landed, and possibly a shared memory with it. Two of the
+    // three counters can have moved, so the catalogue is asked again — a tile
+    // that unlocked itself while the celebration was on screen is the whole
+    // point of the system.
+    refreshRewards();
 
     setCelebrate((count) => count + 1);
 
@@ -453,11 +487,18 @@ export function Dashboard({ userId }: DashboardProps) {
     if (focus.outcome.kind === 'completed') {
       audio.ui.restore();
       habitatRef.current?.react('greet');
+      // The minutes are banked. This fires for a session that ran out while the
+      // laptop was shut too, because `useFocus` reports that one through the
+      // same outcome token — which is exactly why the refresh hangs off the
+      // token rather than off the button that stops the clock.
+      refreshRewards();
       return;
     }
 
+    // Nothing to re-read for an abandoned session: time not served banks
+    // nothing, and the creature turning away is the whole of the feedback.
     habitatRef.current?.react('sulk');
-  }, [focus.outcome]);
+  }, [focus.outcome, refreshRewards]);
 
   // The line under the room, derived from the token rather than synchronised to
   // it. React's own answer for state that follows a prop: doing it in an effect
@@ -549,6 +590,19 @@ export function Dashboard({ userId }: DashboardProps) {
   const shownTab: TabValue =
     focus.active || (place && (tab === 'pet' || tab === 'room')) ? 'goals' : tab;
 
+  /*
+   * Opening a panel is the strongest signal there is about what to draw next.
+   *
+   * Until this fires the queue is guessing, and it guesses conservatively —
+   * one tile per idle callback, so the room keeps every frame it has. A user
+   * standing in the Pet panel is no longer a guess: they are about to press
+   * Ears or Face, and the tiles behind those tabs stop being speculative.
+   */
+  useEffect(() => {
+    if (shownTab === 'pet') prefetch.current?.promote('pet');
+    if (shownTab === 'room') prefetch.current?.promote('room');
+  }, [shownTab]);
+
   const saveTrouble = room.error ?? roomObjects.error;
 
   /*
@@ -625,7 +679,11 @@ export function Dashboard({ userId }: DashboardProps) {
             <p className="px-1 py-3 text-sm text-muted-foreground">Opening the book…</p>
           }
         >
-          <MemoriesPanel refreshToken={memoryToken} />
+          <MemoriesPanel
+            refreshToken={memoryToken}
+            appearance={appearance}
+            onSharedChange={refreshRewards}
+          />
         </Suspense>
       )}
 
@@ -643,14 +701,12 @@ export function Dashboard({ userId }: DashboardProps) {
             <AffectionMeter petName={petName} affection={focus.affection} />
           </section>
 
-          <Suspense fallback={<CustomizerSkeleton />}>
-            <CustomizerPanel
-              appearance={appearance}
-              onChange={updateAppearance}
-              petName={petName}
-              onPetNameChange={setPetName}
-            />
-          </Suspense>
+          <Customizer
+            appearance={appearance}
+            onChange={updateAppearance}
+            petName={petName}
+            onPetNameChange={setPetName}
+          />
         </div>
       )}
 
@@ -661,10 +717,12 @@ export function Dashboard({ userId }: DashboardProps) {
           error={room.error}
           compact={compact}
           onWallDragStart={(kind) => habitatRef.current?.startWallDrag(kind)}
+          onHangWallDecor={(kind) => habitatRef.current?.hangWallDecor(kind) ?? false}
           onPlaceObject={placeObject}
           editing={editing}
           onEditingChange={setEditing}
-          objectCount={placements.length}
+          progress={rewards.progress}
+          progressLoading={rewards.loading}
         />
       )}
     </>
@@ -885,11 +943,20 @@ export function Dashboard({ userId }: DashboardProps) {
               'pt-[max(0.5rem,env(safe-area-inset-top))]',
             )}
           >
-          <h1 className="truncate text-base font-semibold tracking-tight">
+          {/*
+            Smaller than the desktop wordmark, and the size is load-bearing
+            rather than decorative: this row holds the wordmark, the Home /
+            Friends switch, the shop and the account on 351 points of a 375-wide
+            phone, and at `text-base` the four of them do not fit — the name of
+            the product is the thing that gets an ellipsis. Fourteen points is a
+            perfectly ordinary size for a wordmark on a phone; "Digital Pet …"
+            is not a perfectly ordinary name for anything.
+          */}
+          <h1 className="truncate text-sm font-semibold tracking-tight">
             Digital Pet World
           </h1>
 
-          <div className="flex shrink-0 items-center gap-2">
+          <div className="flex shrink-0 items-center gap-1.5">
             {/*
               The way out to other people is taken away for the hour, like every
               other tool: a session is the page getting out of the way, and a
@@ -897,14 +964,17 @@ export function Dashboard({ userId }: DashboardProps) {
               thing it just promised to protect.
             */}
             {!focus.active && (
-              <ModeSwitch
-                value={mode}
-                place={place}
-                attention={attention}
-                onHome={() => setMode('home')}
-                onSocial={openSocial}
-                compact
-              />
+              <>
+                <ModeSwitch
+                  value={mode}
+                  place={place}
+                  attention={attention}
+                  onHome={() => setMode('home')}
+                  onSocial={openSocial}
+                  compact
+                />
+                <ShopButton compact />
+              </>
             )}
             <UserBadge />
             </div>
@@ -936,7 +1006,28 @@ export function Dashboard({ userId }: DashboardProps) {
                 : 'shrink-0 shadow-sm shadow-foreground/10 transition-[height] duration-300 ease-out motion-reduce:transition-none',
             )}
             style={
-              landscape ? undefined : { height: keyboardOpen ? 0 : 'calc(100vw * 9 / 16)' }
+              landscape
+                ? undefined
+                : {
+                    height: keyboardOpen ? 0 : 'calc(100vw * 9 / 16)',
+                    /*
+                     * The one place in this product that animates a *layout*
+                     * property, and it has to: the tools column below genuinely
+                     * grows into the space, which is a layout, not a transform.
+                     *
+                     * What containment removes is the rest of the bill. The
+                     * habitat inside is absolutely positioned and sized from the
+                     * viewport, so nothing in here depends on this box's height
+                     * — which means the browser can be told not to re-lay-out or
+                     * repaint the subtree while the box shrinks. Without it,
+                     * every frame of the collapse walks a PixiJS canvas, the
+                     * name chip, the mood line and the light switch.
+                     *
+                     * `size` is deliberately not included: this element's own
+                     * height is exactly what is changing.
+                     */
+                    contain: 'layout paint',
+                  }
             }
             aria-hidden={!landscape && keyboardOpen}
           >
@@ -1007,13 +1098,16 @@ export function Dashboard({ userId }: DashboardProps) {
 
         <div className="flex shrink-0 items-center gap-3">
           {!focus.active && (
-            <ModeSwitch
-              value={mode}
-              place={place}
-              attention={attention}
-              onHome={() => setMode('home')}
-              onSocial={openSocial}
-            />
+            <>
+              <ModeSwitch
+                value={mode}
+                place={place}
+                attention={attention}
+                onHome={() => setMode('home')}
+                onSocial={openSocial}
+              />
+              <ShopButton />
+            </>
           )}
           <UserBadge />
         </div>

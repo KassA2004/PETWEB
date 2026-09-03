@@ -214,17 +214,30 @@ export function GoalsPanel({
                         held && 'opacity-40',
                       )}
                     >
+                      {/*
+                        A twenty-pixel circle with a thirty-six-pixel hit area.
+                        The circle is the right size to look at and the wrong
+                        size to hit: negative margin keeps the row's spacing
+                        while the padding gives a thumb something to land on.
+                      */}
                       <button
                         type="button"
                         onClick={() => onBeginComplete(goal)}
                         disabled={busy}
                         aria-label={`Complete ${goal.title}`}
                         className={cn(
-                          'press size-5 shrink-0 rounded-full border-2 border-muted-foreground/40 outline-none',
-                          'hover:border-primary hover:bg-primary/20 focus-visible:ring-2 focus-visible:ring-ring',
-                          'disabled:opacity-50',
+                          'group/check -m-2 grid size-9 shrink-0 place-items-center rounded-full p-2 outline-none',
+                          'focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50',
                         )}
-                      />
+                      >
+                        <span
+                          aria-hidden
+                          className={cn(
+                            'press size-5 rounded-full border-2 border-muted-foreground/40',
+                            'group-hover/check:border-primary group-hover/check:bg-primary/20',
+                          )}
+                        />
+                      </button>
                       <span className="flex-1 text-sm">{goal.title}</span>
 
                       {/*
@@ -239,15 +252,23 @@ export function GoalsPanel({
                         ⠿
                       </span>
 
+                      {/*
+                        Shown on hover — but only where hovering exists. On a
+                        touch screen `group-hover` never fires, so this control
+                        was permanently invisible and permanently unusable on
+                        exactly the devices that cannot right-click either.
+                      */}
                       <button
                         type="button"
                         onClick={() => void goals.remove(goal.id)}
                         disabled={busy}
                         aria-label={`Remove ${goal.title}`}
                         className={cn(
-                          'press text-xs text-muted-foreground opacity-0 transition-opacity',
-                          'group-hover:opacity-100 hover:text-destructive',
-                          'focus-visible:opacity-100 focus-visible:outline-none disabled:opacity-50',
+                          'press -my-2 rounded-lg px-2 py-2 text-xs text-muted-foreground transition-opacity',
+                          'opacity-100 hover:text-destructive',
+                          '[@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100',
+                          'focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring',
+                          'focus-visible:outline-none disabled:opacity-50',
                         )}
                       >
                         Remove
@@ -313,7 +334,9 @@ export function GoalsPanel({
         </>
       )}
 
-      {drag.goal && <DragGhost goal={drag.goal} at={drag.at} over={drag.over} />}
+      {drag.goal && (
+        <DragGhost goal={drag.goal} over={drag.over} elementRef={drag.ghostRef} />
+      )}
 
       <FocusSetupDialog
         goal={pending}

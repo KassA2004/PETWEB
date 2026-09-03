@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { Lock } from 'lucide-react';
 import { sfx } from '../../lib/audio';
 import { cn, paginate } from '../../lib/utils';
 import { Carousel } from './carousel';
@@ -41,6 +42,21 @@ export interface GridOption<T extends string> {
   preview?: () => Promise<string>;
   /** For options that are a colour rather than a shape. */
   swatch?: string;
+  /**
+   * Shown, but not yet earned.
+   *
+   * A locked tile is **still pressable**, and that is the whole design. The
+   * alternatives are both worse: hiding it means the user never learns the
+   * thing exists, and disabling it means pressing the one thing they want gets
+   * them nothing at all — no sound, no focus, no explanation. So it reports the
+   * press like any other tile and the grid's owner decides what that means,
+   * which in the room panel is "open the modal that says what it costs".
+   *
+   * The tile itself only changes how it *looks*: dimmed, and wearing a
+   * padlock. `hint` is expected to carry the requirement, since that is what
+   * both the tooltip and the accessible name are built from.
+   */
+  locked?: boolean;
 }
 
 interface OptionGridProps<T extends string> {
@@ -125,12 +141,20 @@ function OptionTile<T extends string>({
   selected: boolean;
   onSelect: () => void;
 }) {
+  const locked = option.locked === true;
+
   return (
     <button
       type="button"
       role="radio"
       aria-checked={selected}
+      // Not `disabled`, and not `aria-disabled`: the control does something
+      // when it is pressed, so calling it disabled would be a lie a screen
+      // reader repeats. The state is said in words instead.
       title={option.hint ?? option.label}
+      // The hint already opens with "Locked", so the name is the thing and then
+      // its state — not the word twice.
+      aria-label={locked ? `${option.label}. ${option.hint ?? 'Locked'}` : undefined}
       onPointerDown={() => sfx.hover()}
       onClick={onSelect}
       className={cn(
@@ -143,9 +167,31 @@ function OptionTile<T extends string>({
         selected
           ? 'border-primary bg-primary/10 shadow-sm'
           : 'border-border bg-card hover:border-primary/40',
+        locked && 'border-dashed',
       )}
     >
-      <Thumbnail option={option} />
+      <span
+        className={cn(
+          'relative w-full',
+          // Dimmed rather than greyed out. The thing is still recognisably
+          // itself — you can see what you are working towards, which is the
+          // only reason to show a locked tile at all, and at the 0.4/0.5 this
+          // started at you could not: a padlock over a pale ghost is a tile
+          // that says "not yet" without ever saying what.
+          locked && 'opacity-60 saturate-[0.8] transition-opacity group-hover:opacity-85',
+        )}
+      >
+        <Thumbnail option={option} />
+      </span>
+
+      {locked && (
+        <span
+          aria-hidden
+          className="absolute top-1/2 left-1/2 grid size-7 -translate-x-1/2 -translate-y-[70%] place-items-center rounded-full bg-card/90 text-muted-foreground shadow-sm ring-1 ring-border"
+        >
+          <Lock className="size-3.5" strokeWidth={2.5} />
+        </span>
+      )}
 
       {/*
         One line, clipped. A caption that wraps makes its tile taller than its

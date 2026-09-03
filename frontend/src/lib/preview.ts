@@ -46,8 +46,8 @@ const RESOLUTION = Math.min(typeof window === 'undefined' ? 1 : window.devicePix
  *
  * Generous, because the customizer legitimately has a few hundred distinct
  * previews across its categories and thrashing them would defeat the point.
- * Each entry is a PNG of `size × RESOLUTION` square — on a 2× display a full
- * cache of 76px tiles is roughly four megabytes.
+ * Each entry is a PNG of `size × RESOLUTION` — on a 2× display a full cache of
+ * 76px tiles is roughly four megabytes.
  */
 const CACHE_LIMIT = 400;
 
@@ -88,8 +88,18 @@ function remember(key: string, url: string): void {
 }
 
 export interface PreviewOptions {
-  /** Square pixel size of the resulting image. */
+  /** Pixel width of the resulting image, and its height unless one is given. */
   size?: number;
+  /**
+   * Pixel height, when the subject is not square.
+   *
+   * Every option tile in the product is a square and always will be
+   * (`option-grid.tsx`), so this defaults to `size` and most callers never pass
+   * it. The exception is a picture of a *room*, which is a 16:9 box: squaring
+   * one would either letterbox it — two bands the eye reads as the room having
+   * been stretched — or crop away the thing being shown.
+   */
+  height?: number;
   /** How much of it the subject fills. */
   fill?: number;
   /**
@@ -152,8 +162,9 @@ export async function renderPreview(
   options: PreviewOptions = {},
 ): Promise<string> {
   const size = options.size ?? 96;
+  const height = options.height ?? size;
   const fill = options.fill ?? DEFAULT_FILL;
-  const full = `${size}@${RESOLUTION}:${key}`;
+  const full = `${size}x${height}@${RESOLUTION}:${key}`;
 
   const hit = cache.get(full);
   if (hit) return hit;
@@ -175,13 +186,13 @@ export async function renderPreview(
 
     const scale = Math.min(
       (size * fill) / Math.max(1, bounds.width),
-      (size * fill) / Math.max(1, bounds.height),
+      (height * fill) / Math.max(1, bounds.height),
     );
 
     stage.scale.set(scale);
     stage.position.set(
       size / 2 - (bounds.x + bounds.width / 2) * scale,
-      size / 2 - (bounds.y + bounds.height / 2) * scale,
+      height / 2 - (bounds.y + bounds.height / 2) * scale,
     );
 
     app.stage.removeChildren();
@@ -204,7 +215,7 @@ export async function renderPreview(
      */
     const url = await app.renderer.extract.base64({
       target: app.stage,
-      frame: new PixiRectangle(0, 0, size, size),
+      frame: new PixiRectangle(0, 0, size, height),
       resolution: RESOLUTION,
     });
 

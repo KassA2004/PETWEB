@@ -35,6 +35,7 @@ import type {
   FeedableNeed,
 } from '../../simulation/Affordances';
 import { footprintBox } from '../../world/FloorGrid';
+import type { UnlockRequirement } from '../../lib/progress';
 import type { DepthBand, Footprint } from '../../world/FloorGrid';
 
 export const OBJECT_TYPES = [
@@ -46,20 +47,36 @@ export const OBJECT_TYPES = [
   'bookshelf',
   'hammock',
   'beanbag',
+  'rug',
+  'stool',
+  'cabinet',
+  'loveseat',
+  'desk',
   // Decor
   'plant',
   'lamp',
   'aquarium',
+  'candles',
+  'hourglass',
+  'terrarium',
+  'crystal',
+  'mushrooms',
   // Play and care
   'scratcher',
   'bowl',
   'musicbox',
-  'tunnel',
+  'teepee',
   // Toys
   'ball',
   'plush',
   'cube',
   'pillow',
+  'bone',
+  'yarn',
+  'hoop',
+  'top',
+  'rattle',
+  'star',
 ] as const;
 
 export type ObjectType = (typeof OBJECT_TYPES)[number];
@@ -126,6 +143,31 @@ export { AFFORDANCE_KINDS };
  * `friction` is a Coulomb coefficient: 0 is ice, 1 is rubber on carpet. Toys
  * are deliberately slippery. A ball that stops dead two feet from your hand is
  * no fun to throw, and the creature never gets to chase it.
+ *
+ * **The toy end of that range was halved in Sept 2026, and the reason is a
+ * measurement.** `applyGroundFriction` decelerates at `friction * gravity`, so
+ * with gravity at 2600 px/s² a coefficient of 0.42 is 1092 px/s² — enough that
+ * a thrown plush was finished before the creature had turned round. Measured in
+ * the running room, one clear lane at z = 460, released at 900 px/s, both
+ * readings taken the same way in the same room:
+ *
+ * ```text
+ *                     travel        rolling for
+ *   ball    before    1090 px *     2.31 s
+ *           after     1090 px *     3.75 s
+ *   plush   before     541 px       0.99 s
+ *           after      790 px       1.64 s
+ *
+ *   * the ball reaches the far wall either way; time is the honest number
+ *     for it, and it now bounces off and carries on rather than expiring.
+ * ```
+ *
+ * A throw now crosses the room and rolls long enough to be worth watching,
+ * which is the whole point of throwing something, and long enough for the
+ * creature to notice and give chase. Nothing else changed: `drag` came down
+ * with it so the airborne half of an arc is not scrubbed either, and
+ * `STATIC_FRICTION_SPEED` still stops a crawl dead — everything still comes to
+ * rest, and still gets to sleep.
  */
 export interface ObjectTraits {
   label: string;
@@ -188,6 +230,28 @@ export interface ObjectTraits {
   home?: DepthBand;
   /** What the creature can do with it. */
   affordances?: Affordance[];
+  /**
+   * What the user has to have done before this may be put in the room.
+   *
+   * Absent means free, and most things are free: a room you cannot furnish on
+   * day one is not a home, it is a shop. What is locked is the second half of
+   * the catalog — the pieces that make a room look like somebody has lived in
+   * it for a while — because that is the only kind of thing worth earning.
+   *
+   * **This field is the only place a threshold is written down**, exactly as
+   * `footprint` is the only place a size is. There is no unlock table beside
+   * the catalog to keep in step with it, so a locked object cannot end up
+   * costing one thing in the grid and another in the modal. The vocabulary it
+   * is stated in (`lib/progress.ts`) is the user's, not the object's — what a
+   * person can have measured about them is a fact about the person — which is
+   * the same direction `Affordance` points, and for the same reason.
+   *
+   * The gate is the interface's. The *numbers* are the server's and cannot be
+   * moved by anything a client sends, which is the half that matters: this
+   * decides which tile opens a modal instead of dropping a chair, and an
+   * object already standing in a room is never taken away by it.
+   */
+  unlock?: UnlockRequirement;
 }
 
 /**
@@ -265,6 +329,9 @@ export const OBJECT_TRAITS: Record<ObjectType, ObjectTraits> = {
   bookshelf: {
     label: 'Tall Shelf',
     category: 'furniture',
+    // Three hours. The first substantial unlock, and deliberately the one that
+    // reads as furniture rather than as a toy: the room grows up with the user.
+    unlock: { metric: 'focusMinutes', amount: 180 },
     footprint: { cols: 2, rows: 1 },
     fill: 0.88,
     height: 262,
@@ -281,6 +348,10 @@ export const OBJECT_TRAITS: Record<ObjectType, ObjectTraits> = {
   hammock: {
     label: 'Slung Hammock',
     category: 'furniture',
+    // Ten hours, and the most comfortable thing in the room. The top of the
+    // focus ladder, so there is somewhere for a long-running account to still
+    // be going.
+    unlock: { metric: 'focusMinutes', amount: 600 },
     footprint: { cols: 2, rows: 1 },
     height: 74,
     body: 'static',
@@ -296,6 +367,7 @@ export const OBJECT_TRAITS: Record<ObjectType, ObjectTraits> = {
   beanbag: {
     label: 'Bean Bag',
     category: 'furniture',
+    unlock: { metric: 'goalsCompleted', amount: 15 },
     footprint: { cols: 1, rows: 1 },
     height: 62,
     round: true,
@@ -305,6 +377,90 @@ export const OBJECT_TRAITS: Record<ObjectType, ObjectTraits> = {
     friction: 0.88,
     surface: { kind: 'seat', give: 14, comfort: 0.72 },
     home: 'front',
+  },
+
+  rug: {
+    label: 'Woven Rug',
+    category: 'furniture',
+    // The only four-cell object in the catalogue, and the only one with
+    // effectively no height. It is a piece of the floor.
+    footprint: { cols: 2, rows: 2 },
+    fill: 0.98,
+    height: 5,
+    body: 'static',
+    mass: 2,
+    restitution: 0.02,
+    friction: 0.95,
+    // Nothing walks around a rug, and nothing bounces off one either.
+    solidity: 'scenery',
+    surface: { kind: 'shelf', give: 3, comfort: 0.35 },
+    home: 'middle',
+  },
+
+  stool: {
+    label: 'Round Stool',
+    category: 'furniture',
+    footprint: { cols: 1, rows: 1 },
+    fill: 0.74,
+    height: 78,
+    round: true,
+    body: 'static',
+    mass: 7,
+    restitution: 0.3,
+    friction: 0.82,
+    surface: { kind: 'seat', give: 6, comfort: 0.5 },
+    home: 'middle',
+  },
+
+  cabinet: {
+    label: 'Little Cabinet',
+    category: 'furniture',
+    unlock: { metric: 'focusMinutes', amount: 240 },
+    footprint: { cols: 2, rows: 1 },
+    height: 148,
+    body: 'static',
+    mass: 26,
+    restitution: 0.14,
+    friction: 0.9,
+    // Deep and against a wall, like the shelf: walking round it is its whole
+    // contribution to the floor plan, so it stays solid.
+    surface: { kind: 'tabletop', comfort: 0.08 },
+    home: 'back',
+  },
+
+  loveseat: {
+    label: 'Loveseat',
+    category: 'furniture',
+    unlock: { metric: 'goalsCompleted', amount: 25 },
+    footprint: { cols: 2, rows: 1 },
+    height: 116,
+    body: 'static',
+    mass: 24,
+    restitution: 0.2,
+    friction: 0.9,
+    // The most comfortable seat in the room, short of the hammock — and unlike
+    // the hammock it does not move while you are in it.
+    surface: { kind: 'bed', give: 12, comfort: 0.88 },
+    home: 'middle',
+  },
+
+  desk: {
+    label: 'Study Desk',
+    category: 'furniture',
+    // The longest reach in the catalogue. It is the object that stands for what
+    // the user has actually been doing.
+    unlock: { metric: 'focusMinutes', amount: 900 },
+    footprint: { cols: 2, rows: 1 },
+    height: 128,
+    body: 'static',
+    mass: 20,
+    restitution: 0.18,
+    friction: 0.88,
+    // Legs on one side and a drawer bank on the other: mostly air at floor
+    // level, like the table, so the creature goes under it.
+    solidity: 'scenery',
+    surface: { kind: 'tabletop', comfort: 0.05 },
+    home: 'back',
   },
 
   /* --- Decor -------------------------------------------------------------- */
@@ -327,6 +483,10 @@ export const OBJECT_TRAITS: Record<ObjectType, ObjectTraits> = {
   lamp: {
     label: 'Floor Lamp',
     category: 'decor',
+    // An hour. The first lock anybody meets, and it is meant to be met - a
+    // gate nobody ever gets through teaches the user that the locked half of
+    // the catalog is decoration.
+    unlock: { metric: 'focusMinutes', amount: 60 },
     footprint: { cols: 1, rows: 1 },
     // Slim: the shade is wide but it is two hundred units up, and a creature
     // walking past a floor lamp brushes the stem, not the light.
@@ -344,6 +504,8 @@ export const OBJECT_TRAITS: Record<ObjectType, ObjectTraits> = {
   aquarium: {
     label: 'Fish Bowl',
     category: 'decor',
+    // Something to watch, for somebody who has let other people watch them.
+    unlock: { metric: 'memoriesShared', amount: 4 },
     footprint: { cols: 1, rows: 1 },
     fill: 0.72,
     height: 132,
@@ -365,11 +527,112 @@ export const OBJECT_TRAITS: Record<ObjectType, ObjectTraits> = {
     ],
   },
 
+  candles: {
+    label: 'Candle Cluster',
+    category: 'decor',
+    footprint: { cols: 1, rows: 1 },
+    fill: 0.58,
+    height: 86,
+    round: true,
+    body: 'static',
+    mass: 3,
+    restitution: 0.18,
+    friction: 0.88,
+    solidity: 'scenery',
+    home: 'middle',
+  },
+
+  hourglass: {
+    label: 'Sand Timer',
+    category: 'decor',
+    // The one object that is about the product rather than about the room, so
+    // it is earned with the metric it depicts.
+    unlock: { metric: 'focusMinutes', amount: 120 },
+    footprint: { cols: 1, rows: 1 },
+    fill: 0.46,
+    height: 104,
+    body: 'static',
+    mass: 5,
+    restitution: 0.16,
+    friction: 0.9,
+    solidity: 'scenery',
+    surface: { kind: 'shelf', comfort: 0 },
+    home: 'middle',
+  },
+
+  terrarium: {
+    label: 'Moss Terrarium',
+    category: 'decor',
+    unlock: { metric: 'focusMinutes', amount: 420 },
+    footprint: { cols: 1, rows: 1 },
+    fill: 0.68,
+    height: 124,
+    round: true,
+    body: 'static',
+    mass: 12,
+    restitution: 0.1,
+    friction: 0.9,
+    solidity: 'scenery',
+    surface: { kind: 'shelf', comfort: 0 },
+    home: 'back',
+    affordances: [
+      {
+        // The still counterpart to the fish bowl: something to look at that is
+        // not doing anything, which is a different kind of rest.
+        kind: 'watch',
+        appeal: 0.62,
+        duration: 6,
+        feeds: { curiosity: -0.07, joy: 0.04 },
+        mood: 'peering into the terrarium',
+      },
+    ],
+  },
+
+  crystal: {
+    label: 'Memory Crystal',
+    category: 'decor',
+    unlock: { metric: 'memoriesShared', amount: 20 },
+    footprint: { cols: 1, rows: 1 },
+    fill: 0.6,
+    height: 138,
+    body: 'static',
+    mass: 16,
+    restitution: 0.08,
+    friction: 0.92,
+    solidity: 'scenery',
+    home: 'back',
+    affordances: [
+      {
+        kind: 'watch',
+        appeal: 0.7,
+        duration: 5.5,
+        feeds: { curiosity: -0.08, joy: 0.06 },
+        mood: 'watching the light in the crystal',
+      },
+    ],
+  },
+
+  mushrooms: {
+    label: 'Glow Mushrooms',
+    category: 'decor',
+    unlock: { metric: 'goalsCompleted', amount: 40 },
+    footprint: { cols: 1, rows: 1 },
+    fill: 0.72,
+    height: 96,
+    body: 'static',
+    mass: 2,
+    restitution: 0.2,
+    friction: 0.9,
+    solidity: 'scenery',
+    home: 'front',
+  },
+
   /* --- Play and care ------------------------------------------------------ */
 
   scratcher: {
     label: 'Scratching Post',
     category: 'furniture',
+    unlock: { metric: 'goalsCompleted', amount: 8 },
     footprint: { cols: 1, rows: 1 },
     fill: 0.72,
     height: 172,
@@ -418,6 +681,7 @@ export const OBJECT_TRAITS: Record<ObjectType, ObjectTraits> = {
   musicbox: {
     label: 'Music Box',
     category: 'decor',
+    unlock: { metric: 'memoriesShared', amount: 10 },
     footprint: { cols: 1, rows: 1 },
     fill: 0.56,
     height: 58,
@@ -439,26 +703,31 @@ export const OBJECT_TRAITS: Record<ObjectType, ObjectTraits> = {
     ],
   },
 
-  tunnel: {
-    label: 'Fabric Tunnel',
+  teepee: {
+    label: 'Canvas Teepee',
     category: 'furniture',
-    footprint: { cols: 2, rows: 1 },
-    height: 92,
+    unlock: { metric: 'focusMinutes', amount: 300 },
+    // One cell, and tall. It replaced the Fabric Tunnel, which was two cells
+    // wide and lay down — the room already had nothing but horizontal boxes on
+    // it, and the den is the piece best placed to give it a vertical.
+    footprint: { cols: 1, rows: 1 },
+    height: 176,
+    round: true,
     body: 'static',
-    mass: 5,
-    restitution: 0.35,
-    friction: 0.7,
-    // You go *through* a tunnel. Making it solid would make it a wall with a
-    // picture of a hole on it.
+    mass: 6,
+    restitution: 0.3,
+    friction: 0.75,
+    // You go *inside* a den. Making it solid would make it a cone with a
+    // picture of a doorway on it.
     solidity: 'scenery',
     home: 'front',
     affordances: [
       {
         kind: 'hide',
-        appeal: 0.75,
-        duration: 5.5,
-        feeds: { fear: -0.28, curiosity: -0.05, joy: 0.04 },
-        mood: 'hiding in the tunnel',
+        appeal: 0.78,
+        duration: 6,
+        feeds: { fear: -0.3, curiosity: -0.05, joy: 0.05 },
+        mood: 'curled up in the teepee',
       },
     ],
   },
@@ -475,8 +744,8 @@ export const OBJECT_TRAITS: Record<ObjectType, ObjectTraits> = {
     body: 'dynamic',
     mass: 0.5,
     restitution: 0.62,
-    friction: 0.12,
-    drag: 0.15,
+    friction: 0.06,
+    drag: 0.08,
     rolls: true,
     home: 'front',
   },
@@ -491,7 +760,7 @@ export const OBJECT_TRAITS: Record<ObjectType, ObjectTraits> = {
     body: 'dynamic',
     mass: 0.8,
     restitution: 0.3,
-    friction: 0.42,
+    friction: 0.2,
     home: 'front',
   },
 
@@ -504,7 +773,104 @@ export const OBJECT_TRAITS: Record<ObjectType, ObjectTraits> = {
     body: 'dynamic',
     mass: 0.9,
     restitution: 0.22,
-    friction: 0.5,
+    friction: 0.24,
+    home: 'front',
+  },
+
+  bone: {
+    label: 'Bone',
+    category: 'toy',
+    // Three goals: the cheapest lock in the catalog, and the one that exists to
+    // show a new user that tiles with a padlock on them do come off.
+    unlock: { metric: 'goalsCompleted', amount: 3 },
+    footprint: { cols: 1, rows: 1 },
+    fill: 0.6,
+    height: 60,
+    body: 'dynamic',
+    mass: 0.5,
+    restitution: 0.62,
+    friction: 0.06,
+    drag: 0.08,
+    rolls: true,
+    home: 'front',
+  },
+
+  yarn: {
+    label: 'Ball of Yarn',
+    category: 'toy',
+    footprint: { cols: 1, rows: 1 },
+    fill: 0.52,
+    height: 58,
+    round: true,
+    body: 'dynamic',
+    mass: 0.6,
+    // Wool, not rubber. It rolls because it is round, and stops because it is
+    // soft — the opposite end of the friction range from the Bouncy Ball, which
+    // is the whole reason both are worth having.
+    restitution: 0.24,
+    friction: 0.19,
+    rolls: true,
+    home: 'front',
+  },
+
+  hoop: {
+    label: 'Rolling Hoop',
+    category: 'toy',
+    footprint: { cols: 1, rows: 1 },
+    fill: 0.6,
+    height: 72,
+    round: true,
+    body: 'dynamic',
+    mass: 0.45,
+    restitution: 0.38,
+    friction: 0.08,
+    drag: 0.07,
+    rolls: true,
+    home: 'front',
+  },
+
+  top: {
+    label: 'Spinning Top',
+    category: 'toy',
+    unlock: { metric: 'goalsCompleted', amount: 6 },
+    footprint: { cols: 1, rows: 1 },
+    fill: 0.46,
+    height: 64,
+    round: true,
+    body: 'dynamic',
+    mass: 0.7,
+    restitution: 0.26,
+    friction: 0.17,
+    home: 'front',
+  },
+
+  rattle: {
+    label: 'Rattle Drum',
+    category: 'toy',
+    unlock: { metric: 'focusMinutes', amount: 90 },
+    footprint: { cols: 1, rows: 1 },
+    fill: 0.5,
+    height: 68,
+    body: 'dynamic',
+    mass: 0.55,
+    restitution: 0.34,
+    friction: 0.2,
+    home: 'front',
+  },
+
+  star: {
+    label: 'Wish Star',
+    category: 'toy',
+    unlock: { metric: 'memoriesShared', amount: 2 },
+    footprint: { cols: 1, rows: 1 },
+    fill: 0.6,
+    height: 64,
+    body: 'dynamic',
+    mass: 0.7,
+    restitution: 0.3,
+    friction: 0.25,
+    // Stuffed, and broad enough to stand on — the same reasoning as the pillow.
+    surface: { kind: 'shelf', give: 5, comfort: 0.5 },
     home: 'front',
   },
 
@@ -519,7 +885,7 @@ export const OBJECT_TRAITS: Record<ObjectType, ObjectTraits> = {
     body: 'dynamic',
     mass: 1.6,
     restitution: 0.34,
-    friction: 0.6,
+    friction: 0.32,
     surface: { kind: 'shelf', give: 6, comfort: 0.55 },
     home: 'front',
   },
@@ -600,17 +966,71 @@ export const OBJECT_COLORS: Record<
   },
   bookshelf: {
     color: darken(PALETTE.sand, 0.3),
-    secondaryColor: PALETTE.cream,
-    accentColor: PALETTE.punch,
+    // The trailing plant on top, and its pot. Cream foliage on cream-flecked
+    // wood was invisible, and a hot-pink pot fought the dusty spines that are
+    // the whole point of the redesign.
+    secondaryColor: PALETTE.mint,
+    accentColor: mix(PALETTE.ember, PALETTE.sand, 0.34),
   },
   hammock: { color: PALETTE.mint, secondaryColor: PALETTE.cream, accentColor: PALETTE.sand },
   beanbag: { color: PALETTE.punch, secondaryColor: PALETTE.blush, accentColor: PALETTE.cream },
+  rug: {
+    color: mix(PALETTE.grape, PALETTE.sand, 0.42),
+    secondaryColor: PALETTE.cream,
+    accentColor: mix(PALETTE.ember, PALETTE.sand, 0.3),
+  },
+  stool: {
+    color: mix(PALETTE.mint, PALETTE.cream, 0.22),
+    secondaryColor: darken(PALETTE.sand, 0.24),
+    accentColor: PALETTE.cream,
+  },
+  cabinet: {
+    color: darken(PALETTE.sand, 0.22),
+    secondaryColor: PALETTE.cream,
+    accentColor: mix(PALETTE.sky, PALETTE.cream, 0.25),
+  },
+  loveseat: {
+    color: mix(PALETTE.sky, PALETTE.cream, 0.34),
+    secondaryColor: PALETTE.cream,
+    accentColor: mix(PALETTE.punch, PALETTE.cream, 0.3),
+  },
+  desk: {
+    color: darken(PALETTE.sand, 0.3),
+    secondaryColor: darken(PALETTE.sand, 0.44),
+    accentColor: mix(PALETTE.ember, PALETTE.sand, 0.2),
+  },
   plant: { color: PALETTE.mint, secondaryColor: PALETTE.sand, accentColor: PALETTE.cream },
   lamp: { color: PALETTE.cream, secondaryColor: PALETTE.grape, accentColor: PALETTE.cream },
   aquarium: {
     color: mix(PALETTE.sky, PALETTE.cream, 0.35),
     secondaryColor: PALETTE.sand,
     accentColor: PALETTE.ember,
+  },
+  candles: {
+    color: PALETTE.cream,
+    secondaryColor: mix(PALETTE.sky, PALETTE.cream, 0.3),
+    accentColor: PALETTE.ember,
+  },
+  hourglass: {
+    color: mix(PALETTE.sky, PALETTE.cream, 0.45),
+    secondaryColor: darken(PALETTE.sand, 0.3),
+    // The sand. Warmer than the glass it sits in, or the timer reads as empty.
+    accentColor: mix(PALETTE.sand, PALETTE.ember, 0.16),
+  },
+  terrarium: {
+    color: PALETTE.mint,
+    secondaryColor: darken(PALETTE.sand, 0.22),
+    accentColor: PALETTE.punch,
+  },
+  crystal: {
+    color: mix(PALETTE.grape, PALETTE.sky, 0.35),
+    secondaryColor: darken(PALETTE.sand, 0.42),
+    accentColor: PALETTE.cream,
+  },
+  mushrooms: {
+    color: mix(PALETTE.punch, PALETTE.cream, 0.18),
+    secondaryColor: mix(PALETTE.cream, PALETTE.sand, 0.3),
+    accentColor: mix(PALETTE.mint, PALETTE.sky, 0.4),
   },
   scratcher: {
     color: PALETTE.sand,
@@ -623,9 +1043,40 @@ export const OBJECT_COLORS: Record<
     secondaryColor: PALETTE.cream,
     accentColor: 0xf2c94c,
   },
-  tunnel: { color: PALETTE.ember, secondaryColor: PALETTE.cream, accentColor: PALETTE.punch },
+  teepee: {
+    // Canvas, the poles holding it up, and the trim.
+    color: mix(PALETTE.cream, PALETTE.sand, 0.34),
+    secondaryColor: darken(PALETTE.sand, 0.34),
+    accentColor: PALETTE.ember,
+  },
   ball: { color: PALETTE.sky, secondaryColor: PALETTE.cream, accentColor: PALETTE.cream },
   plush: { color: PALETTE.blush, secondaryColor: PALETTE.cream, accentColor: PALETTE.punch },
   cube: { color: 0xf2c94c, secondaryColor: PALETTE.cream, accentColor: PALETTE.ember },
   pillow: { color: PALETTE.grape, secondaryColor: PALETTE.cream, accentColor: PALETTE.blush },
+  bone: { color: PALETTE.sand, secondaryColor: PALETTE.cream, accentColor: PALETTE.ember },
+  yarn: {
+    color: mix(PALETTE.punch, PALETTE.cream, 0.28),
+    secondaryColor: PALETTE.cream,
+    accentColor: PALETTE.blush,
+  },
+  hoop: {
+    color: PALETTE.sand,
+    secondaryColor: PALETTE.cream,
+    accentColor: mix(PALETTE.sky, PALETTE.cream, 0.15),
+  },
+  top: {
+    color: mix(PALETTE.grape, PALETTE.cream, 0.2),
+    secondaryColor: darken(PALETTE.sand, 0.24),
+    accentColor: 0xf2c94c,
+  },
+  rattle: {
+    color: mix(PALETTE.ember, PALETTE.sand, 0.28),
+    secondaryColor: darken(PALETTE.sand, 0.28),
+    accentColor: PALETTE.cream,
+  },
+  star: {
+    color: 0xf2c94c,
+    secondaryColor: PALETTE.cream,
+    accentColor: PALETTE.punch,
+  },
 };

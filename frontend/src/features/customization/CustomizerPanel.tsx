@@ -2,58 +2,20 @@ import { useState } from 'react';
 import {
   ACCESSORY_SLOTS,
   ACCESSORY_SLOT_LABELS,
-  ACCESSORY_TYPES,
-  accessoriesForSlot,
   createAccessoryConfig,
 } from '../../assets/pets/customization/AccessoryTypes';
 import type {
   AccessorySlot,
   AccessoryType,
 } from '../../assets/pets/customization/AccessoryTypes';
-import {
-  TAIL_TYPES,
-  TAIL_TYPE_KEYS,
-  WING_TYPES,
-  WING_TYPE_KEYS,
-} from '../../assets/pets/customization/AppendageTypes';
-import {
-  EAR_TYPES,
-  EAR_TYPE_KEYS,
-} from '../../assets/pets/customization/EarTypes';
-import {
-  FOOT_TYPES,
-  FOOT_TYPE_KEYS,
-} from '../../assets/pets/customization/FootTypes';
 import { ARCHETYPES, randomAppearance } from '../../assets/pets/customization/Archetypes';
-import {
-  BODY_TYPES,
-  BODY_TYPE_KEYS,
-} from '../../assets/pets/customization/BodyTypes';
-import {
-  BROW_TYPES,
-  BROW_TYPE_KEYS,
-  CHEEK_TYPES,
-  CHEEK_TYPE_KEYS,
-  EYE_TYPES,
-  EYE_TYPE_KEYS,
-  MOUTH_TYPES,
-  MOUTH_TYPE_KEYS,
-  SNOUT_TYPES,
-  SNOUT_TYPE_KEYS,
-  TEETH_TYPES,
-  TEETH_TYPE_KEYS,
-} from '../../assets/pets/customization/FaceTypes';
 import { getRange } from '../../assets/pets/customization/PetConstraints';
 import type { RangedField } from '../../assets/pets/customization/PetConstraints';
-import { PATTERN_KEYS, PATTERN_LABELS } from '../../assets/pets/customization/Patterns';
-import type { PatternType } from '../../assets/pets/customization/Patterns';
-import {
-  TOPPER_TYPES,
-  TOPPER_TYPE_KEYS,
-} from '../../assets/pets/customization/TopperTypes';
 import type { PetAppearance } from '../../assets/pets/customization/PetAppearance';
 import { Button } from '../../components/ui/button';
 import { Section, SliderRow, SwatchRow } from '../../components/ui/controls';
+import { ACCESSORY_PARTS, PARTS } from './catalogue';
+import type { EditorTab } from './catalogue';
 import { PartGrid } from './PartGrid';
 import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
@@ -89,14 +51,12 @@ import {
  * they want to push it toward adorable or toward alarming.
  */
 
-interface CustomizerPanelProps {
+export interface CustomizerPanelProps {
   appearance: PetAppearance;
   onChange: (patch: Partial<PetAppearance>) => void;
   petName: string;
   onPetNameChange: (name: string) => void;
 }
-
-type EditorTab = 'body' | 'ears' | 'face' | 'look' | 'extras';
 
 const TABS = [
   { value: 'body', label: 'Body' },
@@ -107,25 +67,12 @@ const TABS = [
 ] as const satisfies readonly { value: EditorTab; label: string }[];
 
 /**
- * Every part category, as pictures rather than as words.
- *
- * `PartGrid` takes the type library, what choosing an option does, and which
- * part of the resulting creature is worth looking at. Nothing here needs a
- * label list any more — the libraries already carry one, and the picture is
- * doing the work the label used to.
- */
-const patternTable = Object.fromEntries(
-  PATTERN_KEYS.map((key) => [key, { label: PATTERN_LABELS[key] }]),
-) as Record<PatternType, { label: string }>;
-
-/**
  * What wearing (or removing) an accessory does to an appearance.
  *
- * Shared by the preview and the actual change, which is the point: a tile that
- * previewed one thing and applied another would be a lie the user only finds
- * out about after clicking. The colour and size the wearer already chose for
- * the slot are kept when swapping items — changing hat *shape* should not
- * silently reset the hat's colour.
+ * Not the same thing as what the *tile* shows — see `accessoryPreviewPatch` in
+ * `catalogue.ts`, and the reason it is separate. The colour and size the wearer
+ * already chose for the slot are kept when swapping items: changing hat *shape*
+ * should not silently reset the hat's colour.
  */
 function accessoryPatch(
   appearance: PetAppearance,
@@ -147,58 +94,6 @@ function accessoryPatch(
 
   return { accessories: next };
 }
-
-/**
- * What the *tile* for an accessory option shows.
- *
- * Deliberately not `accessoryPatch`. That one carries the wearer's current
- * colour and size into the result, which is right for applying a choice and
- * wrong for drawing a catalogue: it makes the picture a function of live state,
- * so every nudge of the size dial gives all three accessory grids a new cache
- * key and rebuilds a full creature rig per tile. Measured at 15 rig rebuilds
- * per slider step.
- *
- * A tile answers "what is this item", so it draws the item at its own defaults
- * on the bare preview creature, and the answer is the same every time.
- */
-function accessoryPreviewPatch(
-  slot: AccessorySlot,
-  value: AccessoryType | 'none',
-): Partial<PetAppearance> {
-  if (value === 'none') return { accessories: {} };
-  return { accessories: { [slot]: createAccessoryConfig(value) } };
-}
-
-/**
- * The option list and label table for each slot, built once.
- *
- * Module level because `PartGrid` memoises its options on `keys` and `table` by
- * reference. Built inline inside the `ACCESSORY_SLOTS.map` below they were new
- * objects on every render, the memo never held, and every tile re-requested its
- * preview on every keystroke — the other half of the same bug
- * `accessoryPreviewPatch` fixes.
- *
- * "None" is an option like any other, so it gets a tile like any other — a
- * picture of the creature without one. A bare list that silently omits the way
- * back is a customizer you can put a hat on and not take it off.
- */
-type SlotTable = Record<AccessoryType | 'none', { label: string; hint?: string }>;
-
-const SLOT_KEYS = Object.fromEntries(
-  ACCESSORY_SLOTS.map((slot) => [slot, ['none' as const, ...accessoriesForSlot(slot)]]),
-) as Record<AccessorySlot, (AccessoryType | 'none')[]>;
-
-const SLOT_TABLES = Object.fromEntries(
-  ACCESSORY_SLOTS.map((slot) => [
-    slot,
-    {
-      none: { label: 'None' },
-      ...Object.fromEntries(
-        accessoriesForSlot(slot).map((type) => [type, ACCESSORY_TYPES[type]]),
-      ),
-    } as SlotTable,
-  ]),
-) as Record<AccessorySlot, SlotTable>;
 
 const percent = (value: number) => `${Math.round(value * 100)}%`;
 const degrees = (value: number) => `${Math.round(value * 57)}°`;
@@ -327,11 +222,8 @@ export function CustomizerPanel({
           description="One soft silhouette. Everything else grows out of it."
         >
           <PartGrid
+            {...PARTS.body}
             label="Shape"
-            keys={BODY_TYPE_KEYS}
-            table={BODY_TYPES}
-            patch={(bodyType) => ({ bodyType })}
-            focus="whole"
             value={appearance.bodyType}
             onChange={(bodyType) => onChange({ bodyType })}
           />
@@ -346,10 +238,7 @@ export function CustomizerPanel({
         <>
           <Section title="Ears" description="Or horns, or antennae, or fins.">
             <PartGrid
-              keys={EAR_TYPE_KEYS}
-              table={EAR_TYPES}
-              patch={(earType) => ({ earType })}
-              focus="ears"
+              {...PARTS.ear}
               value={appearance.earType}
               onChange={(earType) => onChange({ earType })}
             />
@@ -363,10 +252,7 @@ export function CustomizerPanel({
             description="Drawn into the bottom of the body, never hung off it."
           >
             <PartGrid
-              keys={FOOT_TYPE_KEYS}
-              table={FOOT_TYPES}
-              patch={(footType) => ({ footType })}
-              focus="feet"
+              {...PARTS.foot}
               value={appearance.footType}
               onChange={(footType) => onChange({ footType })}
             />
@@ -382,10 +268,7 @@ export function CustomizerPanel({
             description="The biggest single decision about who this creature is."
           >
             <PartGrid
-              keys={EYE_TYPE_KEYS}
-              table={EYE_TYPES}
-              patch={(eyeType) => ({ eyeType })}
-              focus="face"
+              {...PARTS.eye}
               value={appearance.eyeType}
               onChange={(eyeType) => onChange({ eyeType })}
             />
@@ -398,10 +281,7 @@ export function CustomizerPanel({
 
           <Section title="Brows">
             <PartGrid
-              keys={BROW_TYPE_KEYS}
-              table={BROW_TYPES}
-              patch={(browType) => ({ browType })}
-              focus="face"
+              {...PARTS.brow}
               value={appearance.browType}
               onChange={(browType) => onChange({ browType })}
             />
@@ -413,21 +293,15 @@ export function CustomizerPanel({
             description="A shape language, not a mood. The creature still expresses everything."
           >
             <PartGrid
-              keys={MOUTH_TYPE_KEYS}
-              table={MOUTH_TYPES}
-              patch={(mouthType) => ({ mouthType })}
-              focus="face"
+              {...PARTS.mouth}
               value={appearance.mouthType}
               onChange={(mouthType) => onChange({ mouthType })}
             />
             {dial('mouthWidth', 'Width')}
             {dial('mouthWeight', 'Line weight')}
             <PartGrid
+              {...PARTS.teeth}
               label="Teeth"
-              keys={TEETH_TYPE_KEYS}
-              table={TEETH_TYPES}
-              patch={(teethType) => ({ teethType })}
-              focus="face"
               value={appearance.teethType}
               onChange={(teethType) => onChange({ teethType })}
             />
@@ -436,21 +310,15 @@ export function CustomizerPanel({
 
           <Section title="Nose and cheeks">
             <PartGrid
+              {...PARTS.snout}
               label="Snout"
-              keys={SNOUT_TYPE_KEYS}
-              table={SNOUT_TYPES}
-              patch={(snoutType) => ({ snoutType })}
-              focus="face"
               value={appearance.snoutType}
               onChange={(snoutType) => onChange({ snoutType })}
             />
             {dial('snoutScale', 'Snout size')}
             <PartGrid
+              {...PARTS.cheek}
               label="Cheeks"
-              keys={CHEEK_TYPE_KEYS}
-              table={CHEEK_TYPES}
-              patch={(cheekType) => ({ cheekType })}
-              focus="face"
               value={appearance.cheekType}
               onChange={(cheekType) => onChange({ cheekType })}
             />
@@ -486,11 +354,8 @@ export function CustomizerPanel({
             onChange={(eyeColor) => onChange({ eyeColor })}
           />
           <PartGrid
+            {...PARTS.pattern}
             label="Markings"
-            keys={PATTERN_KEYS}
-            table={patternTable}
-            patch={(pattern) => ({ pattern })}
-            focus="whole"
             value={appearance.pattern}
             onChange={(pattern) => onChange({ pattern })}
           />
@@ -509,10 +374,7 @@ export function CustomizerPanel({
         <>
           <Section title="Wings">
             <PartGrid
-              keys={WING_TYPE_KEYS}
-              table={WING_TYPES}
-              patch={(wingType) => ({ wingType })}
-              focus="wings"
+              {...PARTS.wing}
               value={appearance.wingType}
               onChange={(wingType) => onChange({ wingType })}
             />
@@ -521,10 +383,7 @@ export function CustomizerPanel({
 
           <Section title="Tail">
             <PartGrid
-              keys={TAIL_TYPE_KEYS}
-              table={TAIL_TYPES}
-              patch={(tailType) => ({ tailType })}
-              focus="tail"
+              {...PARTS.tail}
               value={appearance.tailType}
               onChange={(tailType) => onChange({ tailType })}
             />
@@ -533,10 +392,7 @@ export function CustomizerPanel({
 
           <Section title="Topper" description="The thing growing out of the top.">
             <PartGrid
-              keys={TOPPER_TYPE_KEYS}
-              table={TOPPER_TYPES}
-              patch={(topperType) => ({ topperType })}
-              focus="topper"
+              {...PARTS.topper}
               value={appearance.topperType}
               onChange={(topperType) => onChange({ topperType })}
             />
@@ -549,10 +405,7 @@ export function CustomizerPanel({
             return (
               <Section key={slot} title={`${ACCESSORY_SLOT_LABELS[slot]} accessory`}>
                 <PartGrid
-                  keys={SLOT_KEYS[slot]}
-                  table={SLOT_TABLES[slot]}
-                  patch={(value) => accessoryPreviewPatch(slot, value)}
-                  focus={slot === 'neck' ? 'whole' : 'head'}
+                  {...ACCESSORY_PARTS[slot]}
                   value={worn?.type ?? 'none'}
                   onChange={(value) => setAccessory(slot, value)}
                 />

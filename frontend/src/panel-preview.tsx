@@ -11,6 +11,8 @@ import { StrictMode, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { RoomStylePanel } from './features/habitat/RoomStylePanel';
 import { DEFAULT_ROOM_STYLE } from './world/RoomStyle';
+import { NO_PROGRESS } from './lib/progress';
+import type { UserProgress } from './lib/progress';
 import type { RoomStyle } from './world/RoomStyle';
 import './index.css';
 
@@ -18,6 +20,14 @@ export function Harness() {
   const [style, setStyle] = useState<RoomStyle>(DEFAULT_ROOM_STYLE);
   const [editing, setEditing] = useState(false);
   const [placed, setPlaced] = useState<string[]>([]);
+  /*
+   * The harness has no session, so it has no progress either.
+   *
+   * Left at zero deliberately rather than faked high: this is the state a brand
+   * new account is in, and it is the one worth being able to look at — every
+   * locked tile padlocked, and the modal reachable from any of them.
+   */
+  const [progress] = useState<UserProgress>(NO_PROGRESS);
 
   return (
     <div className="bg-background text-foreground min-h-screen p-6">
@@ -26,10 +36,11 @@ export function Harness() {
           style={style}
           onChange={(patch) => setStyle((current) => ({ ...current, ...patch }))}
           onWallDragStart={(kind) => console.log('wall drag started:', kind)}
+          onHangWallDecor={() => true}
           onPlaceObject={(type) => setPlaced((current) => [...current, type])}
           editing={editing}
           onEditingChange={setEditing}
-          objectCount={placed.length}
+          progress={progress}
         />
       </div>
 

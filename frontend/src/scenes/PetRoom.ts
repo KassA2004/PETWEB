@@ -108,7 +108,16 @@ import {
 } from '../world/FloorGrid';
 import type { Footprint, GridAnchor, GridPlacement } from '../world/FloorGrid';
 import { rowForBand } from '../world/FloorGrid';
-import { WALL_TOP_Y, snapWall, wallCellKey, wallCells, wallQuadAt } from '../world/WallGrid';
+import {
+  WALL_COLUMNS,
+  WALL_ROWS,
+  WALL_TOP_Y,
+  normalizeWallFootprint,
+  snapWall,
+  wallCellKey,
+  wallCells,
+  wallQuadAt,
+} from '../world/WallGrid';
 import type { WallAnchor } from '../world/WallGrid';
 import { DEFAULT_ENVIRONMENT } from '../world/environments';
 import type { EnvironmentDefinition, PlacedProp } from '../world/environments';
@@ -125,7 +134,7 @@ import {
 import type { RoomStyle, WallDecorPlacement } from '../world/RoomStyle';
 import { getWallDecor } from '../assets/environment/walls/WallDecor';
 import type { WallDecorKind } from '../assets/environment/walls/WallDecor';
-import { depthTintOf, overlaps, pickAt, screenRectOf, sortKeyOf } from './room/BodyView';
+import { PICK_PAD, depthTintOf, overlaps, pickAt, screenRectOf, sortKeyOf } from './room/BodyView';
 import { createDepthGuide } from './room/DepthGuide';
 import { swipeImpulse } from './room/Swipe';
 import type { Blocker } from './room/Swipe';
@@ -228,6 +237,27 @@ const CLICK_DISTANCE = 10;
 
 /** Below this release speed, letting go is *placing* rather than throwing. */
 const PLACE_SPEED = 150;
+
+/**
+ * How far outside a toy's own artwork you can still grab it, in room units.
+ *
+ * **Only while edit mode is off.** Outside edit mode the only things that move
+ * are the creature and its toys, and a toy is exactly the thing that ends up
+ * wedged: it rolls under the table, behind the bookshelf, into the gap between
+ * the bed and the wall, and what is left of it on screen is a few pixels the
+ * furniture in front is also claiming. Asking somebody to hit that is asking
+ * them to lose a ball permanently.
+ *
+ * Room units rather than screen pixels, so the reach is the same fraction of
+ * the room on a phone as on a monitor — the pointer is already in this space
+ * by the time `pickAt` sees it. Thirty is about half a toy's width: enough to
+ * roughly double the target, not enough to reach the next tile.
+ *
+ * Edit mode gets none of it. Arranging furniture is precision work, and a
+ * toy with a halo around it would start intercepting drops meant for the
+ * table it is sitting under.
+ */
+const TOY_REACH = 30;
 
 /**
  * How high a carried thing has to be lifted before letting go throws it away.
@@ -2064,10 +2094,51 @@ export class PetRoom {
     }
 
     const bodies = this.world.bodies;
-    const body = pickAt(bodies, point.x, point.y, (candidate) => {
+
+    const reachable = (candidate: PhysicsBody): boolean => {
       const entity = this.entities.get(candidate.id);
       return entity !== undefined && entity.reachable;
-    });
+    };
+
+    /*
+     * Outside edit mode, ask the things that can actually be picked up first.
+     *
+     * Two passes, and the order is the fix. One pass over everything sorts by
+     * depth, so a ball that has rolled under the table loses the click to the
+     * table — which is not even a competition worth having, because outside
+     * edit mode the table cannot be moved anyway. The click would land as a
+     * tap on the furniture and the ball would stay where it is, for ever.
+     *
+     * So: the creature and its toys, front to back, with a toy allowed
+     * `TOY_REACH` of slack around it. Only if none of them is under the
+     * pointer does the second pass run, unchanged, over everything reachable
+     * — which is what keeps a tap on the bookshelf still being a tap on the
+     * bookshelf.
+     *
+     * The creature is in the first pass rather than above it, at its ordinary
+     * pad: it is the biggest thing in the room and it sorts by depth like
+     * everything else, so a toy behind it cannot take a click aimed at it.
+     *
+     * In edit mode this whole branch is skipped and the single pass below is
+     * exactly what it always was. Precision is the point of edit mode.
+     */
+    let body: PhysicsBody | null = null;
+
+    if (!this.editing) {
+      body = pickAt(
+        bodies,
+        point.x,
+        point.y,
+        (candidate) => {
+          const entity = this.entities.get(candidate.id);
+          if (!entity || !entity.reachable) return false;
+          return entity.id === 'pet' || entity.isToy;
+        },
+        (candidate) => (this.entities.get(candidate.id)?.isToy ? TOY_REACH : PICK_PAD),
+      );
+    }
+
+    body ??= pickAt(bodies, point.x, point.y, reachable);
 
     if (!body) {
       // Tapping the grass deselects. A selection you cannot clear is a
@@ -2489,6 +2560,43 @@ export class PetRoom {
     }
 
     return this.wallReserved;
+  }
+
+  /**
+   * Hang a piece in the first free space, without a drag.
+   *
+   * The catalogue's other half. Dragging is the good gesture on a desktop —
+   * you put the painting where you want it and watch it land — and it is not
+   * available at all to a thumb: the frame is a third of a phone screen and the
+   * finger doing the dragging covers the thing being dragged. So the Room
+   * panel's wall pieces are tapped, exactly like every other object in the
+   * catalogue, and the room chooses the first cell that will take it.
+   *
+   * Left to right, bottom row first, because that is where a bare wall looks
+   * emptiest and because it keeps the pieces off the ceiling.
+   *
+   * @returns whether it found anywhere to put it.
+   */
+  hangWallDecor(kind: WallDecorKind): boolean {
+    if (this.focused || !this.interactive) return false;
+
+    const spec = getWallDecor(kind);
+    const size = normalizeWallFootprint(spec.footprint);
+    const reserved = this.reservedWallCells();
+    const occupied = occupiedWallCells(this.style.decor);
+
+    for (let row = 0; row + size.rows <= WALL_ROWS; row++) {
+      for (let col = 0; col + size.cols <= WALL_COLUMNS; col++) {
+        const cells = wallCells({ col, row }, size).map(wallCellKey);
+        if (cells.some((key) => reserved.has(key) || occupied.has(key))) continue;
+
+        this.emitSound('prop-place', 0.6, { x: ROOM_WIDTH / 2, z: 0 });
+        this.onWallDecorChange?.(placeWallDecor(this.style.decor, kind, { col, row }));
+        return true;
+      }
+    }
+
+    return false;
   }
 
   /** Start hanging a new piece, or picking up an already-hung one to move it. */

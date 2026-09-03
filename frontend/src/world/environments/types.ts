@@ -80,6 +80,21 @@ export interface EnvironmentDefinition {
   ceiling: number;
 
   /**
+   * Whether this place has a light that can be switched off.
+   *
+   * A field rather than a check on the id, for the reason AGENTS.md gives for
+   * every other one: the alternative is a conditional somewhere that has to
+   * know the names of places. The habitat reads it to decide whether to report
+   * "Lights on" above the frame — which is a true and useful thing to say about
+   * a room with a lamp in it, and a slightly baffling thing to say about a lawn
+   * in the middle of the afternoon.
+   *
+   * `night` still applies either way: a park at night is dark because it is
+   * night, not because anybody flicked a switch.
+   */
+  lamps: boolean;
+
+  /**
    * Cells of the wall grid that are not hanging space.
    *
    * A hole in the wall is still on the wall grid — that is how the window

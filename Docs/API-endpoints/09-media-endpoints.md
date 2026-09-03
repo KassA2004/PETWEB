@@ -139,10 +139,46 @@ The processing steps in §2 that require an image codec:
 | 5. `-thumb` variant at 320 px | **not done** — needs `sharp` |
 
 `sharp` is not in `techStack.md`, so adding it is an approval, not a decision.
-Until then an upload is stored at its original size and the memory book renders
-it with `loading="lazy"` and a CSS cap. The integration point is one function —
-`MediaService.store` already owns the whole pipeline, and steps 3 and 5 go
-between `cleanImage` and `writeFile`.
+The integration point is one function — `MediaService.store` already owns the
+whole pipeline, and steps 3 and 5 go between `cleanImage` and `writeFile`.
+
+### The client prepares the picture before it sends it
+
+`frontend/src/features/media/prepare.ts`, added Sept 2026 with the camera
+button. Not a substitute for any of the above — the server still sniffs, still
+strips, still caps — but the browser is where the picture is still whole, and
+three things are much easier to fix there:
+
+```text
+  4032 x 3024, 4.8 MB, EXIF Orientation = 6
+             ↓  createImageBitmap({ imageOrientation: 'from-image' }) → canvas
+  1600 x 1200 JPEG, ~300 kB, no metadata, the right way up
+```
+
+- **Orientation.** This is a *correctness* fix, not an optimisation, and it is
+  the direct consequence of step 2 above. Stripping APP1 removes the EXIF
+  Orientation tag along with the GPS record, so a portrait photograph — stored
+  landscape with a "turn me" flag, which is what every phone camera produces —
+  arrives at the server as a landscape photograph with no flag, and is sideways
+  for ever. Baking the rotation into the pixels first is what makes the strip
+  harmless.
+- **Size.** The 5 MB cap and a modern phone camera are on a collision course;
+  "that picture is over 5 MB" is a true sentence the user can do nothing about.
+- **Format.** iOS shoots HEIC, which §2 does not accept. A browser that can
+  decode one can re-encode it as JPEG.
+
+Two rules it keeps. **It never loses a picture**: if the browser cannot decode
+the file or cannot produce a blob, the original goes up untouched and the
+server's own validation answers. And **it does not re-encode what does not need
+it** — a small PNG or WebP, or a JPEG with no EXIF block at all, passes through
+byte for byte. Whether a JPEG carries EXIF is read from the marker stream rather
+than inferred from decoding it twice: measured in Chrome, `imageOrientation:
+'none'` returns the *oriented* bitmap too, so the two decodes always agree and a
+sideways photograph would sail straight through.
+
+This does **not** make steps 3 and 5 unnecessary. Anything that does not come
+through the memory picker — a future import, another client, a direct API
+call — still arrives unprocessed, and a thumbnail is still a thumbnail.
 
 **The access-control posture is unchanged and still not access control.** Files
 are served publicly from unguessable paths (§4). Before anything social ships

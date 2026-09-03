@@ -262,6 +262,31 @@ colliderFor(traits)    -> the physics volume, from the same box
 `fill` defaults to 0.92 so neighbouring objects have a visible gap rather than a
 shared edge — a room where the furniture touches reads as a packed shelf.
 
+**Toy `friction` was halved in Sept 2026**, and the number is the whole of the
+feel of throwing something. `applyGroundFriction` decelerates at
+`friction * gravity`, so at gravity 2600 a coefficient of 0.42 is 1092 px/s² —
+a thrown plush was finished before the creature had turned round. Measured in
+the running room, one clear lane at z = 460, released at 900 px/s, both readings
+taken the same way:
+
+```text
+                    travel        rolling for
+  ball    before    1090 px *     2.31 s
+          after     1090 px *     3.75 s
+  plush   before     541 px       0.99 s
+          after      790 px       1.64 s
+
+  * the ball reaches the far wall either way; time is the honest number
+    for it, and it now bounces off and carries on rather than expiring.
+```
+
+`drag` (air resistance, off the ground only) came down with it, so the airborne
+half of an arc is not scrubbed either. Nothing about stopping changed:
+`STATIC_FRICTION_SPEED` still kills a crawl outright, so everything still comes
+to rest and still gets to sleep. If a throw ever needs retuning, tune these
+coefficients — not the solver, and not the throw velocity, which is an honest
+measurement of the hand.
+
 ### Adding an object
 
 1. One row in `ObjectCatalog.ts`.
@@ -596,6 +621,36 @@ whatever is already in `interests` over whatever is merely nearest — so
 pointing at something by prodding it reliably sends the creature over to it,
 not to a different, closer distraction.
 
+### A toy is easier to grab than anything else, and only outside edit mode
+
+Added Sept 2026. The gate above says which things *can* be picked up; this is
+about being able to hit them. A toy is small, it rolls, and where it ends up is
+under the table, behind the bookshelf, or in the gap between the bed and the
+wall — with a few pixels of it left on screen that the furniture in front is
+also claiming. One depth-sorted pass over everything gives that click to the
+furniture, which outside edit mode cannot even be moved, so the press does
+nothing and the ball is lost for good.
+
+So `pointerDown` asks twice while `editing` is false:
+
+```text
+  1. the creature and its toys, front to back
+     — a toy gets TOY_REACH (30 room units) of slack around its artwork,
+       the creature gets the ordinary PICK_PAD
+  2. only if nothing there:  everything reachable, unchanged
+```
+
+Two things this deliberately does not do. It does not make the *hit rectangle*
+bigger — `screenRectOf` is untouched, and so is anything that draws — the reach
+is a padding passed to `pickAt`, which is where "what did you click on" already
+lived. And it does not apply in edit mode: arranging furniture to the cell is
+precision work, and a toy with a halo would start intercepting drops meant for
+the table it is sitting under. Edit mode runs the single pass exactly as before.
+
+The reach is in **room units, not screen pixels**, because the pointer is
+already in that space by the time `pickAt` sees it — so it is the same fraction
+of the room on a phone as on a monitor. Thirty is about half a toy's width.
+
 **Removing is "Edit room" plus lifting the thing out of the room, on the
 height axis — not dragging it toward an edge of the frame.**
 
@@ -750,6 +805,14 @@ What an environment is allowed to change, and did:
                 a sky in it
   wallReserved  empty. There is no wall, so the wall-decor drag simply never
                 finds anywhere to land — no conditional anywhere
+  lamps         false. Nobody switches the sky off, so the habitat does not
+                report "Lights on" above the frame (added Sept 2026 — the chip
+                was appearing over a sunlit lawn at three in the afternoon).
+                A field rather than a check on the environment's id, for the
+                same reason as every other one: the alternative is a
+                conditional somewhere that has to know the names of places.
+                `night` is unaffected — a park at midnight is dark because it
+                is midnight
 ```
 
 What it may never change, and did not: **the camera, the bounds and the grid.**
@@ -877,6 +940,8 @@ wants anyway.
 - [ ] Nothing outside `PetRoom.pointerDown`'s `movable` check (the pet, a toy,
       or `this.editing`) can be dragged. If a new interaction needs to move
       something, it goes through that check rather than around it.
+- [ ] Anything that makes a target easier to hit does it with `pickAt`'s pad,
+      not by growing `screenRectOf` — and it is off in edit mode (§7c).
 - [ ] A deletion gesture is a fact about world-space geometry (height, a grid
       cell), never about the pointer's position against a DOM element's screen
       rect — that is the bug `DISCARD_LIFT` replaced (§7c).

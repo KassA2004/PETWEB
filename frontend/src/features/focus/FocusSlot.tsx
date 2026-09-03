@@ -111,7 +111,10 @@ export function FocusSlot({ focus, goalTitle, dragging, over, slotRef }: FocusSl
       ref={slotRef}
       aria-label="Focus"
       className={cn(
-        'rounded-2xl border-2 border-dashed p-5 text-center transition-all duration-200',
+        'rounded-2xl border-2 border-dashed p-5 text-center duration-200',
+        // Named rather than `all`: `transition: all` animates every property
+        // that ever changes, including layout ones nobody meant to animate.
+        'transition-[border-color,background-color,color,transform]',
         over
           ? // The one moment the slot is allowed to be loud.
             'scale-[1.02] border-primary bg-primary/10 text-foreground'
@@ -145,30 +148,40 @@ export function FocusSlot({ focus, goalTitle, dragging, over, slotRef }: FocusSl
  * Fixed rather than absolute, and `pointer-events-none`, so it cannot land
  * under itself and cannot swallow the drop it is illustrating. Rendered by the
  * panel that owns the drag, so there is exactly one of them.
+ *
+ * **It is positioned by the drag, not by this component.** It used to take a
+ * point as a prop and set `left`/`top` from it, which meant a React render and
+ * a layout on every pointer move — sixty of each per second, on the gesture a
+ * phone performs with a thumb. Now `useGoalDrag` writes a `translate3d` onto
+ * the element through `ghostRef` and this renders once per pickup.
+ *
+ * The centring offset lives in an inner element for the same reason: the outer
+ * element's `transform` belongs to the drag, so a `-translate-1/2` on it would
+ * be overwritten by the first move.
  */
 export function DragGhost({
   goal,
-  at,
   over,
+  elementRef,
 }: {
   goal: DraggedGoal;
-  at: { x: number; y: number };
   over: boolean;
+  elementRef: React.RefObject<HTMLDivElement | null>;
 }) {
   return (
-    <div
-      aria-hidden
-      style={{ left: at.x, top: at.y }}
-      className={cn(
-        'pointer-events-none fixed z-50 -translate-x-1/2 -translate-y-1/2 select-none',
-        'max-w-56 truncate rounded-xl border px-3 py-2 text-sm shadow-lg',
-        'transition-colors duration-150',
-        over
-          ? 'border-primary bg-primary text-primary-foreground'
-          : 'border-border bg-card text-card-foreground',
-      )}
-    >
-      {goal.title}
+    <div ref={elementRef} aria-hidden className="pointer-events-none fixed top-0 left-0 z-50">
+      <div
+        className={cn(
+          '-translate-x-1/2 -translate-y-1/2 select-none',
+          'max-w-56 truncate rounded-xl border px-3 py-2 text-sm shadow-lg',
+          'transition-colors duration-150 motion-reduce:transition-none',
+          over
+            ? 'border-primary bg-primary text-primary-foreground'
+            : 'border-border bg-card text-card-foreground',
+        )}
+      >
+        {goal.title}
+      </div>
     </div>
   );
 }

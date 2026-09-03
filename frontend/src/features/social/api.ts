@@ -23,6 +23,7 @@
  */
 
 import { apiRequest } from '../../lib/api';
+import type { UserProgress } from '../../lib/progress';
 import type { Memory } from '../memories/api';
 
 /* -------------------------------------------------------------------------- */
@@ -57,25 +58,33 @@ export interface PublicUser {
   id: string;
   username: string;
   pet: PublicPet | null;
+  /**
+   * What they have done: minutes focused, goals finished, memories shared.
+   *
+   * The stats tab on a visit, and the only thing this product will say about
+   * somebody beyond their creature and their room. It arrives with the profile
+   * rather than on a request of its own, because the server reads all three off
+   * the same row it was already reading for the username.
+   */
+  progress: UserProgress;
+  /** The same number as `progress.memoriesShared`, under its older name. */
   publicMemories: number;
   relationship: RelationshipState;
   /** The pending request between us, so a result row can offer Accept. */
   requestId: string | null;
 }
 
-export interface Me {
-  id: string;
-  username: string;
-  email: string;
-}
-
-export function fetchMe(signal?: AbortSignal): Promise<Me> {
-  return apiRequest<Me>('/users/me', { signal });
-}
-
-export function setUsername(username: string, signal?: AbortSignal): Promise<Me> {
-  return apiRequest<Me>('/users/me', { method: 'PATCH', body: { username }, signal });
-}
+/*
+ * `/users/me` is described in `features/progress/api.ts`, and re-exported here.
+ *
+ * It moved because the dashboard needs the progress half of that response on
+ * load, and everything in this file sits behind the lazily-loaded social chunk
+ * — reaching in here for it would have pulled `socket.io-client`'s neighbours
+ * into the entry bundle to fetch three integers. One description of the
+ * endpoint, importable from either side.
+ */
+export { fetchMe, setUsername } from '../progress/api';
+export type { Me } from '../progress/api';
 
 /**
  * Find people whose username starts with this.

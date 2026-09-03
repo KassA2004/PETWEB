@@ -1,6 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { progressUpdate } from '../progress/progress';
+import type { ProgressDelta } from '../progress/progress';
 import {
   DEFAULT_AFFECTION,
   abortWindowStart,
@@ -89,12 +91,24 @@ export class AffectionService {
    *   they reset the silence clock. Starting a session does not; promising is
    *   not doing, and a user who started six sessions and finished none has not
    *   followed through on anything.
+   * @param progress what the same event did to the user's counters.
+   *
+   *   Carried here rather than written separately because every event that
+   *   moves a counter already moves affection, in this transaction, against
+   *   this row — so folding it into the same UPDATE is one statement instead of
+   *   two, and makes "the session was counted but the creature did not notice"
+   *   an impossible outcome rather than a rare one. See `progress/progress.ts`
+   *   for the longer version of that argument.
    */
   async apply(
     tx: Client,
     ownerId: string,
     delta: number,
-    options: { followedThrough?: boolean; now?: Date } = {},
+    options: {
+      followedThrough?: boolean;
+      now?: Date;
+      progress?: ProgressDelta;
+    } = {},
   ): Promise<AffectionView> {
     const now = options.now ?? new Date();
 
@@ -119,6 +133,7 @@ export class AffectionService {
         affection: next,
         affectionAt: now,
         ...(options.followedThrough ? { lastFollowThroughAt: now } : {}),
+        ...progressUpdate(options.progress ?? {}),
       },
     });
 

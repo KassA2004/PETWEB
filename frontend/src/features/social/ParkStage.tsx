@@ -596,7 +596,24 @@ function ChatLog({
       )}
     >
       {messages.length === 0 ? (
-        <p className="py-4 text-center text-xs text-muted-foreground">Nothing said yet.</p>
+        /*
+          Centred in the box rather than pinned to the top of it.
+
+          The log takes whatever height the roster has not, which on a quiet
+          park is most of the column — so a line of grey text sitting at the top
+          of three hundred empty points read as a list that had failed to load
+          rather than as a conversation nobody has started. `absolute inset-0`
+          rather than a height on the paragraph, so the moment a message arrives
+          this contributes nothing to the scroll the log sticks to the bottom of.
+        */
+        <div className="absolute inset-0 grid place-items-center px-4 text-center">
+          <p className="text-xs text-muted-foreground">
+            Nothing said yet.
+            <span className="mt-0.5 block text-[0.65rem] text-muted-foreground/70">
+              Say hello — everyone on the lawn will see it.
+            </span>
+          </p>
+        </div>
       ) : (
         messages.map((message) => (
           <p key={message.id} className="text-xs leading-relaxed">

@@ -4,6 +4,8 @@ import { AppException } from '../common/app.exception';
 import { ErrorCode } from '../common/error-codes';
 import { PrismaService } from '../prisma/prisma.service';
 import { readStoredRoomStyle } from '../environments/room-style';
+import { PROGRESS_SELECT, toProgress } from '../progress/progress';
+import type { UserProgress } from '../progress/progress';
 import {
   USERNAME_RULE_MESSAGE,
   isValidUsername,
@@ -15,6 +17,17 @@ export interface MeView {
   id: string;
   username: string;
   email: string;
+  /**
+   * What they have done, and therefore what the object catalog will let them
+   * have (`progress/progress.ts`).
+   *
+   * Carried on the profile rather than given an endpoint of its own, because a
+   * request returning three integers is not worth a round trip when a request
+   * the client can already make returns them for nothing. The client asks once
+   * on load; every later change arrives on the response of the thing that
+   * caused it, so nothing polls.
+   */
+  progress: UserProgress;
 }
 
 /**
@@ -36,7 +49,25 @@ export interface PublicUserView {
   username: string;
   /** Their current creature, or null if they have not saved one. */
   pet: PublicPetView | null;
-  /** How many memories they have chosen to make public. */
+  /**
+   * What they have done: minutes focused, goals finished, memories shared.
+   *
+   * The same three numbers the owner sees on their own room panel, and the
+   * whole of the stats tab a visitor gets. Public on purpose - a number that
+   * gates a piece of furniture in a shared world is a number the world can
+   * see, and there is nothing in here that is not already the point of the
+   * product. Note what is still absent: the affection value, which is a
+   * relationship between one person and their creature and nobody else's
+   * business.
+   */
+  progress: UserProgress;
+  /**
+   * How many memories they have chosen to make public.
+   *
+   * The same number as `progress.memoriesShared`, kept under its old name
+   * because the people list has shown it since the social layer shipped. One
+   * column read twice, never two counts that can disagree.
+   */
   publicMemories: number;
   /** Where this account stands relative to the person asking. */
   relationship: RelationshipState;
@@ -106,11 +137,11 @@ export class UsersService {
   async me(userId: string): Promise<MeView> {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { id: true, username: true, email: true },
+      select: { id: true, username: true, email: true, ...PROGRESS_SELECT },
     });
 
     if (!user) throw new NotFoundException('User not found');
-    return user;
+    return toMe(user);
   }
 
   /**
@@ -137,11 +168,13 @@ export class UsersService {
     }
 
     try {
-      return await this.prisma.user.update({
-        where: { id: userId },
-        data: { username, usernameKey: usernameKeyOf(username) },
-        select: { id: true, username: true, email: true },
-      });
+      return toMe(
+        await this.prisma.user.update({
+          where: { id: userId },
+          data: { username, usernameKey: usernameKeyOf(username) },
+          select: { id: true, username: true, email: true, ...PROGRESS_SELECT },
+        }),
+      );
     } catch (error) {
       if (
         error instanceof Prisma.PrismaClientKnownRequestError &&
@@ -181,26 +214,22 @@ export class UsersService {
       where: { usernameKey: { startsWith: key }, id: { not: viewerId } },
       orderBy: { usernameKey: 'asc' },
       take: SEARCH_LIMIT,
-      select: { id: true, username: true, activePet: PET_SELECT },
+      select: { id: true, username: true, activePet: PET_SELECT, ...PROGRESS_SELECT },
     });
 
     if (users.length === 0) return [];
 
-    // Two queries for the whole page rather than two per row: the relationship
-    // and the public-memory count are both looked up for every id at once.
-    // (Performance Rules — "No N+1. One query for the list, one for the
-    // details — never one per item.")
-    const ids = users.map((user) => user.id);
-    const [relationships, counts] = await Promise.all([
-      this.relationshipsWith(viewerId, ids),
-      this.publicMemoryCounts(ids),
-    ]);
+    // One query for the whole page, not one per row (Performance Rules - "No
+    // N+1"). It used to be two: the relationships, and a `groupBy` counting
+    // everybody's public memories. That second one is gone - the count is now
+    // a column on the row this query has already read.
+    const relationships = await this.relationshipsWith(
+      viewerId,
+      users.map((user) => user.id),
+    );
 
     return users.map((user) => ({
-      id: user.id,
-      username: user.username,
-      pet: toPublicPet(user.activePet),
-      publicMemories: counts.get(user.id) ?? 0,
+      ...publicView(user),
       relationship: relationships.get(user.id)?.state ?? 'none',
       requestId: relationships.get(user.id)?.requestId ?? null,
     }));
@@ -210,21 +239,15 @@ export class UsersService {
   async publicProfile(viewerId: string, userId: string): Promise<PublicUserView> {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { id: true, username: true, activePet: PET_SELECT },
+      select: { id: true, username: true, activePet: PET_SELECT, ...PROGRESS_SELECT },
     });
 
     if (!user) throw new NotFoundException('User not found');
 
-    const [relationships, counts] = await Promise.all([
-      this.relationshipsWith(viewerId, [userId]),
-      this.publicMemoryCounts([userId]),
-    ]);
+    const relationships = await this.relationshipsWith(viewerId, [userId]);
 
     return {
-      id: user.id,
-      username: user.username,
-      pet: toPublicPet(user.activePet),
-      publicMemories: counts.get(userId) ?? 0,
+      ...publicView(user),
       relationship:
         userId === viewerId ? 'self' : (relationships.get(userId)?.state ?? 'none'),
       requestId: relationships.get(userId)?.requestId ?? null,
@@ -396,19 +419,6 @@ export class UsersService {
     return result;
   }
 
-  /** How many public memories each of these users has. One grouped query. */
-  private async publicMemoryCounts(userIds: string[]): Promise<Map<string, number>> {
-    const counts = new Map<string, number>();
-
-    const rows = await this.prisma.memory.groupBy({
-      by: ['ownerId'],
-      where: { ownerId: { in: userIds }, visibility: 'public' },
-      _count: { _all: true },
-    });
-
-    for (const row of rows) counts.set(row.ownerId, row._count._all);
-    return counts;
-  }
 }
 
 /**
@@ -421,6 +431,48 @@ export class UsersService {
 const PET_SELECT = {
   select: { id: true, name: true, species: true, appearanceData: true },
 } as const;
+
+/** The user's own profile row, as `MeView`. */
+function toMe(
+  row: { id: string; username: string; email: string } & UserProgress,
+): MeView {
+  return {
+    id: row.id,
+    username: row.username,
+    email: row.email,
+    progress: toProgress(row),
+  };
+}
+
+/**
+ * The half of a `PublicUserView` that comes off the user row.
+ *
+ * One function, called by both reads, so `search` and `publicProfile` cannot
+ * drift into saying different things about the same person - and so anything
+ * added to `PROGRESS_SELECT` reaches both without either being edited.
+ */
+function publicView(
+  row: {
+    id: string;
+    username: string;
+    activePet: {
+      id: string;
+      name: string;
+      species: string;
+      appearanceData: unknown;
+    } | null;
+  } & UserProgress,
+): Omit<PublicUserView, 'relationship' | 'requestId'> {
+  const progress = toProgress(row);
+
+  return {
+    id: row.id,
+    username: row.username,
+    pet: toPublicPet(row.activePet),
+    progress,
+    publicMemories: progress.memoriesShared,
+  };
+}
 
 function toPublicPet(
   pet: { id: string; name: string; species: string; appearanceData: unknown } | null,

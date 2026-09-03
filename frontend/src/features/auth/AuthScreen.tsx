@@ -1,5 +1,7 @@
-import { useState } from 'react';
+import { ArrowLeft } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../components/ui/card';
+import { Link } from '../../components/ui/link';
+import { cn } from '../../lib/utils';
 import { LoginForm } from './LoginForm';
 import { RegisterForm } from './RegisterForm';
 
@@ -8,20 +10,32 @@ type Mode = 'login' | 'register';
 interface AuthScreenProps {
   /** Called once a session exists (sign-in or sign-up both land here). */
   onAuthenticated: () => void;
-  initialMode?: Mode;
+  /** Which form to show. Comes from the address bar, not from local state. */
+  mode: Mode;
+  /** Switching between the two is a navigation — see `AuthGate`. */
+  onModeChange: (mode: Mode) => void;
 }
 
 /**
- * The landing screen for a user with no session — the other half of the
- * "route to the creator vs. route to the world" decision in
- * /Docs/API-endpoints/02-user-endpoints.md §4, one level up: here it's
- * "route to auth vs. route to the app" at all.
+ * The way in, for somebody who has arrived at the front door and decided.
+ *
+ * It used to be the entire signed-out product: one card floating on a beige
+ * field, with no name on it, no way back and no indication of what was on the
+ * other side. It is now the second screen rather than the first, which changes
+ * what it has to do — the home page has already made the case, so this only has
+ * to be a form that clearly belongs to the same thing.
+ *
+ * Three additions, and each one is a question the old screen could not answer:
+ *
+ * ```text
+ *   the name, linked home    "what is this, and can I go back and look?"
+ *   the two modes as routes  "I meant to log in" — now the back button works
+ *   the same warm light      "is this the same product?" — yes, same palette
+ * ```
  */
-export function AuthScreen({ onAuthenticated, initialMode = 'register' }: AuthScreenProps) {
-  const [mode, setMode] = useState<Mode>(initialMode);
-
+export function AuthScreen({ onAuthenticated, mode, onModeChange }: AuthScreenProps) {
   return (
-    <div className="relative flex min-h-svh items-center justify-center overflow-hidden px-4 py-12">
+    <div className="relative flex min-h-svh flex-col overflow-hidden bg-background">
       <div
         aria-hidden
         className="pointer-events-none absolute inset-0"
@@ -32,25 +46,54 @@ export function AuthScreen({ onAuthenticated, initialMode = 'register' }: AuthSc
         }}
       />
 
-      <Card className="relative w-full max-w-sm">
-        <CardHeader className="items-center text-center">
-          <CardTitle className="text-2xl">
-            {mode === 'register' ? 'Start your world' : 'Welcome back'}
-          </CardTitle>
-          <CardDescription>
-            {mode === 'register'
-              ? 'Create an account to name your room and, soon, your creature.'
-              : 'Log in to return to your room.'}
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {mode === 'register' ? (
-            <RegisterForm onSuccess={onAuthenticated} onSwitchToLogin={() => setMode('login')} />
-          ) : (
-            <LoginForm onSuccess={onAuthenticated} onSwitchToRegister={() => setMode('register')} />
+      <header
+        className={cn(
+          'relative mx-auto flex w-full max-w-6xl items-center gap-3 px-5 py-3 sm:px-8',
+          'pt-[max(0.75rem,env(safe-area-inset-top))]',
+        )}
+      >
+        <Link
+          to="home"
+          className={cn(
+            'press inline-flex items-center gap-2 rounded-lg px-2 py-1.5',
+            'text-sm font-semibold tracking-tight hover:bg-muted',
           )}
-        </CardContent>
-      </Card>
+        >
+          <ArrowLeft aria-hidden className="size-4 text-muted-foreground" />
+          Digital Pet World
+        </Link>
+      </header>
+
+      <main
+        id="main"
+        className="relative flex flex-1 items-center justify-center px-4 pt-4 pb-[max(3rem,env(safe-area-inset-bottom))]"
+      >
+        <Card className="w-full max-w-sm">
+          <CardHeader className="items-center text-center">
+            <CardTitle className="text-2xl">
+              {mode === 'register' ? 'Start Your World' : 'Welcome Back'}
+            </CardTitle>
+            <CardDescription className="text-pretty">
+              {mode === 'register'
+                ? 'A creature, a room, and one small goal at a time.'
+                : 'Your room is where you left it.'}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {mode === 'register' ? (
+              <RegisterForm
+                onSuccess={onAuthenticated}
+                onSwitchToLogin={() => onModeChange('login')}
+              />
+            ) : (
+              <LoginForm
+                onSuccess={onAuthenticated}
+                onSwitchToRegister={() => onModeChange('register')}
+              />
+            )}
+          </CardContent>
+        </Card>
+      </main>
     </div>
   );
 }

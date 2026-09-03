@@ -19,7 +19,7 @@
 import { Container, Graphics } from 'pixi.js';
 import { PALETTE, darken, lighten, mix, tones } from '../../shared/color';
 import { createRng, drawOrganicOval, drawSquircle, rngRange } from '../../shared/shapes';
-import { edge, formFill, gloss, glowBall } from '../../objects/shared/Surface';
+import { edge, formFill, gloss, softGlow } from '../../objects/shared/Surface';
 import { createClock } from '../../objects/decorations/Clock';
 import { updateLife } from '../../objects/ObjectLife';
 import type { WallFootprint } from '../../../world/WallGrid';
@@ -373,7 +373,7 @@ const hole: WallDecorSpec = {
     group.addChild(cavity);
 
     // A warm glow from inside, so the hole is somewhere rather than nothing.
-    const inner = glowBall(r * 0.6, 0xffca6b, 0.28, 3);
+    const inner = softGlow(r * 0.72, 0xffca6b, 0.28);
     inner.label = 'lamp-glow';
     inner.position.set(-r * 0.1, r * 0.1);
     group.addChild(inner);
@@ -490,7 +490,7 @@ const sconce: WallDecorSpec = {
     const group = new Container();
     const brass = lighten(palette.accent, 0.15);
 
-    const glow = glowBall(Math.min(halfW, halfH) * 2.6, 0xffd9a0, 0.3, 4);
+    const glow = softGlow(Math.min(halfW, halfH) * 3, 0xffd9a0, 0.3);
     glow.label = 'lamp-glow';
     glow.position.set(0, -halfH * 0.1);
     group.addChild(glow);

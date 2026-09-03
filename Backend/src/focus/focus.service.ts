@@ -381,13 +381,23 @@ export class FocusService {
 
       // Somebody else got there first - two tabs, or a reload racing the
       // countdown. The session ends up completed either way; what must not
-      // happen twice is the affection.
+      // happen twice is the affection - nor, now, the minutes. The claim is
+      // what makes both exactly-once: whichever request lost the race updated
+      // zero rows and adds nothing.
       if (claimed.count > 0) {
         await this.affection.apply(
           tx,
           ownerId,
           completionDelta(session.durationMinutes),
-          { followedThrough: true, now },
+          {
+            followedThrough: true,
+            now,
+            // The minutes *committed to*, which for a sealed session are the
+            // minutes served: `endedAt` is the deadline, not the moment the
+            // browser mentioned it, so a session resolved four hours late
+            // still banks the twenty-five it was.
+            progress: { focusMinutes: session.durationMinutes },
+          },
         );
       }
 

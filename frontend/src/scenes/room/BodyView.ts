@@ -89,17 +89,34 @@ export function overlaps(a: ScreenRect, b: ScreenRect): boolean {
 }
 
 /**
+ * How far outside its own artwork a body can still be picked up, in pixels.
+ *
+ * Small, because with everything in the room competing for the same click a
+ * generous target is a target that steals. `PetRoom`'s `TOY_REACH` is the one
+ * exception the room makes, for a toy nobody is trying to arrange — see
+ * `pickAt` and §7c of `Docs/room-and-objects.md`.
+ */
+export const PICK_PAD = 6;
+
+/**
  * The topmost body under a screen point, or null.
  *
  * Searched from the front of the room backwards, so clicking where two things
  * overlap picks up the one you can actually see. Generous by a few pixels in
  * every direction: these are finger-sized targets on a small canvas.
+ *
+ * @param padOf how far past its artwork each body may be grabbed from. A
+ *   function rather than a number because the answer is not the same for every
+ *   body: a wedged toy wants a forgiving target and a piece of furniture being
+ *   positioned to the pixel wants none. Defaults to `PICK_PAD` for everything,
+ *   which is the behaviour edit mode keeps.
  */
 export function pickAt(
   bodies: PhysicsBody[],
   screenX: number,
   screenY: number,
   accepts: (body: PhysicsBody) => boolean,
+  padOf: (body: PhysicsBody) => number = () => PICK_PAD,
 ): PhysicsBody | null {
   const candidates = bodies
     .filter(accepts)
@@ -109,12 +126,24 @@ export function pickAt(
     // The artwork usually reaches a little above the collider — ears, a lamp
     // shade, the back of a chair — so the target is padded upward.
     const rect = screenRectOf(body, 1.18);
-    const pad = 6;
+    const pad = padOf(body);
+
+    /*
+     * Extra reach goes sideways and toward the viewer, never up.
+     *
+     * Above a thing standing on the floor is somebody else's business: the
+     * wall. A toy at the back of the room sits just under the bottom row of the
+     * wall grid on screen, and thirty units of halo over it would quietly start
+     * intercepting clicks meant for the painting hanging there — which is
+     * `pickWallDecorAt`'s, and is asked only after this says no. The default
+     * `PICK_PAD` is unaffected: with no `padOf` the two are the same number.
+     */
+    const top = Math.min(pad, PICK_PAD);
 
     if (
       screenX >= rect.x - pad &&
       screenX <= rect.x + rect.width + pad &&
-      screenY >= rect.y - pad &&
+      screenY >= rect.y - top &&
       screenY <= rect.y + rect.height + pad
     ) {
       return body;

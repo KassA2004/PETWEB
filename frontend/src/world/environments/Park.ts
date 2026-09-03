@@ -100,6 +100,8 @@ export const park: EnvironmentDefinition = {
 
   // Dusk, not darkness. Outdoors keeps its sky.
   night: { color: 0x1d2a4a, alpha: 0.34 },
+  // Outdoors. Nobody switches the sky off.
+  lamps: false,
 
   // Higher than indoors: there is no ceiling, and the moths may use it.
   ceiling: 560,
