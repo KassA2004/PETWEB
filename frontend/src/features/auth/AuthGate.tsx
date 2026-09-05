@@ -85,7 +85,7 @@ function Waiting() {
         className="animate-fade-in text-lg font-semibold tracking-tight opacity-0"
         style={{ animationDelay: '400ms', animationFillMode: 'forwards' }}
       >
-        Digital Pet World
+        Pocus
       </p>
       <span
         aria-hidden

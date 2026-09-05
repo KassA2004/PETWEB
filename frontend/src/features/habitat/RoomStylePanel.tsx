@@ -59,12 +59,18 @@ import { cn, toCssHex } from '../../lib/utils';
  * helped.
  *
  * ```text
- *   THINGS        what stands in the room and hangs on its walls
+ *   FURNITURE     what stands in the room and hangs on its walls
  *     Furniture · Decor · Toys · On the wall
  *
  *   THE ROOM      what the room itself is made of
  *     Hour · Paint · Surfaces · View · Sound
  * ```
+ *
+ * The first tab was called "Things" and is now called Furniture, on request.
+ * It is the broader word that is wrong, not the narrower one: "things" names a
+ * category by admitting there isn't one, and the tab's own first section — the
+ * one that opens under it — has always been the furniture. Decor and toys read
+ * as furnishings; nobody reads a chair as a thing.
  *
  * Two tabs — the same control the application navigates with, so this reads as
  * the product rather than as a widget — and inside each, named sections in the
@@ -83,10 +89,10 @@ import { cn, toCssHex } from '../../lib/utils';
  * word where a picture would do.
  */
 
-type PanelTab = 'things' | 'room';
+type PanelTab = 'furniture' | 'room';
 
 const PANEL_TABS: TabItem<PanelTab>[] = [
-  { value: 'things', label: 'Things', icon: Armchair },
+  { value: 'furniture', label: 'Furniture', icon: Armchair },
   { value: 'room', label: 'The Room', icon: Palette },
 ];
 
@@ -157,7 +163,7 @@ export function RoomStylePanel({
   compact = false,
   className,
 }: RoomStylePanelProps) {
-  const [tab, setTab] = useState<PanelTab>('things');
+  const [tab, setTab] = useState<PanelTab>('furniture');
   /**
    * The object whose lock is being explained.
    *
@@ -200,7 +206,7 @@ export function RoomStylePanel({
         </p>
       )}
 
-      {tab === 'things' && (
+      {tab === 'furniture' && (
         <div className="space-y-3">
           <EditRoomSwitch
             editing={editing}

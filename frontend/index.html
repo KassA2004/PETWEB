@@ -30,8 +30,53 @@
       Update this host if VITE_API_URL changes.
     -->
     <link rel="preconnect" href="http://localhost:3000" crossorigin />
-    <title>Digital Pet World</title>
-    <meta name="description" content="A small creature lives here. Be nice to it." />
+    <title>Pocus — your progress lives somewhere</title>
+    <meta
+      name="description"
+      content="Pocus turns the work you actually do into a small world you can watch grow. Set a goal, focus on it, finish it — a creature in a warm little room notices every time."
+    />
+    <!--
+      The chrome around the page, not the page.
+
+      `theme-color` is what paints the address bar on Android and the status bar
+      of an installed window, and without it the browser picks white — a cold
+      strip above a warm-paper page, which is the single cheapest way to make a
+      site look unfinished on a phone. The value is `--color-background` from
+      index.css, resolved: a custom property is not visible to the browser's own
+      UI, so this is the one place that colour is written twice, and this
+      comment is the reminder that there are two.
+
+      `color-scheme: light` is a statement of fact, not a preference. This
+      palette has one ground (index.css) and telling the browser otherwise makes
+      it recolour form controls and scrollbars for a dark theme that does not
+      exist.
+    -->
+    <meta name="theme-color" content="#f7e8d6" />
+    <meta name="color-scheme" content="light" />
+    <meta name="application-name" content="Pocus" />
+    <meta name="apple-mobile-web-app-title" content="Pocus" />
+
+    <!--
+      What a link to this page looks like when somebody shares it.
+
+      No image: the rule that this project ships no image files (Performance
+      Rules) holds here too, and a card with a title and a sentence is a better
+      link than a card with a stretched screenshot. `og:type` is `website`
+      rather than `product` — nothing here is for sale.
+    -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Pocus" />
+    <meta property="og:title" content="Pocus — your progress lives somewhere" />
+    <meta
+      property="og:description"
+      content="Set one small goal. Focus on it. Finish it. A creature in a warm little room notices every time — and the room grows because you did."
+    />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="Pocus — your progress lives somewhere" />
+    <meta
+      name="twitter:description"
+      content="Set one small goal. Focus on it. Finish it. A creature in a warm little room notices every time."
+    />
   </head>
   <body>
     <div id="root"></div>

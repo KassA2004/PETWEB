@@ -28,8 +28,19 @@ import {
 } from '../shared/Surface';
 import type { ObjectRenderContext } from '../ObjectRenderer';
 
+/**
+ * Where the platform sits in the drawing, as a fraction of the whole post.
+ *
+ * `ctx.height` is the platform — the plane the creature climbs onto — because that is what
+ * `ObjectCatalog`'s `height` means for anything with a top. The post is
+ * drawn to `height / PLATFORM` so the picture is unchanged and its platform lands
+ * exactly on the plane the physics promised. 
+ */
+const PLATFORM = 0.92;
+
 export function createScratcher(ctx: ObjectRenderContext): Container {
-  const { width, depth, height } = ctx;
+  const { width, depth } = ctx;
+  const height = ctx.height / PLATFORM;
   const rng = createRng(ctx.seed + 401);
 
   const root = new Container();
@@ -39,7 +50,7 @@ export function createScratcher(ctx: ObjectRenderContext): Container {
 
   const baseHeight = height * 0.09;
   const postWidth = width * 0.42;
-  const postTop = -height * 0.92;
+  const postTop = -height * PLATFORM;
   const ropeTones = tones(ctx.color);
 
   // --- Base ----------------------------------------------------------------

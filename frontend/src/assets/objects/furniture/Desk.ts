@@ -35,8 +35,19 @@ import {
 } from '../shared/Surface';
 import type { ObjectRenderContext } from '../ObjectRenderer';
 
+/**
+ * Where the worktop sits in the drawing, as a fraction of the whole desk.
+ *
+ * `ctx.height` is the worktop — the plane a mug, a candle or the creature rests on — because that is what
+ * `ObjectCatalog`'s `height` means for anything with a top. The desk is
+ * drawn to `height / TOP` so the picture is unchanged and its top face lands
+ * exactly on the plane the physics promised. The lamp standing on the desk reaches half as high again, and is decoration — it has no collider and needs none.
+ */
+const TOP = 0.62;
+
 export function createDesk(ctx: ObjectRenderContext): Container {
-  const { width, depth, height } = ctx;
+  const { width, depth } = ctx;
+  const height = ctx.height / TOP;
   const rng = createRng(ctx.seed + 863);
 
   const root = new Container();
@@ -45,7 +56,7 @@ export function createDesk(ctx: ObjectRenderContext): Container {
   root.addChild(groundShadow(width, depth, 0.3));
 
   const half = width / 2;
-  const topY = -height * 0.62;
+  const topY = -height * TOP;
   const topThickness = height * 0.05;
   const ramp = tones(ctx.color);
 

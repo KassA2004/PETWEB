@@ -26,8 +26,19 @@ import {
 } from '../shared/Surface';
 import type { ObjectRenderContext } from '../ObjectRenderer';
 
+/**
+ * Where the seat cushions sit sits in the drawing, as a fraction of the whole loveseat.
+ *
+ * `ctx.height` is the seat cushions sit — the plane the creature settles onto — because that is what
+ * `ObjectCatalog`'s `height` means for anything with a top. The loveseat is
+ * drawn to `height / SEAT` so the picture is unchanged and its cushion line lands
+ * exactly on the plane the physics promised. The back pillows rise well above it and hold nothing up.
+ */
+const SEAT = 0.44;
+
 export function createLoveseat(ctx: ObjectRenderContext): Container {
-  const { width, depth, height } = ctx;
+  const { width, depth } = ctx;
+  const height = ctx.height / SEAT;
   const rng = createRng(ctx.seed + 587);
 
   const root = new Container();
@@ -36,7 +47,7 @@ export function createLoveseat(ctx: ObjectRenderContext): Container {
   root.addChild(groundShadow(width, depth, 0.3));
 
   const half = width / 2;
-  const seatY = -height * 0.44;
+  const seatY = -height * SEAT;
   const backTop = -height;
   const frame = tones(ctx.color);
 

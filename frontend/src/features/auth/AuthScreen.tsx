@@ -60,7 +60,7 @@ export function AuthScreen({ onAuthenticated, mode, onModeChange }: AuthScreenPr
           )}
         >
           <ArrowLeft aria-hidden className="size-4 text-muted-foreground" />
-          Digital Pet World
+          Pocus
         </Link>
       </header>
 

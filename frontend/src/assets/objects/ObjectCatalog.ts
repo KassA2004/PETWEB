@@ -186,7 +186,28 @@ export interface ObjectTraits {
    * is the floor for toys.
    */
   fill?: number;
-  /** How tall it stands, in world units, at its own scale. */
+  /**
+   * How tall the object's **bulk** is, in world units.
+   *
+   * Read that as *where its top is*, because for anything with a top that is
+   * exactly what this number is: the tabletop, the desk's worktop, the chair's
+   * seat, the cabinet's lid, the shelf's top shelf. `colliderFor` extrudes the
+   * footprint to it, so it is simultaneously the height of the collision box,
+   * the plane the creature stands on, and the plane a candle set down on the
+   * thing rests at — one number, and those three can therefore never disagree.
+   *
+   * **It is not the tallest pixel.** A renderer may draw above it, and several
+   * do: the desk's lamp, the chair's back, the bookshelf's trailing plant, the
+   * cabinet's jug, the music box's dancer. None of those is a surface and none
+   * of them is solid; they are decoration standing on the bulk. `PetRoom`
+   * measures the artwork itself for the one thing that does care how tall the
+   * *picture* is — the click target (`Entity.crown`).
+   *
+   * Getting this backwards is the "everything floats" bug: a table whose
+   * `height` was its silhouette put every candle six units above its own top,
+   * and a desk whose worktop is at 62% of its drawing put them forty-nine units
+   * up, in mid-air beside the lamp.
+   */
   height: number;
   /** Round on the floor rather than rectangular. Changes the collider shape. */
   round?: boolean;
@@ -300,7 +321,9 @@ export const OBJECT_TRAITS: Record<ObjectType, ObjectTraits> = {
     category: 'furniture',
     footprint: { cols: 1, rows: 1 },
     fill: 0.78,
-    height: 92,
+    // The seat. The back rises another forty units above it and is drawn, lit
+    // and clickable — it is simply not a plane anything rests on.
+    height: 48,
     body: 'static',
     mass: 9,
     restitution: 0.3,
@@ -313,7 +336,8 @@ export const OBJECT_TRAITS: Record<ObjectType, ObjectTraits> = {
     label: 'Low Table',
     category: 'furniture',
     footprint: { cols: 2, rows: 1 },
-    height: 96,
+    // The tabletop, not the tallest pixel — see the note on `height`.
+    height: 90,
     body: 'static',
     mass: 15,
     restitution: 0.22,
@@ -433,7 +457,8 @@ export const OBJECT_TRAITS: Record<ObjectType, ObjectTraits> = {
     category: 'furniture',
     unlock: { metric: 'goalsCompleted', amount: 25 },
     footprint: { cols: 2, rows: 1 },
-    height: 116,
+    // The seat cushions, not the top of the back pillows.
+    height: 51,
     body: 'static',
     mass: 24,
     restitution: 0.2,
@@ -451,7 +476,8 @@ export const OBJECT_TRAITS: Record<ObjectType, ObjectTraits> = {
     // the user has actually been doing.
     unlock: { metric: 'focusMinutes', amount: 900 },
     footprint: { cols: 2, rows: 1 },
-    height: 128,
+    // The worktop. The lamp standing on it reaches half as high again.
+    height: 79,
     body: 'static',
     mass: 20,
     restitution: 0.18,
@@ -635,7 +661,8 @@ export const OBJECT_TRAITS: Record<ObjectType, ObjectTraits> = {
     unlock: { metric: 'goalsCompleted', amount: 8 },
     footprint: { cols: 1, rows: 1 },
     fill: 0.72,
-    height: 172,
+    // The platform on top of the post, which is the point of the object.
+    height: 158,
     body: 'static',
     mass: 11,
     restitution: 0.2,
@@ -684,7 +711,8 @@ export const OBJECT_TRAITS: Record<ObjectType, ObjectTraits> = {
     unlock: { metric: 'memoriesShared', amount: 10 },
     footprint: { cols: 1, rows: 1 },
     fill: 0.56,
-    height: 58,
+    // The lid. The dancer turning on top of it is drawn above.
+    height: 32,
     body: 'static',
     mass: 4,
     restitution: 0.2,
@@ -869,8 +897,11 @@ export const OBJECT_TRAITS: Record<ObjectType, ObjectTraits> = {
     mass: 0.7,
     restitution: 0.3,
     friction: 0.25,
-    // Stuffed, and broad enough to stand on — the same reasoning as the pillow.
-    surface: { kind: 'shelf', give: 5, comfort: 0.5 },
+    // Stuffed, and broad enough to flop onto — the same reasoning as the
+    // pillow, and `bed` rather than `shelf` for the same reason: a stuffed star
+    // is somewhere to *be*, not a plane to set a lamp down on. `shelf` made
+    // `acceptsPropsOn` true and let a candle be balanced on one of its points.
+    surface: { kind: 'bed', give: 5, comfort: 0.5 },
     home: 'front',
   },
 
@@ -886,7 +917,8 @@ export const OBJECT_TRAITS: Record<ObjectType, ObjectTraits> = {
     mass: 1.6,
     restitution: 0.34,
     friction: 0.32,
-    surface: { kind: 'shelf', give: 6, comfort: 0.55 },
+    // A pillow is somewhere to flop, not a shelf. See the Wish Star.
+    surface: { kind: 'bed', give: 6, comfort: 0.55 },
     home: 'front',
   },
 };

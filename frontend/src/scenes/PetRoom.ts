@@ -134,7 +134,14 @@ import {
 import type { RoomStyle, WallDecorPlacement } from '../world/RoomStyle';
 import { getWallDecor } from '../assets/environment/walls/WallDecor';
 import type { WallDecorKind } from '../assets/environment/walls/WallDecor';
-import { PICK_PAD, depthTintOf, overlaps, pickAt, screenRectOf, sortKeyOf } from './room/BodyView';
+import {
+  PICK_PAD,
+  depthTintOf,
+  intersectionArea,
+  pickAt,
+  sortKeyOf,
+  uprightRectOf,
+} from './room/BodyView';
 import { createDepthGuide } from './room/DepthGuide';
 import { swipeImpulse } from './room/Swipe';
 import type { Blocker } from './room/Swipe';
@@ -280,8 +287,24 @@ const DISCARD_LIFT = WALL_TOP_Y;
  *
  * Present rather than gone, dim rather than full strength — the visual
  * language for "it is there, it is just behind that" (`occludedToys`).
+ *
+ * Raised from 0.45. The point of the effect is that a toy stays findable, and
+ * at 0.45 over a busy piece of furniture a small toy in the room's own palette
+ * was not: it read as a smudge on the bookcase. This is still unmistakably
+ * behind the thing covering it.
  */
-const GHOST_ALPHA = 0.45;
+const GHOST_ALPHA = 0.62;
+
+/**
+ * How much of a toy has to be covered before it is drawn as a ghost.
+ *
+ * Half. Below that the toy is mostly visible and the honest drawing is the
+ * better one — a toy peeking out from behind a chair leg looks like a toy
+ * behind a chair leg, and dimming it is the room telling the user about a
+ * problem they do not have. Above it the toy is more hidden than not, and
+ * "where did the ball go" starts to be a real question.
+ */
+const GHOST_COVERAGE = 0.5;
 
 /** How close a toy has to be, edge to edge, before it is worth pouncing on. */
 const POUNCE_RANGE = 120;
@@ -322,6 +345,23 @@ const STUMBLE_SPEED = 110;
  * mouse as attention is how "occasionally follows the cursor" becomes "stares".
  */
 const POINTER_ATTENTION = 2.5;
+
+/**
+ * How far a piece of artwork reaches above its own floor contact point.
+ *
+ * Objects are drawn anchored at that contact point with y running negative
+ * upward, so the topmost pixel is the *most negative* local y and the answer is
+ * its negation. Clamped at zero for the degenerate case of a drawing entirely
+ * at or below the floor, which nothing in the catalog is and which would
+ * otherwise hand `pickAt` an inverted rectangle.
+ *
+ * Measured once, when the object enters the room. The alternative — a second
+ * number in the catalog saying how tall the picture is — is a copy of
+ * something the picture already knows, and copies drift.
+ */
+function crownOf(art: Container): number {
+  return Math.max(0, -art.getLocalBounds().y);
+}
 
 /** One thing in the room: art, a body, and a shadow that stays on the floor. */
 interface Entity {
@@ -364,6 +404,22 @@ interface Entity {
    * while it is standing there.
    */
   affordance: Affordance | null;
+  /**
+   * How far the *artwork* reaches above the floor, in world units.
+   *
+   * Not the same number as the collider's height, and the gap between them is
+   * deliberate: a body's collider is its physical bulk, which for anything with
+   * a top is that top — the desk's worktop, the shelf's top shelf, the
+   * cabinet's lid — because that is the plane things rest on. What a renderer
+   * draws above it (the desk lamp, the shelf's trailing plant, the cabinet's
+   * jug, the music box's dancer) has no collider and needs none.
+   *
+   * It still has to be clickable, so this is what `pointerDown` hands `pickAt`
+   * as headroom. Measured once, from the artwork itself, because asking the
+   * drawing how tall it is cannot go stale the way a second number in the
+   * catalog would.
+   */
+  crown: number;
 }
 
 /**
@@ -1172,6 +1228,9 @@ export class PetRoom {
       reachable: true,
       grabbable: true,
       affordance: null,
+      // The creature's artwork is drawn at `PET_SCALE` inside its container,
+      // so its local bounds are in a smaller unit than the world's.
+      crown: crownOf(art) * PET_SCALE,
     };
 
     this.entities.set('pet', this.petEntity);
@@ -1244,6 +1303,26 @@ export class PetRoom {
     return traits.affordances?.[0] ?? null;
   }
 
+  /**
+   * How far above its collider a body's picture goes, as a multiple of the
+   * collider's height — `pickAt`'s headroom.
+   *
+   * A collider is a thing's *bulk*, and for anything with a top that bulk stops
+   * at the top: the desk's worktop, the cabinet's lid, the shelf's top shelf.
+   * That is what makes a candle set down on a desk land on the desk instead of
+   * a foot above it, and it is not negotiable — but it does mean the desk's
+   * lamp, the cabinet's jug and the shelf's trailing plant stand outside the
+   * box, and a click on one of them was landing on the floor behind.
+   *
+   * Never less than the 1.18 the room used to give everything, so nothing that
+   * was easy to grab before is harder now.
+   */
+  private headroomOf(body: PhysicsBody): number {
+    const crown = this.entities.get(body.id)?.crown ?? 0;
+    if (body.collider.height <= 0) return 1.18;
+    return Math.max(1.18, crown / body.collider.height);
+  }
+
   private addProp(prop: PlacedProp): Entity {
     const traits = getObjectTraits(prop.definition.type);
 
@@ -1309,6 +1388,7 @@ export class PetRoom {
       reachable: traits.mount === undefined && collider.height > 6,
       grabbable: traits.mount === undefined,
       affordance: this.pickAffordance(traits),
+      crown: crownOf(art),
     };
 
     this.entities.set(prop.id, entity);
@@ -2149,10 +2229,13 @@ export class PetRoom {
           return entity.id === 'pet' || entity.isToy;
         },
         (candidate) => (this.entities.get(candidate.id)?.isToy ? TOY_REACH : PICK_PAD),
+        (candidate) => this.headroomOf(candidate),
       );
     }
 
-    body ??= pickAt(bodies, point.x, point.y, grabbable);
+    body ??= pickAt(bodies, point.x, point.y, grabbable, undefined, (candidate) =>
+      this.headroomOf(candidate),
+    );
 
     if (!body) {
       // Tapping the grass deselects. A selection you cannot clear is a
@@ -3747,18 +3830,43 @@ export class PetRoom {
    * is, and *when* it is drawn relative to everything else.
    */
   /**
-   * Toys the furniture is standing in front of, and what they have to be
-   * drawn above to still be seen.
+   * Toys that are genuinely buried, and what they have to be drawn above to
+   * still be seen.
    *
    * A ball that has rolled behind the bed is sorted correctly by `sortKeyOf`
    * and is therefore invisible, which is correct perspective and a bad game:
-   * the one thing a user wants from a toy is to know where it is. So an
-   * occluded toy is drawn *over* whatever is covering it, dimmed to
-   * `GHOST_ALPHA` — present, clearly behind, findable.
+   * the one thing a user wants from a toy is to know where it is. So a *hidden*
+   * toy is drawn over whatever is covering it, dimmed to `GHOST_ALPHA` —
+   * present, clearly behind, findable.
    *
-   * Only toys, and only against things genuinely in front of them on screen,
-   * so the cost is a handful of rectangle tests a frame rather than a second
-   * full sort of the room.
+   * ## The word doing the work is "hidden"
+   *
+   * This used to ghost a toy the moment any rectangle in front of it touched
+   * its own by a single pixel, and measured both rectangles with
+   * `screenRectOf` — which deliberately includes the *floor* a thing covers,
+   * because it is the picking target. The result was that a toy standing on
+   * open carpet next to a 24-unit basket, or anywhere inside the two cells of
+   * a rug, was drawn at 45% for ever. Toys read as faded by default, which is
+   * the opposite of what the effect is for.
+   *
+   * Two corrections, and between them the ghost now means what it says:
+   *
+   *  - **Floor does not hide anything.** Both rectangles are `uprightRectOf`
+   *    now: contact point to crown, no skirt. A rug in front of a ball covers
+   *    none of it, because a rug is five units tall.
+   *  - **A sliver is not an occlusion.** Coverage is measured as a fraction of
+   *    the toy's own artwork and has to reach `GHOST_COVERAGE` before anything
+   *    changes. A toy whose bottom eight pixels are behind a basket is simply
+   *    a toy behind a basket, drawn honestly, at full strength.
+   *
+   * Areas are summed rather than maxed, so two things that each hide a third
+   * of a toy between them count as two thirds. That over-counts when the
+   * occluders also overlap each other, which is the safe direction to be wrong
+   * in: it errs toward showing a toy that is hard to see.
+   *
+   * Only toys, and only against things genuinely in front of them, so the cost
+   * is a handful of rectangle tests a frame rather than a second full sort of
+   * the room.
    */
   private occludedToys(): Map<string, number> {
     const ghosts = new Map<string, number>();
@@ -3766,23 +3874,39 @@ export class PetRoom {
     for (const toy of this.entities.values()) {
       if (!toy.isToy || toy.body.held) continue;
 
-      const toyKey = sortKeyOf(toy.body, null);
-      const toyRect = screenRectOf(toy.body);
+      // The holder, not null: a ball set down on the table shares the table's
+      // depth, and `sortKeyOf` needs the same answer here that `syncEntity`
+      // will use — otherwise the table the toy is visibly standing on counts
+      // as a thing standing in front of it.
+      const holder = toy.body.support?.id
+        ? (this.world.get(toy.body.support.id) ?? null)
+        : null;
+      const toyKey = sortKeyOf(toy.body, holder);
+      const toyRect = uprightRectOf(toy.body);
+      const toyArea = toyRect.width * toyRect.height;
+      if (toyArea <= 0) continue;
+
+      let hidden = 0;
       let cover = -Infinity;
 
       for (const other of this.entities.values()) {
         if (other === toy || other.id === 'pet') continue;
         // Decals and wall decor are not "in front of" anything.
         if (other.body.collider.height <= 0 || other.body.anchored) continue;
+        // Nor is the thing the toy is standing on.
+        if (holder && other.body === holder) continue;
 
         const otherKey = sortKeyOf(other.body, null);
         if (otherKey <= toyKey) continue;
-        if (!overlaps(toyRect, screenRectOf(other.body))) continue;
 
+        const covered = intersectionArea(toyRect, uprightRectOf(other.body));
+        if (covered <= 0) continue;
+
+        hidden += covered;
         cover = Math.max(cover, otherKey);
       }
 
-      if (cover > -Infinity) ghosts.set(toy.id, cover);
+      if (hidden / toyArea >= GHOST_COVERAGE) ghosts.set(toy.id, cover);
     }
 
     return ghosts;

@@ -107,9 +107,41 @@ export function screenRectOf(body: PhysicsBody, headroom = 1): ScreenRect {
   };
 }
 
-/** Whether two screen rectangles cover any of the same pixels. */
-export function overlaps(a: ScreenRect, b: ScreenRect): boolean {
-  return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
+/**
+ * The rectangle a body's *upright* artwork occupies: contact point to crown,
+ * with no floor skirt.
+ *
+ * The difference from `screenRectOf` is the skirt, and it exists because the
+ * two rectangles answer different questions. `screenRectOf` asks "where could
+ * a finger reasonably be aiming", and the floor a thing covers is part of that
+ * — a rug is nothing *but* floor. This asks "what does this thing hide behind
+ * it", and floor hides nothing: a patch of carpet in front of a ball does not
+ * make the ball any harder to see, and neither does the near half of a
+ * basket's own footprint.
+ *
+ * Using the picking rectangle for occlusion was the bug this fixes. Every toy
+ * in a furnished room was inside *something's* skirt, so every toy was
+ * permanently drawn as a ghost.
+ */
+export function uprightRectOf(body: PhysicsBody): ScreenRect {
+  const scale = scaleAt(body.position.z);
+  const base = project(body.position.x, body.position.y, body.position.z);
+  const crown = project(body.position.x, topOf(body), body.position.z);
+  const width = halfX(body.collider) * 2 * scale;
+
+  return {
+    x: base.x - width / 2,
+    y: crown.y,
+    width,
+    height: Math.max(0, base.y - crown.y),
+  };
+}
+
+/** How many pixels of `a` are also inside `b`. */
+export function intersectionArea(a: ScreenRect, b: ScreenRect): number {
+  const width = Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x);
+  const height = Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y);
+  return width > 0 && height > 0 ? width * height : 0;
 }
 
 /**
@@ -134,6 +166,15 @@ export const PICK_PAD = 6;
  *   body: a wedged toy wants a forgiving target and a piece of furniture being
  *   positioned to the pixel wants none. Defaults to `PICK_PAD` for everything,
  *   which is the behaviour edit mode keeps.
+ * @param headroomOf how far above its collider a body's *artwork* reaches, as
+ *   a multiple of the collider's height. A body's collider is its physical
+ *   bulk — for a desk, the worktop; for a bookshelf, the top shelf — and
+ *   everything a renderer draws above that (the desk lamp, the shelf's trailing
+ *   plant, the cabinet's jug) is decoration with no collider of its own. It is
+ *   still the thing on screen the user is aiming at, so it has to be part of
+ *   the target. The default is the flat 1.18 this used to apply to everything,
+ *   which is the right allowance for artwork that merely overhangs its box a
+ *   little — ears, a lamp shade, the back of a chair.
  */
 export function pickAt(
   bodies: PhysicsBody[],
@@ -141,6 +182,7 @@ export function pickAt(
   screenY: number,
   accepts: (body: PhysicsBody) => boolean,
   padOf: (body: PhysicsBody) => number = () => PICK_PAD,
+  headroomOf: (body: PhysicsBody) => number = () => 1.18,
 ): PhysicsBody | null {
   const candidates = bodies
     .filter(accepts)
@@ -149,7 +191,7 @@ export function pickAt(
   for (const body of candidates) {
     // The artwork usually reaches a little above the collider — ears, a lamp
     // shade, the back of a chair — so the target is padded upward.
-    const rect = screenRectOf(body, 1.18);
+    const rect = screenRectOf(body, headroomOf(body));
     const pad = padOf(body);
 
     /*

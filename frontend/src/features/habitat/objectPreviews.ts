@@ -493,7 +493,7 @@ export const ROOM_PREVIEW_SECTIONS: readonly ((
   room: PreviewRoom,
 ) => (() => Promise<string>)[])[] = [
   /*
-   * Everything on the Things tab: what stands on the floor, and what hangs on
+   * Everything on the Furniture tab: what stands on the floor, and what hangs on
    * the wall. One section rather than two because they are one screen — wall
    * pieces became the fourth object category when the panel stopped filing them
    * beside the clock (`RoomStylePanel`), and a warm-up that still treated them

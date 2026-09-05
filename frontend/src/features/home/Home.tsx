@@ -109,7 +109,7 @@ function SiteHeader() {
           to="home"
           className="-mx-2 rounded-lg px-2 py-2 text-sm font-semibold tracking-tight hover:bg-muted sm:text-base"
         >
-          Digital Pet World
+          Pocus
         </Link>
 
         <nav aria-label="Account" className="flex items-center gap-1 sm:gap-2">
@@ -125,18 +125,46 @@ function SiteHeader() {
   );
 }
 
+/**
+ * The footer.
+ *
+ * A closing line and the two doors, and nothing else. A footer's job on a page
+ * with one idea is to end it rather than to offer a second navigation of it —
+ * a column of links to sections the visitor has just scrolled through is the
+ * page admitting it was not worth reading in order.
+ *
+ * The name is repeated here on purpose. It is the last thing on the page, and
+ * the one word a visitor has to leave with.
+ */
 function SiteFooter() {
   return (
-    <footer
-      className={cn(
-        'border-t border-border/60',
-        'mx-auto w-full max-w-6xl px-5 py-8 sm:px-8',
-        'pb-[max(2rem,env(safe-area-inset-bottom))]',
-      )}
-    >
-      <p className="text-sm text-muted-foreground">
-        A small creature lives here. Be nice to it.
-      </p>
+    <footer className="border-t border-border/60">
+      <div
+        className={cn(
+          'mx-auto flex w-full max-w-6xl flex-col gap-6 px-5 py-10 sm:px-8',
+          'sm:flex-row sm:items-end sm:justify-between',
+          'pb-[max(2.5rem,env(safe-area-inset-bottom))]',
+        )}
+      >
+        <div>
+          <p className="text-base font-semibold tracking-tight">Pocus</p>
+          <p className="mt-1 max-w-prose text-sm text-muted-foreground">
+            A small creature lives here. Be nice to it.
+          </p>
+        </div>
+
+        <nav
+          aria-label="Get started"
+          className="flex items-center gap-4 text-sm text-muted-foreground"
+        >
+          <Link to="login" className="rounded px-1 py-0.5 hover:text-foreground">
+            Log in
+          </Link>
+          <Link to="join" className="rounded px-1 py-0.5 hover:text-foreground">
+            Start your world
+          </Link>
+        </nav>
+      </div>
     </footer>
   );
 }

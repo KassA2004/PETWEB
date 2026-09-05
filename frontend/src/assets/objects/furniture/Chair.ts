@@ -25,15 +25,26 @@ import {
 } from '../shared/Surface';
 import type { ObjectRenderContext } from '../ObjectRenderer';
 
+/**
+ * Where the seat sits in the drawing, as a fraction of the whole chair.
+ *
+ * `ctx.height` is the seat — the plane the creature sits on, and the height it is drawn at — because that is what
+ * `ObjectCatalog`'s `height` means for anything with a top. The chair is
+ * drawn to `height / SEAT` so the picture is unchanged and its seat lands
+ * exactly on the plane the physics promised. The back rises another forty units above it: drawn, lit and clickable, and a surface for nothing.
+ */
+const SEAT = 0.52;
+
 export function createChair(ctx: ObjectRenderContext): Container {
-  const { width, depth, height } = ctx;
+  const { width, depth } = ctx;
+  const height = ctx.height / SEAT;
 
   const root = new Container();
   root.label = 'chair';
 
   root.addChild(groundShadow(width, depth, 0.26));
 
-  const seatY = -height * 0.52;
+  const seatY = -height * SEAT;
   const legWidth = width * 0.11;
   const legInset = width * 0.34;
   const depthLift = depth * FLOOR_SQUASH * 0.5;

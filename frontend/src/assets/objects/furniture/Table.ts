@@ -21,15 +21,28 @@ import {
 } from '../shared/Surface';
 import type { ObjectRenderContext } from '../ObjectRenderer';
 
+/**
+ * Where the tabletop sits in the drawing, as a fraction of the whole table.
+ *
+ * The table is drawn to `height / TOP`, not to `height`, and this is why:
+ * `ctx.height` is the *tabletop* — the plane a candle set down on the table
+ * rests at (`ObjectCatalog`'s `height`) — while the drawing has always put its
+ * top slab a little below its own silhouette so the slab's front face has
+ * somewhere to be. Dividing here keeps the picture exactly what it was and
+ * lands the top face on the plane the physics promised.
+ */
+const TOP = 0.94;
+
 export function createTable(ctx: ObjectRenderContext): Container {
-  const { width, depth, height } = ctx;
+  const { width, depth } = ctx;
+  const height = ctx.height / TOP;
 
   const root = new Container();
   root.label = 'table';
 
   root.addChild(groundShadow(width * 0.92, depth * 0.92, 0.24));
 
-  const topY = -height * 0.94;
+  const topY = -height * TOP;
   const legWidth = width * 0.062;
   const legInset = width * 0.4;
   const depthLift = depth * FLOOR_SQUASH * 0.5;

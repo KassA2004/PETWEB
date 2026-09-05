@@ -48,8 +48,19 @@ interface Note {
   drift: number;
 }
 
+/**
+ * Where the lid sits in the drawing, as a fraction of the whole box.
+ *
+ * `ctx.height` is the lid — the plane anything set down on the music box rests at — because that is what
+ * `ObjectCatalog`'s `height` means for anything with a top. The box is
+ * drawn to `height / LID` so the picture is unchanged and its lid lands
+ * exactly on the plane the physics promised. The dancer turning above it is drawn outside the box entirely.
+ */
+const LID = 0.56;
+
 export function createMusicBox(ctx: ObjectRenderContext): Container {
-  const { width, depth, height } = ctx;
+  const { width, depth } = ctx;
+  const height = ctx.height / LID;
   const rng = createRng(ctx.seed + 811);
 
   const root = new Container();
@@ -58,7 +69,7 @@ export function createMusicBox(ctx: ObjectRenderContext): Container {
   root.addChild(groundShadow(width, depth, 0.26));
 
   const half = width / 2;
-  const caseHeight = height * 0.56;
+  const caseHeight = height * LID;
   const openingY = -caseHeight;
   const ramp = tones(ctx.color);
 

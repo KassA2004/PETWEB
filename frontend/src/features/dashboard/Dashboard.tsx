@@ -1025,12 +1025,15 @@ export function Dashboard({ userId }: DashboardProps) {
             rather than decorative: this row holds the wordmark, the Home /
             Friends switch, the shop and the account on 351 points of a 375-wide
             phone, and at `text-base` the four of them do not fit — the name of
-            the product is the thing that gets an ellipsis. Fourteen points is a
-            perfectly ordinary size for a wordmark on a phone; "Digital Pet …"
-            is not a perfectly ordinary name for anything.
+            the product is the thing that gets an ellipsis.
+
+            The name is five letters now, so it no longer *needs* the truncate;
+            it keeps it because the row's job is to protect the controls to its
+            right, and a wordmark that can shrink is how it does that whatever
+            the name turns out to be.
           */}
           <h1 className="truncate text-sm font-semibold tracking-tight">
-            Digital Pet World
+            Pocus
           </h1>
 
           <div className="flex shrink-0 items-center gap-1.5">
@@ -1185,7 +1188,7 @@ export function Dashboard({ userId }: DashboardProps) {
       */}
       <header className="flex shrink-0 items-center justify-between gap-4">
         <div className="flex min-w-0 items-baseline gap-3">
-          <h1 className="text-lg font-semibold tracking-tight">Digital Pet World</h1>
+          <h1 className="text-lg font-semibold tracking-tight">Pocus</h1>
           <p className="hidden truncate text-xs text-muted-foreground xl:block">
             A small creature lives here. Be nice to it.
           </p>
