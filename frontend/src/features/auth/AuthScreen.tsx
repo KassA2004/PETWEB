@@ -1,9 +1,11 @@
+import { useState } from 'react';
 import { ArrowLeft } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../components/ui/card';
 import { Link } from '../../components/ui/link';
 import { cn } from '../../lib/utils';
 import { LoginForm } from './LoginForm';
 import { RegisterForm } from './RegisterForm';
+import { VerifyForm } from './VerifyForm';
 
 type Mode = 'login' | 'register';
 
@@ -32,8 +34,50 @@ interface AuthScreenProps {
  *   the two modes as routes  "I meant to log in" — now the back button works
  *   the same warm light      "is this the same product?" — yes, same palette
  * ```
+ *
+ * ## The third state, which is not a third route
+ *
+ * Proving an email address is a *step inside* signing up rather than a place,
+ * so it is local state here and not in the address bar. That is deliberate:
+ * `/verify` would be a URL somebody could bookmark, share or reload back into,
+ * and it means nothing on its own — the code it is waiting for was sent to an
+ * address this screen only knows because the form above it just used it. A
+ * reload correctly puts the person back at the form, where signing in again
+ * will send them a fresh code.
+ *
+ * Both forms can reach it, and it is the same step from both:
+ *
+ * ```text
+ *   register  ->  account created, no session, code sent      -> verify
+ *   log in    ->  password right, address never confirmed     -> verify
+ * ```
  */
 export function AuthScreen({ onAuthenticated, mode, onModeChange }: AuthScreenProps) {
+  /*
+   * The address awaiting a code, and which form sent it there.
+   *
+   * The mode is stored alongside the address so that the step can be *derived*
+   * away rather than cleared. Navigating — the back button, or the switch link
+   * under either form — changes `mode`, and a pending verification that belongs
+   * to the other mode simply stops being the thing rendered. No effect, no
+   * cascading render, and coming forward again restores it.
+   */
+  const [pending, setPending] = useState<{ mode: Mode; email: string } | null>(null);
+  const verifying = pending?.mode === mode ? pending.email : null;
+  const awaitCode = (email: string) => setPending({ mode, email });
+
+  const title = verifying
+    ? 'Check your email'
+    : mode === 'register'
+      ? 'Start Your World'
+      : 'Welcome Back';
+
+  const blurb = verifying
+    ? 'One code, and the door opens.'
+    : mode === 'register'
+      ? 'A creature, a room, and one small goal at a time.'
+      : 'Your room is where you left it.';
+
   return (
     <div className="relative flex min-h-svh flex-col overflow-hidden bg-background">
       <div
@@ -70,24 +114,25 @@ export function AuthScreen({ onAuthenticated, mode, onModeChange }: AuthScreenPr
       >
         <Card className="w-full max-w-sm">
           <CardHeader className="items-center text-center">
-            <CardTitle className="text-2xl">
-              {mode === 'register' ? 'Start Your World' : 'Welcome Back'}
-            </CardTitle>
-            <CardDescription className="text-pretty">
-              {mode === 'register'
-                ? 'A creature, a room, and one small goal at a time.'
-                : 'Your room is where you left it.'}
-            </CardDescription>
+            <CardTitle className="text-2xl">{title}</CardTitle>
+            <CardDescription className="text-pretty">{blurb}</CardDescription>
           </CardHeader>
           <CardContent>
-            {mode === 'register' ? (
+            {verifying ? (
+              <VerifyForm
+                email={verifying}
+                onVerified={onAuthenticated}
+                onChangeEmail={() => setPending(null)}
+              />
+            ) : mode === 'register' ? (
               <RegisterForm
-                onSuccess={onAuthenticated}
+                onCodeSent={awaitCode}
                 onSwitchToLogin={() => onModeChange('login')}
               />
             ) : (
               <LoginForm
                 onSuccess={onAuthenticated}
+                onNeedsVerification={awaitCode}
                 onSwitchToRegister={() => onModeChange('register')}
               />
             )}

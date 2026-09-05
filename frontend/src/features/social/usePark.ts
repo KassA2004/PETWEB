@@ -3,6 +3,7 @@ import type { RefObject } from 'react';
 import { createPetAppearance } from '../../assets/pets/customization/PetAppearance';
 import type { PetHabitatHandle } from '../habitat/PetHabitat';
 import { fetchParkMessages } from './api';
+import { onSignOut } from '../../lib/teardown';
 import { forgetPark, rememberPark } from './parkMemory';
 import { tintFor } from './tints';
 import {
@@ -413,6 +414,31 @@ export function usePark(options: UseParkOptions): ParkSession {
     return () => {
       emitSocial('park:leave');
     };
+  }, []);
+
+  /*
+   * Signing out is leaving the park, and it is the one exit that has to be
+   * taken *deliberately*.
+   *
+   * An unmount is ambiguous — it is also what a reload looks like — so the
+   * effect above only says goodbye to the server and keeps the remembered park,
+   * on purpose. A sign-out is not ambiguous: the person is going, and what
+   * outlives them is somebody else's problem. Two things follow, and both were
+   * bugs before this existed:
+   *
+   *   the park is forgotten, so the next account signed into *this tab* is not
+   *   walked onto a lawn it was never invited to. That was the reported one
+   *
+   *   the seat is given up now rather than when the sweeper next runs, and the
+   *   `park:leave` reaches the server because `runSignOutTeardowns` unwinds in
+   *   reverse registration order (`lib/teardown.ts`) — this hook registered
+   *   after the socket did, so it goes first and the socket is still open
+   */
+  useEffect(() => {
+    return onSignOut(() => {
+      emitSocial('park:leave');
+      forgetPark();
+    });
   }, []);
 
   const say = useCallback(async (body: string): Promise<boolean> => {

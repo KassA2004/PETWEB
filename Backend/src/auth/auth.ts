@@ -2,6 +2,8 @@ import 'dotenv/config';
 import { randomUUID } from 'node:crypto';
 import { Prisma } from '@prisma/client';
 import { betterAuth } from 'better-auth';
+import { APIError, createAuthMiddleware } from 'better-auth/api';
+import { emailOTP } from 'better-auth/plugins/email-otp';
 import { prismaAdapter } from 'better-auth/adapters/prisma';
 import { prismaService } from '../prisma/prisma.service';
 import {
@@ -10,7 +12,9 @@ import {
   uniqueUsername,
   usernameKeyOf,
 } from '../users/username';
-import 'dotenv/config';
+import { checkEmailAddress } from './email-address';
+import { CODE_LIFETIME_MINUTES, sendVerificationCode } from './mailer';
+import { sessionEnded } from './session-events';
 
 export const getCorsOrigins = (): string[] => {
   const origins = new Set<string>();
@@ -25,6 +29,17 @@ export const getCorsOrigins = (): string[] => {
 };
 
 /**
+ * Whether this process is serving the real thing.
+ *
+ * Decides three things and nothing else: whether cookies are `Secure` and
+ * `SameSite=None` (they must be, over HTTPS, for an API on a different origin),
+ * how long a session lasts, and whether a missing mail server is fatal. Every
+ * one of those is a *deployment* fact rather than a code path, which is why
+ * they are read here once instead of being sprinkled through the options below.
+ */
+const PRODUCTION = process.env.NODE_ENV === 'production';
+
+/**
  * Better Auth instance.
  *
  * Per /Docs/API-endpoints/01-auth-endpoints.md: Better Auth owns credentials and
@@ -33,6 +48,25 @@ export const getCorsOrigins = (): string[] => {
  * login/session routes here (AGENTS.md — "do not create duplicate systems").
  *
  * `basePath` matches the `/api/auth` mount point from 00-conventions.md §1.
+ *
+ * ## Three properties this file is responsible for
+ *
+ * **An account belongs to a real address.** `emailAndPassword` refuses to sign
+ * anybody in until their address has been proved, and the proof is a six-digit
+ * code sent to it (`emailOTP`). Sign-up is not a session — it is a request to
+ * be let in, granted by typing back something only the mailbox's owner could
+ * have read. `hooks.before` refuses the obviously-unreal before an account row
+ * is spent on it (`email-address.ts`).
+ *
+ * **A session ends when the user says so.** Signing out deletes the row, and
+ * `databaseHooks.session.delete.after` announces it (`session-events.ts`) so
+ * that anything holding a *connection* authenticated by that session — the
+ * social gateway's WebSockets — is closed in the same moment rather than at its
+ * next revalidation.
+ *
+ * **A session ends by itself.** Thirty days, refreshed daily while it is in
+ * use, so an abandoned session on a shared machine expires instead of waiting
+ * for somebody to remember it.
  */
 export const auth = betterAuth({
   database: prismaAdapter(prismaService, { provider: 'postgresql' }),
@@ -49,12 +83,103 @@ export const auth = betterAuth({
     database: {
       generateId: () => randomUUID(),
     },
+    /**
+     * The session cookie's attributes.
+     *
+     * The API and the frontend are separate origins, so the cookie is
+     * cross-site and a browser will only store it when it is both
+     * `SameSite=None` and `Secure` — which means it only works at all over
+     * HTTPS. In development the two are `localhost` on different *ports*, which
+     * is the same site, so `Lax` is both sufficient and stricter.
+     *
+     * Stated rather than left to the default because getting it wrong fails in
+     * the least helpful way available: sign-in returns 200, sets a cookie the
+     * browser silently discards, and the next request is anonymous.
+     */
+    useSecureCookies: PRODUCTION,
+    defaultCookieAttributes: PRODUCTION
+      ? { sameSite: 'none', secure: true, httpOnly: true }
+      : { sameSite: 'lax', secure: false, httpOnly: true },
+  },
+
+  /**
+   * A blunt cap on how often anybody may hammer these routes.
+   *
+   * The password endpoints are the ones that matter — every one of them is an
+   * oracle for something (whether an account exists, whether a password is
+   * right, what a code is) and the only defence against being asked a million
+   * times is not answering that often. `emailOTP` has its own, tighter, limit
+   * on *sending* codes; this is the floor under everything else.
+   */
+  rateLimit: {
+    enabled: true,
+    window: 60,
+    max: 60,
+    customRules: {
+      '/sign-in/email': { window: 60, max: 8 },
+      '/sign-up/email': { window: 60 * 15, max: 5 },
+      '/email-otp/verify-email': { window: 60, max: 8 },
+      '/email-otp/send-verification-otp': { window: 60 * 5, max: 4 },
+    },
   },
 
   emailAndPassword: {
     enabled: true,
     minPasswordLength: 8,
+    /**
+     * The rule the whole feature exists for: an unverified address cannot sign
+     * in. Not "can sign in but sees a banner" — the session is never created,
+     * so there is no state in which a made-up address is a usable account.
+     *
+     * Better Auth answers such an attempt with `EMAIL_NOT_VERIFIED` and sends a
+     * fresh code, so the login form can move straight to asking for it
+     * (`features/auth/VerifyForm.tsx`).
+     */
+    requireEmailVerification: true,
   },
+
+  emailVerification: {
+    /**
+     * Verifying is the last step of signing up, so it ends where signing up
+     * was going: inside the product. Without this the user proves their
+     * address and is then shown a login form to type the password they chose
+     * ninety seconds ago.
+     */
+    autoSignInAfterVerification: true,
+    sendOnSignUp: true,
+  },
+
+  plugins: [
+    /**
+     * A code, not a link.
+     *
+     * A link has to survive being copied between devices, mangled by a mail
+     * client's URL rewriter and opened in a browser that is not the one that
+     * started the sign-up — and when any of that goes wrong the user is on a
+     * dead page with nothing to do. Six digits typed into the form that is
+     * already open goes wrong in none of those ways, and works when the mail is
+     * read on a phone and the account is being made on a laptop.
+     *
+     * `storeOTP: 'hashed'` because a table of live verification codes in
+     * plaintext is a table of live credentials. `allowedAttempts` and the
+     * ten-minute expiry are what make six digits enough: 10^6 with five guesses
+     * inside ten minutes is not a space anybody walks.
+     */
+    emailOTP({
+      otpLength: 6,
+      expiresIn: CODE_LIFETIME_MINUTES * 60,
+      allowedAttempts: 5,
+      storeOTP: 'hashed',
+      sendVerificationOnSignUp: true,
+      // Take over the default link-based verification everywhere, so there is
+      // one way to prove an address rather than two that can disagree.
+      overrideDefaultEmailVerification: true,
+      rateLimit: { window: 60, max: 2 },
+      sendVerificationOTP: async ({ email, otp, type }) => {
+        await sendVerificationCode(email, otp, type);
+      },
+    }),
+  ],
 
   // Map Better Auth's default model names onto the Auth-prefixed tables in
   // /Backend/prisma/auth-*.prisma, so they never collide with the domain
@@ -73,9 +198,27 @@ export const auth = betterAuth({
    * revoked session still works. The domain `User` lookup in `auth.guard.ts`
    * is deliberately NOT cached: that row is the authorization decision, and it
    * is a primary-key hit.
+   *
+   * **The window is only open when the cookie survives**, which after a
+   * deliberate sign-out it does not: `/sign-out` clears both the session cookie
+   * and its cached copy, so the browser that signed out has nothing left to
+   * present. The five minutes are the exposure for a session revoked
+   * *elsewhere*, which is the case `freshAge` and the socket teardown below
+   * exist to bound.
    */
   session: {
     modelName: 'AuthSession',
+    /** A month, which is how long a room is worth staying signed in to. */
+    expiresIn: 60 * 60 * 24 * 30,
+    /** Slide the expiry at most once a day rather than on every request. */
+    updateAge: 60 * 60 * 24,
+    /**
+     * How recently the user must have proved who they are before Better Auth
+     * will let them change something dangerous — their password, their email.
+     * A day: long enough not to be an obstacle, short enough that a borrowed
+     * laptop is not an account takeover.
+     */
+    freshAge: 60 * 60 * 24,
     cookieCache: {
       enabled: true,
       maxAge: 5 * 60,
@@ -84,7 +227,53 @@ export const auth = betterAuth({
   account: { modelName: 'AuthAccount' },
   verification: { modelName: 'AuthVerification' },
 
+  /**
+   * Request middleware, for the one thing that has to happen *before* an
+   * account exists.
+   *
+   * Better Auth validates that an address is shaped like an address. It cannot
+   * know whether the domain can receive mail, because that is a DNS lookup and
+   * a policy — both of which are ours. Doing it here rather than in the
+   * database hook is what makes the refusal a clean 400 with a sentence in it,
+   * instead of a failed insert.
+   */
+  hooks: {
+    before: createAuthMiddleware(async (ctx) => {
+      if (ctx.path !== '/sign-up/email') return;
+
+      const email = (ctx.body as { email?: unknown } | undefined)?.email;
+      if (typeof email !== 'string') return;
+
+      const verdict = await checkEmailAddress(email);
+      if (verdict.ok) return;
+
+      throw new APIError('BAD_REQUEST', {
+        code: 'EMAIL_NOT_DELIVERABLE',
+        message: verdict.reason,
+      });
+    }),
+  },
+
   databaseHooks: {
+    session: {
+      delete: {
+        /**
+         * The session is gone; tell anything still holding a connection that
+         * was authenticated by it.
+         *
+         * Fires for every route that ends a session — `/sign-out`, revoking one
+         * session, revoking all of them — because they all delete the row, and
+         * hooking the row rather than the route is what makes that true without
+         * anybody having to remember it.
+         *
+         * See `session-events.ts` for why this is announced rather than called.
+         */
+        after: async (session) => {
+          const userId = (session as { userId?: unknown }).userId;
+          if (typeof userId === 'string') sessionEnded(userId);
+        },
+      },
+    },
     user: {
       create: {
         /**
@@ -95,6 +284,13 @@ export const auth = betterAuth({
          * Runs inside the sign-up request, after Better Auth has committed the
          * AuthUser row, so by the time /sign-up/email responds the user already
          * has a room to enter.
+         *
+         * Note that this now happens *before* the address has been verified,
+         * and deliberately so: the username has to be reserved at the moment it
+         * is chosen or two people can pick the same one and only find out ten
+         * minutes later, and the room has to exist before the first session
+         * because `autoSignInAfterVerification` puts the user straight into it.
+         * An account that is never verified is a row nobody can sign in to.
          *
          * Starter InventoryItems are NOT granted here yet — no ObjectDefinition
          * catalog exists to grant from (that's package 05 work). See the scope

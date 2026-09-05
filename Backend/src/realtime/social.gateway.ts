@@ -22,6 +22,7 @@ import {
   INTERACTION_RANGE,
   MOVE_RATE,
 } from '../parks/park-limits';
+import { onSessionEnded } from '../auth/session-events';
 import { ParksService } from '../parks/parks.service';
 import type { ParkMemberView, ParkView } from '../parks/parks.service';
 import {
@@ -179,6 +180,9 @@ export class SocialGateway
 
   private heartbeat: NodeJS.Timeout | null = null;
 
+  /** Unsubscribes the sign-out listener. See the constructor. */
+  private stopWatchingSessions: (() => void) | null = null;
+
   constructor(
     private readonly parks: ParksService,
     private readonly chat: ChatService,
@@ -196,6 +200,38 @@ export class SocialGateway
       for (const userId of userIds) {
         this.server?.to(roomForUser(userId)).emit('friends:changed', {});
       }
+    });
+
+    /*
+     * Somebody signed out. Close their sockets now.
+     *
+     * A socket authenticates once, at its handshake, and then talks for hours;
+     * `revalidate` below is the backstop that eventually notices a session has
+     * gone, and "eventually" is up to `REVALIDATE_MS`. That is the right
+     * cadence for a session that expired quietly and much too slow for one the
+     * user *ended*: a park is a room with other people in it, and staying in it
+     * for ten minutes after signing out is exactly the thing a sign-out is
+     * supposed to stop.
+     *
+     * Every socket the user has, not the one that signed out: the session is
+     * gone, so none of them is authenticated any more. `disconnectSockets`
+     * takes the same user room `friends:changed` uses, and the disconnect
+     * cascade does the rest — `handleDisconnect` takes them out of the park and
+     * broadcasts the roster, so the lawn sees them leave rather than sees them
+     * stand still.
+     *
+     * Announced through `auth/session-events.ts` rather than called from
+     * `auth.ts`, because `auth.ts` is mounted outside Nest and importing this
+     * gateway from it would be a cycle.
+     */
+    this.stopWatchingSessions = onSessionEnded((userId) => {
+      const room = this.server?.in(roomForUser(userId));
+      if (!room) return;
+
+      this.logger.log('Closing the sockets of a session that has ended.');
+      // `true` closes the underlying connection rather than only the namespace,
+      // so a client cannot simply carry on in another one.
+      room.disconnectSockets(true);
     });
   }
 
@@ -241,6 +277,8 @@ export class SocialGateway
   onModuleDestroy(): void {
     if (this.heartbeat) clearInterval(this.heartbeat);
     this.heartbeat = null;
+    this.stopWatchingSessions?.();
+    this.stopWatchingSessions = null;
   }
 
   handleConnection(socket: Socket): void {
