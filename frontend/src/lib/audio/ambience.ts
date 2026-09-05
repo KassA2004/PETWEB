@@ -10,9 +10,10 @@
  * Each bed is a small graph that runs for as long as the view is selected:
  *
  * ```text
- *   noise / oscillators → shaping filter → bed gain → ENVIRONMENT channel
- *                                              ↑
- *                              crossfaded on a view change
+ *   recorded loop  ─┐
+ *                   ├→ bed gain → ENVIRONMENT channel
+ *   or synthesis   ─┘      ↑
+ *                   crossfaded on a view change, and on the upgrade
  * ```
  *
  * **Changing view crossfades rather than cuts.** A hard switch is the single
@@ -20,22 +21,38 @@
  * key instantly — and the fade is two `setTargetAtTime` calls, so there was
  * never a reason to skip it.
  *
- * Everything here is synthesised. Wind, waves and traffic are all filtered
- * noise with different envelopes on the filter; birds are short frequency
- * sweeps fired at irregular intervals. That last one is the only part that
- * needs a timer, and it is the only part that would be obvious if it looped.
+ * ## What is recorded, and what is still made out of noise
  *
- * **The beds are level-matched, and the numbers below are measured rather than
- * chosen.** Written by ear they were not: low-frequency material carries far
- * more energy for the same apparent loudness, so the sea and the city — which
- * are almost entirely low — came out at three times the RMS of the meadow, and
- * switching the window from a park to an ocean was a jump in volume rather than
- * a change of place. Each `gain` here is set so every view lands near 0.018 RMS
- * on the environment channel. Retuning one of them means measuring it against
- * the others, not turning it up until it sounds right on its own.
+ * The beds the user actually hears are field recordings now, cut to seamless
+ * loops by `tools/audio/fetch.mjs`. Everything below them — the noise layers,
+ * the birds, the swell — is the synthesised version, kept and still built on
+ * every view change, because it is available on the frame the view changes and
+ * the recording is a fetch away. `Ambience.set` plays the synthesiser and then
+ * upgrades itself; see the class.
+ *
+ * This is where synthesis was weakest, which is why it was the first thing
+ * replaced. Filtered noise is genuinely convincing wind: air moving past things
+ * *is* broadband noise with a wandering filter on it, and the ear has no
+ * further detail to miss. It is not convincing anything else. A sea is
+ * thousands of individual collapses with a shape to each one, and a band of
+ * noise breathing every eight seconds is a description of a sea rather than a
+ * sea. Birds are the same argument at a smaller scale: the frequency sweeps
+ * below get the *rhythm* of birdsong right, which is most of it, and the timbre
+ * is unmistakably an oscillator.
+ *
+ * **The synthesised beds are level-matched, and the numbers below are measured
+ * rather than chosen.** Written by ear they were not: low-frequency material
+ * carries far more energy for the same apparent loudness, so the sea and the
+ * city — which are almost entirely low — came out at three times the RMS of the
+ * meadow, and switching the window from a park to an ocean was a jump in volume
+ * rather than a change of place. Each `gain` here is set so every view lands
+ * near 0.018 RMS on the environment channel. The recordings are matched the
+ * same way and to the same place, in LUFS, by the fetch tool — so an upgrade
+ * mid-fade is a change of *material* and not of level.
  */
 
 import type { AudioBus } from './AudioBus';
+import type { Samples } from './samples';
 import type { WindowViewId } from '../../assets/environment/window/WindowViews';
 
 /** How long a view change takes to complete, in seconds. */
@@ -260,21 +277,51 @@ function buildBed(context: AudioContext, view: WindowViewId): Bed {
   };
 }
 
+
 /**
  * The ambience layer.
  *
- * Owns at most two beds at a time: the one playing and the one fading out.
- * Anything more would mean a user clicking through the six views quickly could
- * stack six beds, which is both a leak and a mess.
+ * Two things are true of every view, and the class is arranged around both:
+ * there is a synthesised bed that is available *immediately*, and there is a
+ * recorded one that is better and arrives *late*. So a view change plays the
+ * synthesiser at once and upgrades itself to the recording when it lands.
+ *
+ * ```text
+ *   set('ocean')  ──→ synth bed, fading in over 1.6s   (available on the frame)
+ *                 └─→ fetch ambience/ocean.mp3
+ *                          └─→ recorded loop fades in, synth bed fades out
+ * ```
+ *
+ * That ordering is the whole reason the synthesised beds were kept. A room that
+ * is silent for the second and a half it takes to fetch three hundred kilobytes
+ * has a hole in it exactly where somebody has just changed the view and is
+ * listening for the result; a room that plays a rough approximation and then
+ * quietly becomes a real recording has none.
+ *
+ * Beds are held in a set rather than as a single `retiring` slot, because there
+ * are now two ways for one to be replaced — a new view, and an upgrade — and a
+ * user clicking through six views during a fetch could otherwise strand one.
  */
 export class Ambience {
   private bus: AudioBus;
-  private current: { view: WindowViewId; bed: Bed } | null = null;
-  private retiring: Bed | null = null;
-  private retireTimer = 0;
+  private samples: Samples;
 
-  constructor(bus: AudioBus) {
+  /**
+   * What is playing, and whether it is the real thing yet.
+   *
+   * `recorded` is what stops a second arrival from upgrading an already
+   * upgraded bed: `set` is called from a React effect on every style change,
+   * and the fetch is cached, so the promise resolves immediately every time
+   * after the first.
+   */
+  private current: { view: WindowViewId; bed: Bed; recorded: boolean } | null = null;
+
+  /** Beds on their way out, each with the timer that will free it. */
+  private retiring = new Map<Bed, number>();
+
+  constructor(bus: AudioBus, samples: Samples) {
     this.bus = bus;
+    this.samples = samples;
   }
 
   get view(): WindowViewId | null {
@@ -295,40 +342,110 @@ export class Ambience {
     if (!channel) return;
 
     const context = channel.context as AudioContext;
+
+    const synth = buildBed(context, view);
+    this.swapTo(channel, synth, view, false);
+
+    void this.upgrade(context, channel, view);
+  }
+
+  /**
+   * Fetch the recording for a view and put it on, if it is still wanted.
+   *
+   * Every one of the three guards below is a real case rather than defensive
+   * padding: the file may not exist (nothing to upgrade to), the user may have
+   * changed the window while it was in flight (upgrading would swap the bed
+   * back to the view they just left), and the effect may have called `set`
+   * again for the same view (already recorded, nothing to do).
+   */
+  private async upgrade(
+    context: AudioContext,
+    channel: GainNode,
+    view: WindowViewId,
+  ): Promise<void> {
+    const buffer = await this.samples.ambience(context, view);
+    if (!buffer) return;
+    if (this.current?.view !== view || this.current.recorded) return;
+
+    this.swapTo(channel, loopBed(context, buffer), view, true);
+  }
+
+  /** Fade a new bed in, fade whatever was there out, and book its removal. */
+  private swapTo(
+    channel: GainNode,
+    bed: Bed,
+    view: WindowViewId,
+    recorded: boolean,
+  ): void {
+    const context = channel.context as AudioContext;
     const now = context.currentTime;
 
-    // Only one thing may be retiring. A second view change inside the fade
-    // stops the first one early rather than leaving it running for ever.
-    if (this.retiring) {
-      window.clearTimeout(this.retireTimer);
-      this.retiring.stop();
-      this.retiring = null;
-    }
+    const previous = this.current?.bed;
+    if (previous) this.retire(previous, now);
 
-    if (this.current) {
-      const old = this.current.bed;
-      old.output.gain.cancelScheduledValues(now);
-      old.output.gain.setTargetAtTime(0, now, CROSSFADE / 3);
-      this.retiring = old;
-      this.retireTimer = window.setTimeout(() => {
-        old.stop();
-        if (this.retiring === old) this.retiring = null;
-      }, CROSSFADE * 1000);
-    }
-
-    const bed = buildBed(context, view);
     bed.output.connect(channel);
     bed.output.gain.setTargetAtTime(1, now, CROSSFADE / 3);
 
-    this.current = { view, bed };
+    this.current = { view, bed, recorded };
+  }
+
+  private retire(bed: Bed, now: number): void {
+    bed.output.gain.cancelScheduledValues(now);
+    bed.output.gain.setTargetAtTime(0, now, CROSSFADE / 3);
+
+    this.retiring.set(
+      bed,
+      window.setTimeout(() => {
+        bed.stop();
+        this.retiring.delete(bed);
+      }, CROSSFADE * 1000),
+    );
   }
 
   /** Silence, and let go of everything. */
   stop(): void {
-    window.clearTimeout(this.retireTimer);
-    this.retiring?.stop();
-    this.retiring = null;
+    for (const [bed, timer] of this.retiring) {
+      window.clearTimeout(timer);
+      bed.stop();
+    }
+    this.retiring.clear();
+
     this.current?.bed.stop();
     this.current = null;
   }
+}
+
+/**
+ * A recorded loop, as a bed.
+ *
+ * `loop = true` on a buffer source and nothing else — no crossfade at the join,
+ * no second source phasing against the first. The seam is already seamless: the
+ * fetch tool builds every one of these so that its end is material that
+ * continues at its own start (see `makeLoop`), which is the right place for
+ * that work because it happens once at build time rather than for ever at
+ * playback.
+ */
+function loopBed(context: AudioContext, buffer: AudioBuffer): Bed {
+  const output = context.createGain();
+  output.gain.value = 0;
+
+  const source = context.createBufferSource();
+  source.buffer = buffer;
+  source.loop = true;
+  source.connect(output);
+  source.start(context.currentTime, Math.random() * buffer.duration);
+
+  return {
+    output,
+    stop: () => {
+      try {
+        source.stop();
+      } catch {
+        // Already stopped: `stop()` after the node has ended throws in some
+        // engines and is not worth a flag to avoid.
+      }
+      source.disconnect();
+      output.disconnect();
+    },
+  };
 }

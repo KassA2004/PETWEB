@@ -1,0 +1,4 @@
+
+# The audio fetcher's download cache: the unprocessed originals.
+# What ships is frontend/public/audio, which is committed.
+tools/audio/.work/

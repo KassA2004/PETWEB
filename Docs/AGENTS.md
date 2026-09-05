@@ -57,8 +57,13 @@
 
 - No component constructs audio. It reports an event; `lib/audio` decides what
   that sounds like and whether there is room for it.
-- There are no audio files. Sounds are synthesised, for the same reasons the
-  artwork is procedural.
+- Recordings where a recording is better, synthesis where it is not, and the
+  synthesised voice is never deleted — it is what plays until the file arrives
+  and if it never does. `lib/audio/library.ts` argues the split; the short
+  version is that the world is recorded and the interface is not.
+- Audio files are never dropped into `public/audio` by hand. They are pinned in
+  `tools/audio/sources.json` and fetched by `tools/audio/fetch.mjs`, which also
+  normalises levels and writes the credits. Provenance is the licence.
 - Every repeating sound has a throttle key and a cooldown. Physics must never be
   able to spam the mixer.
 - Channel levels live in one table (`AudioBus.DEFAULT_LEVELS`) and are tuned by

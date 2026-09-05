@@ -11,6 +11,7 @@
 import { halfX, halfZ, topOf } from '../../simulation/physics';
 import type { PhysicsBody } from '../../simulation/physics';
 import { farness, project, scaleAt } from '../../world/Projection';
+import { FLOOR_SQUASH } from '../../assets/objects/shared/Surface';
 import { PALETTE, mix } from '../../assets/shared/color';
 
 /** A body's footprint on screen, as a rectangle around its artwork. */
@@ -68,18 +69,41 @@ export function depthTintOf(z: number): number {
   return mix(0xffffff, mix(PALETTE.sand, PALETTE.grape, 0.35), farness(z) * 0.3);
 }
 
-/** The rectangle a body's artwork occupies on screen. */
+/**
+ * The rectangle a body's artwork occupies on screen.
+ *
+ * Two extents, unioned, because an object is drawn in two planes. Upright form
+ * runs from the contact point to the crown, and for almost everything that is
+ * the whole picture. But every object also covers some *floor* — at minimum a
+ * contact shadow, and for a few things rather more than that — and the camera
+ * squashes that footprint to `FLOOR_SQUASH` of its depth either side of the
+ * contact point.
+ *
+ * For anything standing up the skirt is hidden under the form and costs
+ * nothing. For something lying flat it is the entire object: a rug is two
+ * cells of floor and five units of elevation, so measured as a form alone its
+ * rectangle is the eight-pixel minimum through its middle — a target nobody
+ * can hit, which is precisely why the rug could not be picked up.
+ *
+ * The extra reach only ever goes toward the viewer, over floor that belongs to
+ * things `pickAt` has already asked (it works front to back), so a bigger
+ * rectangle here cannot steal a click from anything standing in front.
+ */
 export function screenRectOf(body: PhysicsBody, headroom = 1): ScreenRect {
   const scale = scaleAt(body.position.z);
   const base = project(body.position.x, body.position.y, body.position.z);
   const crown = project(body.position.x, topOf(body) * headroom, body.position.z);
   const width = halfX(body.collider) * 2 * scale;
 
+  const skirt = halfZ(body.collider) * FLOOR_SQUASH * scale;
+  const top = Math.min(crown.y, base.y - skirt);
+  const bottom = base.y + skirt;
+
   return {
     x: base.x - width / 2,
-    y: crown.y,
+    y: top,
     width,
-    height: Math.max(8, base.y - crown.y),
+    height: Math.max(8, bottom - top),
   };
 }
 

@@ -36,14 +36,30 @@ interface PersonRowProps {
   tint?: string;
   /** Buttons on the right. */
   actions?: React.ReactNode;
+  /**
+   * A small note at the top right — a timestamp, a count.
+   *
+   * Distinct from `actions` because it is *information* rather than a control,
+   * and the two want opposite alignments: a button belongs on the row's centre
+   * line where a thumb expects it, and a timestamp belongs on the name's
+   * baseline, where it reads as belonging to the name rather than floating
+   * beside the whole row.
+   */
+  meta?: React.ReactNode;
   /** Makes the whole row a button. */
   onClick?: () => void;
   selected?: boolean;
   className?: string;
 }
 
-/** Small enough to be a list, large enough for a creature to be recognisable. */
-const PORTRAIT = 52;
+/**
+ * Small enough to be a list, large enough for a creature to be recognisable.
+ *
+ * Exported because the warm-up has to ask for the *same* size: previews are
+ * cached per size, so drawing a person at 52 and then asking for them at 48 is
+ * two rig builds and a cache with two of everybody in it.
+ */
+export const PORTRAIT = 52;
 
 export function PersonRow({
   username,
@@ -51,6 +67,7 @@ export function PersonRow({
   detail,
   tint,
   actions,
+  meta,
   onClick,
   selected = false,
   className,
@@ -89,16 +106,23 @@ export function PersonRow({
       </div>
 
       <div className="min-w-0 flex-1 text-left">
-        <p className="flex items-center gap-1.5 truncate text-sm font-medium">
-          {tint && (
-            <span
-              aria-hidden
-              className="inline-block size-2.5 shrink-0 rounded-full ring-1 ring-black/10"
-              style={{ backgroundColor: tint }}
-            />
+        <div className="flex items-baseline gap-2">
+          <p className="flex min-w-0 flex-1 items-center gap-1.5 truncate text-sm font-medium">
+            {tint && (
+              <span
+                aria-hidden
+                className="inline-block size-2.5 shrink-0 rounded-full ring-1 ring-black/10"
+                style={{ backgroundColor: tint }}
+              />
+            )}
+            {username}
+          </p>
+          {meta && (
+            <span className="shrink-0 text-[0.65rem] text-muted-foreground tabular-nums">
+              {meta}
+            </span>
           )}
-          {username}
-        </p>
+        </div>
         <p className="truncate text-xs text-muted-foreground">
           {detail ?? (pet ? pet.name : 'No creature yet')}
         </p>

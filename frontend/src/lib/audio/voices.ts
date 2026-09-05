@@ -1,11 +1,17 @@
 /**
  * The sounds themselves, made out of arithmetic.
  *
- * There are no audio files in this product, for the same reason there are no
- * image files: an asset you cannot tune is an asset that stays slightly wrong
- * for ever. A bounce that is a shade too bright is one number here, and
- * `theme-and-design.md`'s argument for procedural artwork applies to a bounce
- * exactly as it does to a plant pot.
+ * This was once the whole of the audio, and it is now the *floor* of it: every
+ * voice here still exists, still works, and is what plays when the recording
+ * for a sound has not arrived, has failed, or was never wanted. See
+ * `library.ts` for which sounds are now recordings and why — the short version
+ * is that the interface is better synthesised and the world is not.
+ *
+ * A synthesised voice keeps two properties a file cannot have, and they are why
+ * the fallback is a fallback rather than dead code: it is available on the
+ * *first* frame, before anything has downloaded, and it can be tuned by
+ * changing a number. `theme-and-design.md`'s argument for procedural artwork
+ * applies to a bounce exactly as it does to a plant pot.
  *
  * Everything below is built from three ingredients:
  *
@@ -180,6 +186,63 @@ function noise(
   gain.connect(input);
   source.start(at, Math.random() * (buffer.duration - spec.duration - 0.01));
   source.stop(at + spec.duration + 0.02);
+}
+
+/**
+ * A recording, played through the same chain as everything else.
+ *
+ * This is the whole of the sample layer's playback, and its shape is the point:
+ * it takes the identical `VoiceOptions` a synthesised voice takes and hands
+ * them to the identical `open`, so a recorded bounce is panned, filtered for
+ * distance, throttled and counted against the voice budget in exactly the way
+ * the synthesised one was. Nothing downstream of here can tell the difference,
+ * which is what makes the two interchangeable at the call site.
+ *
+ * Two things are done to the buffer that are not done to an oscillator:
+ *
+ * **Strength scales level, not brightness.** For a synthesised voice a harder
+ * knock is a brighter knock, built that way from the envelope up. A recording
+ * has the brightness the microphone heard, and faking more of it with a filter
+ * on the way out sounds like a filter. So `strength` moves the gain across a
+ * range that leaves a light touch clearly audible — a floor of 0.3 rather than
+ * 0, because a bounce at strength 0.05 should still be a bounce.
+ *
+ * **Every playback is detuned a little.** A few per cent of playback rate,
+ * random per voice. Two takes alternating gets rid of the obvious repetition;
+ * this gets rid of the rest of it, and it is the difference between a room and
+ * a sampler. Impacts get more of it than voices, because a creature whose pitch
+ * wanders by six per cent sounds like a different creature each time.
+ *
+ * @returns whether it actually played, so the caller knows whether to fall back
+ *   to the synthesised voice. A refusal here is the ordinary case on a busy
+ *   frame (see `AudioBus.take`) and must not become a second sound.
+ */
+export function sampled(
+  bus: AudioBus,
+  channel: Channel,
+  buffer: AudioBuffer,
+  options: VoiceOptions & { detune?: number } = {},
+  throttle?: { key: string; cooldownMs: number },
+): boolean {
+  const built = open(bus, channel, options, throttle);
+  if (!built) return false;
+
+  const { context, input, at } = built;
+  const spread = options.detune ?? 0.04;
+
+  const source = context.createBufferSource();
+  source.buffer = buffer;
+  source.playbackRate.value = 1 + (Math.random() * 2 - 1) * spread;
+
+  const gain = context.createGain();
+  gain.gain.value = 0.3 + built.strength * 0.75;
+
+  source.connect(gain);
+  gain.connect(input);
+  source.start(at);
+
+  close(built, buffer.duration / source.playbackRate.value);
+  return true;
 }
 
 /* -------------------------------------------------------------------------- */

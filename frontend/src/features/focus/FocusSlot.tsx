@@ -6,11 +6,12 @@ import type { DraggedGoal } from './useGoalDrag';
 /**
  * The one slot.
  *
- * Three states and no more, because the whole feature is one question — *what
+ * Four states and no more, because the whole feature is one question — *what
  * is the one thing?* — and an interface that could show two answers at once
  * would be answering a different question.
  *
  * ```text
+ *   away       you are standing somewhere else, and there is one way back
  *   empty      a dashed shape the size of the thing that goes in it
  *   waiting    something is in your hand and it could go here
  *   running    a name, a countdown, and a way out that is not a button
@@ -22,6 +23,14 @@ import type { DraggedGoal } from './useGoalDrag';
  * the hour is that the user is not watching.
  */
 
+/** Somewhere the user is standing that an hour cannot be started from. */
+export interface AwayFrom {
+  /** What the place is called, in the user's words: "a park". */
+  label: string;
+  /** The one thing to do about it. */
+  leave: () => void;
+}
+
 interface FocusSlotProps {
   focus: FocusHandle;
   /** The goal being worked on, when there is one. */
@@ -31,9 +40,28 @@ interface FocusSlotProps {
   /** True while that hand is over this slot. */
   over: boolean;
   slotRef: React.RefObject<HTMLDivElement | null>;
+  /**
+   * Set while the world column belongs to a park or a visit.
+   *
+   * A session started from out there is the feature failing at the only thing
+   * it promises. The room going dark is *half* of do-not-disturb; the other
+   * half is that nothing can reach you, and a park is a lawn full of other
+   * people's creatures with chat arriving in the panel beside it. So the slot
+   * refuses, says where you are, and offers the way home — rather than being
+   * merely disabled, which would tell the user they cannot have something
+   * without telling them why or what to do.
+   */
+  away?: AwayFrom | null;
 }
 
-export function FocusSlot({ focus, goalTitle, dragging, over, slotRef }: FocusSlotProps) {
+export function FocusSlot({
+  focus,
+  goalTitle,
+  dragging,
+  over,
+  slotRef,
+  away = null,
+}: FocusSlotProps) {
   if (focus.active) {
     return (
       <section
@@ -100,6 +128,51 @@ export function FocusSlot({ focus, goalTitle, dragging, over, slotRef }: FocusSl
             {focus.error}
           </p>
         )}
+      </section>
+    );
+  }
+
+  /*
+   * Standing somewhere else.
+   *
+   * Checked after `focus.active`, and the order is deliberate: a session that
+   * is already running has to keep rendering its countdown whatever else is on
+   * screen. It cannot actually happen — the door to the parks is not drawn
+   * during a session and the server refuses the reverse — but a slot that
+   * hides a running timer because of a state it should not be in is a worse
+   * failure than the one it is guarding against.
+   */
+  if (away) {
+    return (
+      <section
+        ref={slotRef}
+        aria-label="Focus"
+        className="rounded-2xl border-2 border-dashed border-border p-5 text-center"
+      >
+        <p className="text-[0.65rem] font-medium tracking-[0.2em] text-muted-foreground uppercase opacity-70">
+          Focus
+        </p>
+
+        <p className="mt-2 text-sm text-muted-foreground">
+          You are out in {away.label}.
+        </p>
+
+        <p className="mt-1 text-xs text-muted-foreground opacity-70">
+          An hour with the lights off is not much use somewhere people can walk up to
+          you.
+        </p>
+
+        <button
+          type="button"
+          onClick={away.leave}
+          className={cn(
+            'press mt-3 text-xs font-medium text-foreground underline underline-offset-4',
+            'outline-none hover:opacity-80 focus-visible:ring-2 focus-visible:ring-ring',
+            'rounded-sm',
+          )}
+        >
+          Head home
+        </button>
       </section>
     );
   }

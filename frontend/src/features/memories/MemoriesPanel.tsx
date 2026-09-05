@@ -3,6 +3,9 @@ import { Eye, EyeOff, Trash2 } from 'lucide-react';
 import { ApiError } from '../../lib/api';
 import { imageSrc } from '../media/api';
 import { cn } from '../../lib/utils';
+// One date formatter for the whole product, so two screens cannot disagree
+// about what yesterday looks like. See `lib/time.ts`.
+import { memoryDate as when } from '../../lib/time';
 import { deleteMemory, fetchMemories, setMemoryVisibility } from './api';
 import type { Memory } from './api';
 import { PetPortrait } from '../pets/PetPortrait';
@@ -88,30 +91,6 @@ interface MemoriesPanelProps {
    * stop trusting.
    */
   onSharedChange?: () => void;
-}
-
-/**
- * When it happened, in the words somebody would use.
- *
- * Relative while relative is more useful than a date, and the visitor's own
- * locale after that — a hard-coded American date on a European screen is the
- * smallest possible way to say "this was not made for you".
- */
-function when(iso: string): string {
-  const date = new Date(iso);
-  const days = Math.floor((Date.now() - date.getTime()) / 86_400_000);
-
-  if (days <= 0) return 'Today';
-  if (days === 1) return 'Yesterday';
-  if (days < 7) return `${days} days ago`;
-
-  return date.toLocaleDateString(undefined, {
-    day: 'numeric',
-    month: 'long',
-    // Only once it stops being obvious. A year on every entry is noise for the
-    // eleven months of them that are from this one.
-    year: date.getFullYear() === new Date().getFullYear() ? undefined : 'numeric',
-  });
 }
 
 export function MemoriesPanel({

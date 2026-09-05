@@ -345,6 +345,18 @@ interface Entity {
   /** Scenery: can be looked at and wondered about, never walked to. */
   reachable: boolean;
   /**
+   * Whether the pointer may take hold of it.
+   *
+   * Not the same question as `reachable`, and conflating the two is what made
+   * the rug immovable. `reachable` answers *the creature's*: somewhere it can
+   * walk to and stand on, which a five-unit-tall piece of floor is not. This
+   * answers *the user's*, and the only thing in the room the user may not pick
+   * off the floor is something that is not on it — wall decor, which has its
+   * own pass (`pickWallDecorAt`) because it is dragged against the wall grid
+   * rather than the floor one.
+   */
+  grabbable: boolean;
+  /**
    * What the creature can do with this, if anything.
    *
    * Resolved once when the object enters the room rather than looked up every
@@ -1158,6 +1170,7 @@ export class PetRoom {
       motion: new PropMotion('tumble', this.petRadius()),
       isToy: false,
       reachable: true,
+      grabbable: true,
       affordance: null,
     };
 
@@ -1294,6 +1307,7 @@ export class PetRoom {
       ),
       isToy: traits.category === 'toy',
       reachable: traits.mount === undefined && collider.height > 6,
+      grabbable: traits.mount === undefined,
       affordance: this.pickAffordance(traits),
     };
 
@@ -2095,9 +2109,9 @@ export class PetRoom {
 
     const bodies = this.world.bodies;
 
-    const reachable = (candidate: PhysicsBody): boolean => {
+    const grabbable = (candidate: PhysicsBody): boolean => {
       const entity = this.entities.get(candidate.id);
-      return entity !== undefined && entity.reachable;
+      return entity !== undefined && entity.grabbable;
     };
 
     /*
@@ -2131,14 +2145,14 @@ export class PetRoom {
         point.y,
         (candidate) => {
           const entity = this.entities.get(candidate.id);
-          if (!entity || !entity.reachable) return false;
+          if (!entity || !entity.grabbable) return false;
           return entity.id === 'pet' || entity.isToy;
         },
         (candidate) => (this.entities.get(candidate.id)?.isToy ? TOY_REACH : PICK_PAD),
       );
     }
 
-    body ??= pickAt(bodies, point.x, point.y, reachable);
+    body ??= pickAt(bodies, point.x, point.y, grabbable);
 
     if (!body) {
       // Tapping the grass deselects. A selection you cannot clear is a
@@ -2518,9 +2532,16 @@ export class PetRoom {
    * Screen-space only — the wall is one flat plane, so unlike a floor prop
    * this never needs the physics world at all. Used so an already-hung piece
    * can be picked up and redragged, not just a new one from the palette.
+   *
+   * Answers only while the room is being edited, for the reason `wallDragStart`
+   * gives: taking something off the wall is manipulating the room, and the room
+   * is only manipulable in edit mode. The guard is here as well as there
+   * because there are two ways in and a lock that lives in one of them is a
+   * lock the other one forgets — the same argument that put the focus-session
+   * lock in this class rather than in React.
    */
   pickWallDecorAt(canvasX: number, canvasY: number): WallDecorPlacement | null {
-    if (this.focused) return null;
+    if (this.focused || !this.interactive || !this.editing) return null;
 
     const point = this.root.toLocal({ x: canvasX, y: canvasY });
 
@@ -2599,9 +2620,25 @@ export class PetRoom {
     return false;
   }
 
-  /** Start hanging a new piece, or picking up an already-hung one to move it. */
+  /**
+   * Start hanging a new piece, or picking up an already-hung one to move it.
+   *
+   * **Moving something already on the wall needs edit mode; hanging a new one
+   * does not.** That is the same line the floor draws — `pointerDown` will only
+   * pick up furniture while `editing`, and outside it a press on the lamp turns
+   * the light off instead — and the wall was the one surface that had never
+   * been held to it. A painting could be dragged off its hook, and dragged off
+   * the top of the room and thrown away, at any moment, by a click that landed
+   * a few pixels high of a bookshelf.
+   *
+   * Adding is not manipulating. Tapping a wall tile in the catalogue, or
+   * dragging one out of it, is the same act as tapping a chair — it puts a new
+   * thing in the room, and nothing already in the room can be lost to it. So a
+   * palette drag (`existingId` absent) is allowed exactly as before.
+   */
   wallDragStart(kind: WallDecorKind, existingId?: string): void {
     if (this.focused || !this.interactive) return;
+    if (existingId !== undefined && !this.editing) return;
 
     this.wallDrag = {
       kind,

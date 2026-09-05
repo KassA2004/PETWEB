@@ -1,71 +1,65 @@
 /**
  * A picture of a creature, for places that are not the room.
  *
- * The save dialog needs to show the pet being saved, and the preset list needs
- * a thumbnail per entry. Neither wants a live world: no physics, no animation,
- * no ticker — just the creature, standing still, as an image.
+ * The save dialog needs to show the pet being saved, the preset list needs a
+ * thumbnail per entry, and every row in the social layer *is* somebody's
+ * creature. None of them wants a live world: no physics, no animation, no
+ * ticker — just the creature, standing still, as an image.
  *
- * One renderer serves all of them. A WebGL context per thumbnail would hit the
- * browser's context limit at about sixteen presets and start silently losing
- * the oldest, so every portrait is drawn by the same offscreen Application and
- * extracted to a data URL. The URLs are cached by appearance, because the
- * expensive part is building the rig and the same creature is asked for
- * repeatedly while a dialog is open.
+ * ## One renderer for the whole product, not two
+ *
+ * This used to own a second offscreen `Application` of its own, beside the one
+ * in `lib/preview.ts`, with its own cache and no de-duplication of work in
+ * flight. Three things followed from that, and all three were visible:
+ *
+ * ```text
+ *   a WebGL context per module   two of the browser's ~16, created lazily — so
+ *                                the People and Messages tabs paid a context
+ *                                init (~190 ms, measured) on the first row
+ *                                they ever drew, which is exactly the delay
+ *                                before an avatar appeared
+ *   no in-flight map             a list where two rows show the same creature —
+ *                                a conversation and a friend row, the same
+ *                                person twice — built the rig twice
+ *   its own cache, its own cap   64 entries, evicted independently of the 400
+ *                                the rest of the interface shares
+ * ```
+ *
+ * Delegating to `renderPreview` fixes all three at once and deletes the
+ * duplicate infrastructure rather than tuning it. By the time anybody opens
+ * People, the shared renderer has already been warmed by the room's own panels
+ * (`features/dashboard/prefetch.ts`), so a portrait is a rig build and a
+ * readback — never a context init.
+ *
+ * ## The key
+ *
+ * `renderPreview` is keyed by string, and what identifies a portrait is the
+ * whole appearance. Serialising it is not free and the same object is asked
+ * about repeatedly — a list re-rendering on a socket event, a slider being
+ * dragged — so the string is computed once per appearance *object* and kept in
+ * a `WeakMap`. Callers that build a fresh object every render get no benefit
+ * from that and never did; the ones that matter (`PersonRow`, `usePetLibrary`)
+ * already memoise theirs.
  */
 
-import { Application, Container } from 'pixi.js';
+import { Container } from 'pixi.js';
 import { PetRenderer } from '../../assets/pets/PetRenderer';
 import type { PetAppearance } from '../../assets/pets/customization/PetAppearance';
+import { peekPreview, renderPreview } from '../../lib/preview';
 
 /** How much of the frame the creature fills, leaving a margin around it. */
 const FILL = 0.86;
 
-let appPromise: Promise<Application> | null = null;
+/** One serialisation per appearance object, however often it is asked about. */
+const keys = new WeakMap<PetAppearance, string>();
 
-const cache = new Map<string, string>();
+function cacheKey(appearance: PetAppearance): string {
+  const known = keys.get(appearance);
+  if (known !== undefined) return known;
 
-/**
- * Cap on the cache.
- *
- * Portraits are keyed by the full appearance, so dragging a slider generates a
- * new one per frame. Without a cap an afternoon in the editor would hold on to
- * thousands of base64 images.
- */
-const CACHE_LIMIT = 64;
-
-async function getApp(): Promise<Application> {
-  if (!appPromise) {
-    appPromise = (async () => {
-      const app = new Application();
-      await app.init({
-        width: 256,
-        height: 256,
-        backgroundAlpha: 0,
-        antialias: true,
-        resolution: Math.min(window.devicePixelRatio, 2),
-        autoDensity: false,
-        // Nothing here animates; rendering happens on demand.
-        autoStart: false,
-      });
-      app.ticker.stop();
-      return app;
-    })();
-  }
-
-  return appPromise;
-}
-
-function cacheKey(appearance: PetAppearance, size: number): string {
-  return `${size}:${JSON.stringify(appearance)}`;
-}
-
-function remember(key: string, url: string): void {
-  if (cache.size >= CACHE_LIMIT) {
-    // Oldest first — Map preserves insertion order.
-    const oldest = cache.keys().next().value;
-    if (oldest !== undefined) cache.delete(oldest);
-  }
-  cache.set(key, url);
+  const key = JSON.stringify(appearance);
+  keys.set(appearance, key);
+  return key;
 }
 
 /**
@@ -73,57 +67,53 @@ function remember(key: string, url: string): void {
  *
  * The creature is scaled and centred from its own bounds rather than from its
  * proportions, so a pet with enormous ears is framed by what it actually
- * occupies instead of by how tall the rig thinks it is.
+ * occupies instead of by how tall the rig thinks it is — which is what
+ * `renderPreview` does by default, so there is nothing to say about it here.
  */
-export async function renderPetPortrait(
+export function renderPetPortrait(
   appearance: PetAppearance,
   size = 220,
 ): Promise<string> {
-  const key = cacheKey(appearance, size);
-  const hit = cache.get(key);
-  if (hit) return hit;
-
-  const app = await getApp();
-
-  // A second caller may have finished while we were awaiting the app.
-  const raced = cache.get(key);
-  if (raced) return raced;
-
-  app.renderer.resize(size, size);
-
-  const stage = new Container();
-  const pet = new PetRenderer(appearance);
-  stage.addChild(pet.root);
-
-  const bounds = pet.root.getLocalBounds();
-  const scale = Math.min(
-    (size * FILL) / Math.max(1, bounds.width),
-    (size * FILL) / Math.max(1, bounds.height),
+  return renderPreview(
+    `portrait:${cacheKey(appearance)}`,
+    () => {
+      const stage = new Container();
+      const pet = new PetRenderer(appearance);
+      stage.addChild(pet.root);
+      return stage;
+    },
+    { size, fill: FILL },
   );
-
-  pet.root.scale.set(scale);
-  pet.root.position.set(
-    size / 2 - (bounds.x + bounds.width / 2) * scale,
-    size / 2 - (bounds.y + bounds.height / 2) * scale,
-  );
-
-  app.stage.removeChildren();
-  app.stage.addChild(stage);
-  app.render();
-
-  const url = await app.renderer.extract.base64(app.stage);
-
-  app.stage.removeChildren();
-  stage.destroy({ children: true });
-
-  remember(key, url);
-  return url;
 }
 
-/** Drop the offscreen renderer. Called when the app tears down. */
-export function disposePortraitRenderer(): void {
-  const pending = appPromise;
-  appPromise = null;
-  cache.clear();
-  void pending?.then((app) => app.destroy(true, { children: true }));
+/**
+ * The portrait, if it has already been drawn.
+ *
+ * Read during render by `PetPortrait`, so a creature the warm-up has already
+ * finished appears in the first frame rather than after a skeleton. See
+ * `peekPreview`.
+ */
+export function peekPetPortrait(
+  appearance: PetAppearance,
+  size = 220,
+): string | null {
+  return peekPreview(`portrait:${cacheKey(appearance)}`, { size, fill: FILL });
+}
+
+/**
+ * Warm the renderer, and the creature somebody is about to see a lot of.
+ *
+ * Called when the social layer opens. The expensive parts of a portrait are the
+ * WebGL context and the rig build, and both are cacheable — so the honest way
+ * to make an avatar appear "immediately" is to have drawn it already, rather
+ * than to put a nicer spinner in front of the moment it is drawn.
+ *
+ * Deliberately fire-and-forget and deliberately not awaited by anything: a
+ * warm-up that a screen waits for is not a warm-up, it is a load.
+ */
+export function warmPetPortrait(appearance: PetAppearance, size: number): void {
+  void renderPetPortrait(appearance, size).catch(() => {
+    // A preview that fails to draw is a tile that stays a skeleton for a
+    // moment longer. It is not worth a report and there is nothing to retry.
+  });
 }

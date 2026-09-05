@@ -23,6 +23,7 @@ import { useProgress } from '../progress/useProgress';
 import { Customizer } from '../customization/Customizer';
 import { prefetchPanels } from './prefetch';
 import type { PrefetchHandle } from './prefetch';
+import type { PreviewRoom } from '../habitat/objectPreviews';
 import { useWorldProgress } from '../habitat/useWorldProgress';
 import { WorldLoader } from '../habitat/WorldLoader';
 import { useDelayedVisible } from '../../lib/useDelayedVisible';
@@ -193,6 +194,17 @@ export function Dashboard({ userId }: DashboardProps) {
     rememberedPark() !== null ? 'social' : 'home',
   );
   const [place, setPlace] = useState<SocialPlace | null>(null);
+  /**
+   * The social layer's way out, once it has one.
+   *
+   * A function handed up rather than a flag pushed down, because leaving is an
+   * event: a boolean would have to be put back afterwards by whoever raised it,
+   * after a departure it cannot observe. One caller — the Focus slot, which
+   * cannot start an hour while the user is standing in a park — and the social
+   * layer is the only thing that knows how to leave whichever kind of place is
+   * on screen.
+   */
+  const goHome = useRef<(() => void) | null>(null);
   /** Friend requests waiting, for the badge on the switch. */
   const [attention, setAttention] = useState(0);
 
@@ -210,6 +222,20 @@ export function Dashboard({ userId }: DashboardProps) {
   const openSocial = useCallback(() => {
     setSocialOpened(true);
     setMode('social');
+  }, []);
+
+  /*
+   * Come home.
+   *
+   * Two halves, and both are needed. The token tells the social layer to
+   * actually leave — a park is a membership row and a socket, not a screen you
+   * can navigate away from — and the mode switch puts the room back in front of
+   * the user, because the reason they are being brought home is that they were
+   * trying to start an hour in it.
+   */
+  const headHome = useCallback(() => {
+    goHome.current?.();
+    setMode('home');
   }, []);
 
   /*
@@ -268,6 +294,15 @@ export function Dashboard({ userId }: DashboardProps) {
    * re-running the effect on every progress read.
    */
   const refreshRewards = rewards.refresh;
+  /*
+   * Pulled out for the same reason `refreshRewards` is.
+   *
+   * `reload` is a `useCallback` with no dependencies and therefore stable for
+   * the life of the page; naming it here is what lets the exhaustive-deps rule
+   * see that, instead of asking for the whole goals handle in a dependency
+   * array and re-running the effect on every keystroke in the goal field.
+   */
+  const reloadGoals = goals.reload;
   const habitatRef = useRef<PetHabitatHandle>(null);
 
   /** True once the room has drawn. Gates background work. */
@@ -323,22 +358,25 @@ export function Dashboard({ userId }: DashboardProps) {
    * Background-load the tabs the user is most likely to open next, once the
    * room they are actually looking at has finished. See `prefetch.ts`.
    *
-   * The paint is handed over as a getter rather than a value, and the effect
-   * deliberately does not depend on it: a room pass previews floors and walls
-   * in whatever colour the room is *now*, but repainting must not tear the
-   * whole queue down and start it again from the first hat.
+   * How the room is dressed is handed over as a getter rather than a value, and
+   * the effect deliberately does not depend on it: a room pass previews floors
+   * and walls in whatever colour and hour the room has *now*, but repainting
+   * must not tear the whole queue down and start it again from the first hat.
    */
-  const tintRef = useRef(room.style.tint);
+  const dressingRef = useRef<PreviewRoom>({
+    tint: room.style.tint,
+    ambience: room.style.ambience,
+  });
   const prefetch = useRef<PrefetchHandle | null>(null);
 
   useEffect(() => {
-    tintRef.current = room.style.tint;
-  }, [room.style.tint]);
+    dressingRef.current = { tint: room.style.tint, ambience: room.style.ambience };
+  }, [room.style.tint, room.style.ambience]);
 
   useEffect(() => {
     if (!worldReady) return;
 
-    const handle = prefetchPanels(() => tintRef.current);
+    const handle = prefetchPanels(() => dressingRef.current);
     prefetch.current = handle;
 
     return () => {
@@ -492,13 +530,20 @@ export function Dashboard({ userId }: DashboardProps) {
       // same outcome token — which is exactly why the refresh hangs off the
       // token rather than off the button that stops the clock.
       refreshRewards();
+      // And the goal it was served against now shows more time on it. Re-read
+      // rather than added to in the browser: the total is the server's sum over
+      // its own session rows (`GoalView.focusedMinutes`), and a client that
+      // incremented its copy would be a second, divergent tally — wrong after a
+      // refresh, wrong in a second tab, and wrong about a session that resolved
+      // while the app was closed, which is the case this token exists for.
+      reloadGoals();
       return;
     }
 
     // Nothing to re-read for an abandoned session: time not served banks
     // nothing, and the creature turning away is the whole of the feedback.
     habitatRef.current?.react('sulk');
-  }, [focus.outcome, refreshRewards]);
+  }, [focus.outcome, refreshRewards, reloadGoals]);
 
   // The line under the room, derived from the token rather than synchronised to
   // it. React's own answer for state that follows a prop: doing it in an effect
@@ -591,6 +636,25 @@ export function Dashboard({ userId }: DashboardProps) {
     focus.active || (place && (tab === 'pet' || tab === 'room')) ? 'goals' : tab;
 
   /*
+   * An hour cannot be started from somewhere else.
+   *
+   * The room going dark is only half of what a session promises; the other half
+   * is that nothing reaches you, and a park is a lawn full of other people's
+   * creatures with chat arriving in the panel beside it. The Goals panel is
+   * still there and still usable from out there — ticking something off in a
+   * park is fine — but the one slot is not, and it says so and offers the way
+   * home rather than sitting there greyed out.
+   *
+   * The server refuses the same thing (`FocusService.nowhereElse`), which is
+   * what makes this a rule rather than a suggestion: this decides what the slot
+   * looks like, and a second tab that got past it still cannot start one.
+   */
+  const away = useMemo(
+    () => (place ? { label: place.label, leave: headHome } : null),
+    [place, headHome],
+  );
+
+  /*
    * Opening a panel is the strongest signal there is about what to draw next.
    *
    * Until this fires the queue is guessing, and it guesses conservatively —
@@ -647,6 +711,17 @@ export function Dashboard({ userId }: DashboardProps) {
       onObjectRemoved={forgetObject}
       compact={compact}
       {...world}
+      /*
+       * The room stops drawing while a phone keyboard has it collapsed.
+       *
+       * Only in the column layout: turned on its side the room keeps the left
+       * of the row and stays perfectly visible, keyboard or not. This is the
+       * one place in the product that knows the frame has been clipped to
+       * nothing, because it is the thing doing the clipping — the habitat
+       * inside keeps its own box on purpose, so it cannot find out by measuring
+       * itself. See `PetHabitat`'s `shown`.
+       */
+      shown={!(keyboardOpen && compact && !landscape)}
       onReady={handleWorldReady}
       overlay={
         showLoader ? (
@@ -670,6 +745,7 @@ export function Dashboard({ userId }: DashboardProps) {
           petName={petName}
           onBeginComplete={beginComplete}
           onDropped={() => habitatRef.current?.react('notice')}
+          away={away}
         />
       )}
 
@@ -775,6 +851,7 @@ export function Dashboard({ userId }: DashboardProps) {
         worldHost={worldHost}
         onPlaceChange={setPlace}
         onAttention={setAttention}
+        homeRef={goHome}
       />
     </Suspense>
   ) : null;
@@ -1003,29 +1080,47 @@ export function Dashboard({ userId }: DashboardProps) {
               'relative overflow-hidden bg-card',
               landscape
                 ? 'flex min-h-0 min-w-0 flex-1 flex-col'
-                : 'shrink-0 shadow-sm shadow-foreground/10 transition-[height] duration-300 ease-out motion-reduce:transition-none',
+                : 'shrink-0 shadow-sm shadow-foreground/10',
             )}
             style={
               landscape
                 ? undefined
                 : {
-                    height: keyboardOpen ? 0 : 'calc(100vw * 9 / 16)',
                     /*
-                     * The one place in this product that animates a *layout*
-                     * property, and it has to: the tools column below genuinely
-                     * grows into the space, which is a layout, not a transform.
+                     * The room gives up exactly what the keyboard takes, frame
+                     * by frame, and there is no transition on it at all.
                      *
-                     * What containment removes is the rest of the bill. The
-                     * habitat inside is absolutely positioned and sized from the
+                     * There used to be: `height: keyboardOpen ? 0 : …` with a
+                     * 300ms ease. That is a *second* animation of the same
+                     * distance as the system's keyboard animation, started at a
+                     * different moment (`keyboardOpen` only flips once the
+                     * keyboard is 140px up), on a different clock, with a
+                     * different easing — and every frame of it re-laid-out the
+                     * tools column growing into the space. Two disagreeing
+                     * animations over one layout is what the ~23fps report
+                     * actually was.
+                     *
+                     * `--keyboard-inset` is the keyboard's own position,
+                     * published continuously by `useViewport`. Subtracting it
+                     * means the collapse is not animated by us at all: it is
+                     * *driven* by the thing it is supposed to be following, on
+                     * frames the browser is already laying out for. `max()`
+                     * floors it at nothing once the keyboard is taller than the
+                     * room, which on a phone it always ends up being.
+                     *
+                     * Containment removes the rest of the bill. The habitat
+                     * inside is absolutely positioned and sized from the
                      * viewport, so nothing in here depends on this box's height
-                     * — which means the browser can be told not to re-lay-out or
-                     * repaint the subtree while the box shrinks. Without it,
-                     * every frame of the collapse walks a PixiJS canvas, the
-                     * name chip, the mood line and the light switch.
+                     * — the browser can be told not to re-lay-out or repaint the
+                     * subtree while the box shrinks. `size` is deliberately not
+                     * included: this element's own height is what is changing.
                      *
-                     * `size` is deliberately not included: this element's own
-                     * height is exactly what is changing.
+                     * And the world inside stops drawing for the duration —
+                     * see `shown` on the habitat above — so the frames of this
+                     * collapse are not also spending a quarter of themselves
+                     * rendering a room nobody can see.
                      */
+                    height: 'max(0px, calc(100vw * 9 / 16 - var(--keyboard-inset, 0px)))',
                     contain: 'layout paint',
                   }
             }

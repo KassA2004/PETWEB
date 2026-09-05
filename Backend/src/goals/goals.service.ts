@@ -43,6 +43,32 @@ export interface GoalView {
   completedAt: string | null;
   /** The memory kept when it was finished, if the user kept one. */
   memory: GoalMemoryView | null;
+  /**
+   * Minutes actually served against this goal, over every session that ran to
+   * the end.
+   *
+   * **Derived, never stored.** There is no counter on `Goal` and there must not
+   * be one: `FocusSession` already records every stretch of time anybody
+   * committed to anything, with the goal it was against and whether it was
+   * served — so a column here would be a second copy of a fact the database
+   * already holds, which is a copy that can disagree. Summing it costs one
+   * grouped query per list, over an index the six-goal cap already needs
+   * (`FocusSession @@index([ownerId, status])`), for a handful of rows.
+   *
+   * That is deliberately *not* the argument `User.focusMinutes` makes for
+   * storing its own total. That one is a lifetime sum read on every room panel
+   * and every visit, and it gets slower every week the product succeeds; this
+   * is a per-goal sum over the sessions of one goal, and a goal is a thing
+   * somebody finishes.
+   *
+   * Only `completed` sessions count, which is the same rule
+   * `FocusService.seal` applies to the user's own total: time abandoned half
+   * way was not served. A session whose goal was deleted is unlinked rather
+   * than deleted (`FocusSession.goalId` is nullable, ON DELETE SET NULL), so
+   * its minutes leave with the goal they described and no other goal inherits
+   * them.
+   */
+  focusedMinutes: number;
 }
 
 export interface GoalMemoryView {
@@ -68,7 +94,7 @@ function toMemoryView(memory: Memory): GoalMemoryView {
   };
 }
 
-function toView(goal: GoalWithMemory): GoalView {
+function toView(goal: GoalWithMemory, focusedMinutes = 0): GoalView {
   return {
     id: goal.id,
     title: goal.title,
@@ -77,6 +103,7 @@ function toView(goal: GoalWithMemory): GoalView {
     createdAt: goal.createdAt.toISOString(),
     completedAt: goal.completedAt?.toISOString() ?? null,
     memory: goal.memory ? toMemoryView(goal.memory) : null,
+    focusedMinutes,
   };
 }
 
@@ -119,7 +146,52 @@ export class GoalsService {
       include: { memory: true },
     });
 
-    return goals.map(toView);
+    // One grouped query for the whole list, not one per goal. A list of six
+    // goals is a list of six goals; a list that fans out into six queries is
+    // how a panel that reads fine in development is slow in production.
+    const served = await this.focusedMinutes(ownerId);
+
+    return goals.map((goal) => toView(goal, served.get(goal.id) ?? 0));
+  }
+
+  /**
+   * Minutes served, per goal, for one user.
+   *
+   * Grouped in the database rather than summed in Node: the rows are already
+   * indexed by `(ownerId, status)` and the answer is a handful of integers,
+   * where fetching every session of every goal would be a page of rows to
+   * throw away. `_sum` can be null for a group with no rows — it cannot happen
+   * given the `where`, but the type says it can and a `?? 0` is cheaper than
+   * being wrong about it later.
+   *
+   * @param goalId narrows to one goal, for the endpoints that return one.
+   */
+  private async focusedMinutes(
+    ownerId: string,
+    goalId?: string,
+  ): Promise<Map<string, number>> {
+    const groups = await this.prisma.focusSession.groupBy({
+      by: ['goalId'],
+      where: {
+        ownerId,
+        status: 'completed',
+        // `not: null` as well as the id: a session whose goal was deleted keeps
+        // its minutes but loses its link, and those minutes belong to no goal.
+        goalId: goalId === undefined ? { not: null } : goalId,
+      },
+      _sum: { durationMinutes: true },
+    });
+
+    return new Map(
+      groups
+        .filter((group): group is typeof group & { goalId: string } => group.goalId !== null)
+        .map((group) => [group.goalId, group._sum.durationMinutes ?? 0]),
+    );
+  }
+
+  /** The same number, for one goal. */
+  private async focusedMinutesFor(ownerId: string, goalId: string): Promise<number> {
+    return (await this.focusedMinutes(ownerId, goalId)).get(goalId) ?? 0;
   }
 
   /** How many more the user may add. Drives the interface, and only the interface. */
@@ -160,11 +232,15 @@ export class GoalsService {
       });
     });
 
-    return toView(goal);
+    // Nothing has been served against a goal that did not exist a moment ago.
+    return toView(goal, 0);
   }
 
   async findOne(ownerId: string, goalId: string): Promise<GoalView> {
-    return toView(await this.owned(ownerId, goalId));
+    return toView(
+      await this.owned(ownerId, goalId),
+      await this.focusedMinutesFor(ownerId, goalId),
+    );
   }
 
   async update(
@@ -185,7 +261,7 @@ export class GoalsService {
       include: { memory: true },
     });
 
-    return toView(updated);
+    return toView(updated, await this.focusedMinutesFor(ownerId, goalId));
   }
 
   /**
@@ -219,7 +295,7 @@ export class GoalsService {
     // it reports is zero rather than the one the first attempt earned.
     if (existing.status === 'completed') {
       return {
-        ...toView(existing),
+        ...toView(existing, await this.focusedMinutesFor(ownerId, goalId)),
         affection: await this.affection.read(ownerId),
         affectionGained: 0,
       };
@@ -302,7 +378,11 @@ export class GoalsService {
     });
 
     return {
-      ...toView(completed),
+      // Read after the transaction, and it does not matter that it is: sessions
+      // are sealed by `FocusService`, and a goal cannot be completed while one
+      // is running against it (`notMidSession`, above). The number cannot move
+      // underneath this call.
+      ...toView(completed, await this.focusedMinutesFor(ownerId, goalId)),
       affection,
       affectionGained: Math.max(0, Math.round((affection.value - before) * 100)),
     };
@@ -319,7 +399,9 @@ export class GoalsService {
    */
   async reopen(ownerId: string, goalId: string): Promise<GoalView> {
     const existing = await this.owned(ownerId, goalId);
-    if (existing.status === 'open') return toView(existing);
+    if (existing.status === 'open') {
+      return toView(existing, await this.focusedMinutesFor(ownerId, goalId));
+    }
 
     const open = await this.prisma.$transaction(async (tx) => {
       const count = await tx.goal.count({ where: { ownerId, status: 'open' } });
@@ -362,7 +444,9 @@ export class GoalsService {
       });
     });
 
-    return toView(open);
+    // Reopening gives the affection back but never the hours: the time was
+    // served, and taking a checkbox back is not un-spending an afternoon.
+    return toView(open, await this.focusedMinutesFor(ownerId, goalId));
   }
 
   /**

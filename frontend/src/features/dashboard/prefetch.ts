@@ -3,6 +3,7 @@ import type { EditorTab } from '../customization/catalogue';
 import { loadCustomizerPanel } from '../customization/customizerModule';
 import { PREVIEW_BASE, prewarmOptionPreviews } from '../customization/previews';
 import { ROOM_PREVIEW_SECTIONS } from '../habitat/objectPreviews';
+import type { PreviewRoom } from '../habitat/objectPreviews';
 
 /**
  * Work the dashboard does when nobody is waiting for it.
@@ -138,22 +139,22 @@ function petTabSteps(tab: EditorTab): () => Step[] {
  * on first, then the editor's tabs left to right, then the room's chips left to
  * right.
  *
- * @param tint reads the room's paint at the moment a room pass starts.
+ * @param room reads how the room is dressed at the moment a room pass starts.
  */
-function buildQueue(tint: () => number): Pass[] {
+function buildQueue(room: () => PreviewRoom): Pass[] {
   // The first section is what the Room tab opens on — the object catalogue and
   // the wall pieces beside it. See `ROOM_PREVIEW_SECTIONS`.
   const [things, ...rest] = ROOM_PREVIEW_SECTIONS;
 
   return [
     { tag: 'pet', cadence: 'eager', steps: petTabSteps('body') },
-    { tag: 'room', cadence: 'eager', steps: () => things(tint()) },
+    { tag: 'room', cadence: 'eager', steps: () => things(room()) },
 
     ...EDITOR_TABS.filter((tab) => tab !== 'body').map(
       (tab): Pass => ({ tag: 'pet', cadence: 'idle', steps: petTabSteps(tab) }),
     ),
     ...rest.map(
-      (section): Pass => ({ tag: 'room', cadence: 'idle', steps: () => section(tint()) }),
+      (section): Pass => ({ tag: 'room', cadence: 'idle', steps: () => section(room()) }),
     ),
   ];
 }
@@ -170,13 +171,14 @@ const IDLE_TIMEOUT = 500;
 /**
  * Warm the panels.
  *
- * @param tint the room's current paint, read fresh whenever a room pass starts.
- *   Floors, walls and hours are previewed in it and cached under it.
+ * @param room how the room is currently dressed — its paint and its hour —
+ *   read fresh whenever a room pass starts. Floors, walls and hours are
+ *   previewed in both and cached under both.
  *
  * Returns a handle so a teardown can stop it: a user who signs out mid-warm
  * should not still be drawing pictures of hats.
  */
-export function prefetchPanels(tint: () => number): PrefetchHandle {
+export function prefetchPanels(room: () => PreviewRoom): PrefetchHandle {
   let cancelled = false;
   let queue: Pass[] = [];
   /** How many tiles have been drawn, for the dev handle at the bottom. */
@@ -273,7 +275,7 @@ export function prefetchPanels(tint: () => number): PrefetchHandle {
       }
 
       if (cancelled) return;
-      queue = buildQueue(tint);
+      queue = buildQueue(room);
       await drain();
     })();
   }, 2000);

@@ -5,9 +5,11 @@ import type { AffectionView } from '../affection/affection.service';
 import { START_DELTA, abortDelta, completionDelta } from '../affection/affection';
 import { AppException } from '../common/app.exception';
 import { ErrorCode } from '../common/error-codes';
+import { PARTICIPANT_STALE_MS } from '../parks/park-limits';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   ALREADY_FOCUSING_MESSAGE,
+  IN_A_PARK_MESSAGE,
   MAX_FOCUS_MINUTES,
   MIN_FOCUS_MINUTES,
   TOO_SHORT_MESSAGE,
@@ -105,6 +107,9 @@ function toView(session: FocusSession, now: Date): FocusSessionView {
  *   the feeling    every ending moves affection in the same transaction that
  *                  records it, so a session cannot be filed without the
  *                  creature noticing
+ *   nowhere else   a session cannot begin while its owner is standing in a
+ *                  park. Do-not-disturb that other people can walk up to and
+ *                  poke is not do-not-disturb (see `nowhereElse`)
  * ```
  */
 @Injectable()
@@ -197,6 +202,12 @@ export class FocusService {
         'That one is already finished.',
       );
     }
+
+    // Not from a park. Checked here as well as in the interface, because the
+    // interface is one client: a second tab, a stale page or anything speaking
+    // to the API directly would otherwise get a dark room it can still be
+    // waved at from.
+    await this.nowhereElse(ownerId, now);
 
     // Anything that expired while the user was away is resolved before the
     // slot is counted, or a session from last Tuesday blocks this morning's.
@@ -408,6 +419,42 @@ export class FocusService {
   }
 
   /** Somebody's own session, or 404. Scoped in the query, never checked after. */
+  /**
+   * Refuse a session that would start somewhere other than the user's own room.
+   *
+   * The whole of the hour is that nothing can reach you: the lights go out, the
+   * creature goes to bed, and the room stops answering the pointer
+   * (`PetRoom.pointerDown` returns early while `focused`). A park is the one
+   * place in the product where that promise cannot be kept — the world column
+   * is showing a lawn with other people's creatures on it, they can be walked
+   * up to and greeted, and chat keeps arriving. Beginning an hour of
+   * do-not-disturb from in there is not a session; it is a dark timer over a
+   * conversation.
+   *
+   * Membership is read with the sweeper's own staleness window rather than as a
+   * bare row check, so "in a park" means the same thing here as it does to the
+   * thing that empties the seats (`ParkParticipant.lastSeenAt`). A row left
+   * behind by a killed tab must not lock somebody out of focusing for the two
+   * minutes it takes the sweeper to notice.
+   */
+  private async nowhereElse(ownerId: string, now: Date): Promise<void> {
+    const standing = await this.prisma.parkParticipant.findFirst({
+      where: {
+        userId: ownerId,
+        lastSeenAt: { gt: new Date(now.getTime() - PARTICIPANT_STALE_MS) },
+      },
+      select: { id: true },
+    });
+
+    if (!standing) return;
+
+    throw new AppException(
+      HttpStatus.CONFLICT,
+      ErrorCode.IN_A_PARK,
+      IN_A_PARK_MESSAGE,
+    );
+  }
+
   private async owned(ownerId: string, sessionId: string): Promise<FocusSession> {
     const session = await this.prisma.focusSession.findFirst({
       where: { id: sessionId, ownerId },

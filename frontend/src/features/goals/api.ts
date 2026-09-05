@@ -31,6 +31,16 @@ export interface Goal {
   completedAt: string | null;
   /** What the user chose to remember about finishing it, if anything. */
   memory: GoalMemory | null;
+  /**
+   * Minutes actually served against it, over every session that ran to the end.
+   *
+   * The server's number, derived from the `FocusSession` rows it already keeps
+   * — never accumulated in the browser. A tally the client maintained would be
+   * wrong after a refresh, wrong in a second tab, and wrong about the session
+   * that ran out while the laptop was shut, which is exactly the case the focus
+   * clock was built server-side to get right (`12-focus-endpoints.md`).
+   */
+  focusedMinutes: number;
 }
 
 /**

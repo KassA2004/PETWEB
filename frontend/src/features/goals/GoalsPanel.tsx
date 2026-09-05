@@ -1,7 +1,10 @@
 import { useState } from 'react';
+import { Timer } from 'lucide-react';
+import { formatMetric } from '../../lib/progress';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { DragGhost, FocusSlot } from '../focus/FocusSlot';
+import type { AwayFrom } from '../focus/FocusSlot';
 import { FocusSetupDialog } from '../focus/FocusSetupDialog';
 import { useGoalDrag } from '../focus/useGoalDrag';
 import type { DraggedGoal } from '../focus/useGoalDrag';
@@ -54,6 +57,59 @@ interface GoalsPanelProps {
    * audio system uses, and for the same reason.
    */
   onDropped?: () => void;
+  /**
+   * Somewhere the user is standing that a session cannot begin from.
+   *
+   * Passed straight through to the slot, which is the only thing in the panel
+   * that changes — the rest of the list is still theirs to read and tick off
+   * from a park, and taking it away would be punishing them for being out.
+   */
+  away?: AwayFrom | null;
+}
+
+/**
+ * How long has actually gone into this.
+ *
+ * ```text
+ *   ⏱ 1h 20m focused
+ * ```
+ *
+ * Under the title rather than beside it, because it is a fact *about* the goal
+ * and not a second column of the list: at the right-hand end it would sit in
+ * the same place as the drag handle and the Remove control, and a row where a
+ * number and two controls share an edge is a row people press the wrong thing
+ * in. Under the title it is a caption, which is what it is.
+ *
+ * **Absent at zero.** A brand-new goal saying "0m focused" is the interface
+ * reporting that nothing has happened yet, on every row, for ever — and the
+ * whole feature is about the rows where something *has*. It appears the first
+ * time a session on it runs to the end, which makes its arrival a small piece
+ * of feedback rather than a field that was always there changing value.
+ *
+ * The wording comes from `formatMetric`, the same function the progress tiles
+ * use, so "1h 20m" means the same thing in both places and neither has its own
+ * opinion about when minutes become hours.
+ */
+function FocusedTime({ minutes }: { minutes: number }) {
+  if (minutes <= 0) return null;
+
+  return (
+    <span className="mt-0.5 flex items-center gap-1 text-[0.7rem] text-muted-foreground">
+      <Timer aria-hidden className="size-3 shrink-0" />
+      <span>
+        {/*
+          The number is the loud half. It is the thing somebody is proud of, and
+          at this size the difference between "25m focused" as one grey string
+          and "**25m** focused" is the difference between a caption you read and
+          one you skim past.
+        */}
+        <span className="font-medium text-foreground/70">
+          {formatMetric('focusMinutes', minutes)}
+        </span>{' '}
+        focused
+      </span>
+    </span>
+  );
 }
 
 export function GoalsPanel({
@@ -62,6 +118,7 @@ export function GoalsPanel({
   petName,
   onBeginComplete,
   onDropped,
+  away = null,
 }: GoalsPanelProps) {
   const [draft, setDraft] = useState('');
   /** Dropped in the slot, waiting for a length. Not yet a session. */
@@ -71,6 +128,14 @@ export function GoalsPanel({
     goals;
 
   const drag = useGoalDrag((goal) => {
+    // Carried all the way there from a park. The slot says why it will not
+    // take it; this is only the sound of it not being taken, because a drop
+    // that makes the "yes" noise and then does nothing is worse than silence.
+    if (away) {
+      sfx.refuse();
+      return;
+    }
+
     sfx.drop();
     setPending(goal);
     // Something appeared over the creature's world. It looks up.
@@ -119,6 +184,7 @@ export function GoalsPanel({
         dragging={drag.goal}
         over={drag.over}
         slotRef={drag.slotRef}
+        away={away}
       />
 
       {/*
@@ -238,7 +304,10 @@ export function GoalsPanel({
                           )}
                         />
                       </button>
-                      <span className="flex-1 text-sm">{goal.title}</span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm">{goal.title}</span>
+                        <FocusedTime minutes={goal.focusedMinutes} />
+                      </span>
 
                       {/*
                         The affordance. A row you can pick up has to look like one,
@@ -303,8 +372,17 @@ export function GoalsPanel({
                       />
                     )}
 
-                    <span className="animate-strike flex-1 text-sm text-muted-foreground line-through">
-                      {goal.title}
+                    <span className="min-w-0 flex-1">
+                      <span className="animate-strike block truncate text-sm text-muted-foreground line-through">
+                        {goal.title}
+                      </span>
+                      {/*
+                        Not struck through, and that is the point of showing it
+                        here at all: the goal is done, the hours are not undone.
+                        `line-through` on this line would read as the time
+                        having been cancelled along with the task.
+                      */}
+                      <FocusedTime minutes={goal.focusedMinutes} />
                     </span>
 
                     <button

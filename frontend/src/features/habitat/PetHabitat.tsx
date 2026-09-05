@@ -3,6 +3,7 @@ import {
   useCallback,
   useEffect,
   useImperativeHandle,
+  useLayoutEffect,
   useRef,
   useState,
 } from 'react';
@@ -88,6 +89,9 @@ const ROOM_ASPECT = `${SCREEN_WIDTH} / ${SCREEN_HEIGHT}`;
  * why it is written down here instead of inlined.
  */
 const FRAME = 24;
+
+/** The caption's bottom margin (`mb-2`), which the frame does not get. */
+const CAPTION_GAP = 8;
 
 /** How often the creature is allowed to make a small noise to itself. */
 const IDLE_VOICE_MS = 26_000;
@@ -273,6 +277,25 @@ interface PetHabitatProps {
    */
   onReady?: () => void;
   /**
+   * Whether the frame is somewhere the user can actually see it.
+   *
+   * False stops the world's clock — no physics step, no brain, no draw — and
+   * the frame keeps its canvas and everything in it, so turning it back on is
+   * a frame rather than a rebuild.
+   *
+   * It exists because of one measurement. The room's own frame costs **4 ms of
+   * a 16 ms budget on a desktop** and considerably more on a phone, and it was
+   * being spent unconditionally — including on every frame of a phone keyboard
+   * opening, behind a room band that had already been collapsed to nothing. The
+   * band *clips* the habitat rather than resizing it (a PixiJS renderer told to
+   * draw a zero-height box does not reliably come back), so the habitat cannot
+   * discover this for itself; the caller is the only one that knows.
+   *
+   * Defaults to true, so every caller that has nothing to say about it keeps
+   * the old behaviour.
+   */
+  shown?: boolean;
+  /**
    * Something to show over the frame, inside its own positioning context —
    * the loading overlay (`WorldLoader`), and nothing else today.
    */
@@ -302,14 +325,27 @@ export const PetHabitat = forwardRef<PetHabitatHandle, PetHabitatProps>(function
     fill = false,
     className,
     onReady,
+    shown = true,
     overlay,
   },
   ref,
 ) {
   const hostRef = useRef<HTMLDivElement>(null);
   const roomRef = useRef<PetRoom | null>(null);
+  /*
+   * `shown`, and the way to act on a change to it.
+   *
+   * A ref rather than a dependency of the mount effect, for the reason
+   * AGENTS.md gives about everything else the scene is handed: the world is
+   * built once, and a `shown` in that effect's dependency array would tear the
+   * whole thing down and rebuild it every time a keyboard opened.
+   */
+  const shownRef = useRef(shown);
+  const settleClockRef = useRef<(() => void) | null>(null);
   /** The space the frame is allowed to occupy, measured. */
   const boxRef = useRef<HTMLDivElement>(null);
+  /** The line above it, which shares that space. See `measure`. */
+  const captionRef = useRef<HTMLDivElement>(null);
   const [frame, setFrame] = useState<{ width: number; height: number } | null>(null);
   /** Only the value the world is BUILT with; edits arrive via the effect below. */
   const initialAppearance = useRef(appearance);
@@ -474,8 +510,17 @@ export const PetHabitat = forwardRef<PetHabitatHandle, PetHabitatProps>(function
    * One `ResizeObserver` and two multiplications have no such problem, and the
    * result is exact: the canvas is always 16:9, always as large as it can be,
    * and never padded.
+   *
+   * **A layout effect, not an ordinary one, and that is load-bearing.** Layout
+   * effects run before the browser paints and before every `useEffect` below —
+   * including the one that builds the world. As an ordinary effect this
+   * measured the box in the same pass that mounted the renderer, so the first
+   * value of `frame` was `null`, the frame card had no stated size, its canvas
+   * host was 0×0, and `Application.init({ resizeTo: host })` read that zero.
+   * Measured across a real sign-in: the host was 0×0 on every mount. Running it
+   * before paint means the size is already committed when the world asks.
    */
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (compact && !fill) return;
 
     const box = boxRef.current;
@@ -484,7 +529,21 @@ export const PetHabitat = forwardRef<PetHabitatHandle, PetHabitatProps>(function
     const measure = () => {
       const { width, height } = box.getBoundingClientRect();
       const chrome = bleed ? 0 : FRAME;
-      const available = { w: width - chrome, h: height - chrome };
+      /*
+       * The caption is inside this box now, so the frame only gets what is left
+       * under it.
+       *
+       * Measured rather than written down, because it is one line of text at
+       * whatever size the platform renders it — and asked of the *caption*,
+       * whose height does not depend on the frame's, so there is no circularity
+       * here of the kind that made the frame itself need measuring at all. Its
+       * bottom margin (`mb-2`, 8px) is the one constant, and it is a constant.
+       */
+      const caption = captionRef.current
+        ? captionRef.current.offsetHeight + CAPTION_GAP
+        : 0;
+
+      const available = { w: width - chrome, h: height - chrome - caption };
       if (available.w <= 0 || available.h <= 0) return;
 
       // Whichever axis runs out first decides the size.
@@ -518,8 +577,73 @@ export const PetHabitat = forwardRef<PetHabitatHandle, PetHabitatProps>(function
     let disposed = false;
     let app: Application | null = null;
     let hostObserver: ResizeObserver | null = null;
+    let visibility: (() => void) | null = null;
+
+    /**
+     * Wait until the frame is a real box.
+     *
+     * The renderer is built with `resizeTo: host`, and PixiJS reads that
+     * element **during `init`** — so an application created against a host of
+     * no size is one whose screen is 0×0, whose scene therefore lays out at
+     * `scale = 0`, and which shows nothing but the colour it was told to clear
+     * to. That is the reported "blank coloured window", and it is not
+     * hypothetical: instrumented across a real sign-in, the mount effect ran
+     * twice and **both times the host measured 0×0**, because the frame's size
+     * is computed from a `ResizeObserver` whose first result had not landed
+     * yet. It normally recovered, one frame later, off the back of PixiJS's own
+     * queued resize — which is a `requestAnimationFrame`, and therefore exactly
+     * the thing a backgrounded or throttled tab does not deliver.
+     *
+     * Recovering afterwards is still worth having (the observer below does it,
+     * for a portal that was hidden or a phone turning over). But not creating
+     * the problem is better than recovering from it, and one `await` buys that
+     * for every cause at once.
+     */
+    const awaitBox = () =>
+      new Promise<boolean>((resolve) => {
+        if (disposed) return resolve(false);
+        if (host.clientWidth > 0 && host.clientHeight > 0) return resolve(true);
+
+        /*
+         * A `ResizeObserver`, never a `requestAnimationFrame` poll.
+         *
+         * The first version of this polled frames, and it was wrong in a way
+         * worth writing down: a document that is hidden gets no animation
+         * frames at all, so a tab opened in the background — restored on
+         * startup, opened with a middle click, woken by a notification — would
+         * have waited for ever and had no world when it was finally looked at.
+         * A room that appears when you arrive is the whole point of building it
+         * before you do.
+         *
+         * An observer is delivered regardless of visibility, fires the instant
+         * the box exists, and is the same mechanism the frame is measured with
+         * one effect above.
+         */
+        const settle = (ok: boolean) => {
+          observer.disconnect();
+          window.clearTimeout(timer);
+          resolve(ok && !disposed);
+        };
+
+        const observer = new ResizeObserver(() => {
+          if (host.clientWidth > 0 && host.clientHeight > 0) settle(true);
+        });
+
+        // Build anyway if the box never comes: the observer set up after `init`
+        // will resize it whenever it does, and a room that arrives late is
+        // better than one that never arrives at all.
+        const timer = window.setTimeout(() => settle(true), 1000);
+
+        observer.observe(host);
+      });
+
+    // Assigned once the world exists, so the `shown` effect below can ask the
+    // renderer to re-decide without reaching into it.
+    let settleClock: (() => void) | null = null;
 
     const start = async () => {
+      if (!(await awaitBox())) return;
+
       const instance = new Application();
       await instance.init({
         background: fieldFor(styleRef.current),
@@ -611,6 +735,69 @@ export const PetHabitat = forwardRef<PetHabitatHandle, PetHabitatProps>(function
        * a room that is still on screen. `app.resize()` re-reads `resizeTo`, so
        * this is the mechanism PixiJS already has, merely told when to run.
        */
+      /*
+       * The world stops when nobody can see it.
+       *
+       * Not a saving, a correctness property of the interface. Measured in this
+       * app, the room's own frame — one physics step, the brain, the navigator,
+       * every object's own life, the animation controller, and the WebGL draw —
+       * costs **4 ms of the 16 ms budget on a desktop**, and it was running
+       * unconditionally: in a background tab, and, worse, behind a room band
+       * that a phone keyboard had just collapsed to zero height. That second
+       * one is most of the mobile keyboard stutter — the page was spending a
+       * quarter of every frame of the system's own animation drawing a room
+       * nobody could see.
+       *
+       * `ticker.stop()` rather than a flag inside `update`: it is the
+       * renderer's own switch, it takes the draw with it, and a paused ticker
+       * cannot accumulate the time it was paused for — `PetRoom` already caps
+       * `deltaMS` at 50 ms, so a resume is one frame, never a jump.
+       *
+       * Two questions decide it, and they are genuinely different.
+       *
+       * ```text
+       *   shown    is this frame something the user can see right now —
+       *            answered by the caller, because only the caller knows
+       *   awake    is the document itself the thing being looked at
+       * ```
+       *
+       * **Why the caller answers the first one.** The obvious version watched
+       * the host's own box for going to zero, and it never fired once. The room
+       * band on a phone is `overflow: hidden` with the habitat inside it
+       * absolutely positioned and sized from the viewport: the band collapses,
+       * the habitat keeps its 211 points and is *clipped*. Measured through a
+       * full keyboard open — band 211 → 151 → 71 → 0, host 211 the whole way.
+       * That is deliberate and load-bearing (a PixiJS renderer told to draw a
+       * zero-height box does not reliably come back), which is exactly why
+       * "were you resized to nothing" is the wrong question to ask a frame that
+       * is designed never to be.
+       *
+       * An `IntersectionObserver` would answer it — and it is the more general
+       * mechanism, covering a room scrolled out of a column as well. It is not
+       * used because its callbacks are delivered in the browser's rendering
+       * steps, which makes the one behaviour that matters here impossible to
+       * verify in this project's harness (the preview pane does not composite,
+       * so no frame ever runs). A prop the caller sets is one line, is exactly
+       * as correct for the case that was measured, and can be tested.
+       */
+      let awake = !document.hidden;
+
+      settleClock = () => {
+        if (disposed) return;
+        const run = shownRef.current && awake;
+        if (run === instance.ticker.started) return;
+        if (run) instance.ticker.start();
+        else instance.ticker.stop();
+      };
+
+      const onVisibility = () => {
+        awake = !document.hidden;
+        settleClock?.();
+      };
+
+      document.addEventListener('visibilitychange', onVisibility);
+      visibility = onVisibility;
+
       const canvasBox = new ResizeObserver(() => {
         // A box that has gone to nothing is one that has been hidden, not one
         // that has been resized. Drawing into it is a renderer allocating a
@@ -621,9 +808,28 @@ export const PetHabitat = forwardRef<PetHabitatHandle, PetHabitatProps>(function
       canvasBox.observe(host);
       hostObserver = canvasBox;
 
-      // The world is on the stage and the saved room is in it. Anything the
-      // dashboard wants to do in the background can start now, and not before —
-      // the room is what the user is looking at.
+      settleClock();
+      settleClockRef.current = settleClock;
+
+      /*
+       * Draw one frame, now, before anybody is told the world is ready.
+       *
+       * "Ready" is what takes the loading veil away, and until this line it
+       * meant *the scene graph exists* rather than *the room is on screen*. The
+       * first actual paint was whenever PixiJS's ticker next ran, which is a
+       * `requestAnimationFrame` — so the veil and the first frame were racing,
+       * and when the veil won the user was looking at a canvas cleared to its
+       * background colour with nothing in it. A blank coloured window.
+       *
+       * One synchronous render costs a few milliseconds here and removes the
+       * race entirely: by the time the phase completes, there is a room behind
+       * the veil for it to uncover.
+       */
+      instance.render();
+
+      // The world is on the stage, the saved room is in it, and it has drawn.
+      // Anything the dashboard wants to do in the background can start now, and
+      // not before — the room is what the user is looking at.
       onReadyRef.current?.();
 
       if (import.meta.env.DEV) {
@@ -653,8 +859,11 @@ export const PetHabitat = forwardRef<PetHabitatHandle, PetHabitatProps>(function
 
     return () => {
       disposed = true;
+      settleClockRef.current = null;
       hostObserver?.disconnect();
       hostObserver = null;
+      if (visibility) document.removeEventListener('visibilitychange', visibility);
+      visibility = null;
       roomRef.current = null;
       app?.destroy(true, { children: true });
       app = null;
@@ -721,6 +930,12 @@ export const PetHabitat = forwardRef<PetHabitatHandle, PetHabitatProps>(function
 
     return () => window.clearInterval(timer);
   }, []);
+
+  // The clock, and whether it should be running. See the `shown` prop.
+  useEffect(() => {
+    shownRef.current = shown;
+    settleClockRef.current?.();
+  }, [shown]);
 
   // --- Push appearance edits into the world --------------------------------
   useEffect(() => {
@@ -970,22 +1185,10 @@ export const PetHabitat = forwardRef<PetHabitatHandle, PetHabitatProps>(function
     <div
       className={cn(
         'flex flex-col',
-        !bleed && 'gap-2',
         (!compact || fill) && 'min-h-0 flex-1',
         className,
       )}
     >
-      {!bleed && (
-        <div className="flex shrink-0 items-center justify-between gap-2 px-2">
-          {identity}
-
-          <div className="flex shrink-0 items-center gap-2">
-            {placementPill}
-            {lights}
-          </div>
-        </div>
-      )}
-
       {/*
         The space the frame is measured against, and centred in.
 
@@ -1002,13 +1205,44 @@ export const PetHabitat = forwardRef<PetHabitatHandle, PetHabitatProps>(function
         ref={boxRef}
         style={bleed ? { backgroundColor: field } : undefined}
         className={cn(
-          'flex justify-center transition-colors duration-700',
+          'flex flex-col items-center justify-center transition-colors duration-700',
           // Centred in both axes: when the column's width is what limits the
           // room, the height left over is shared above and below rather than
           // pooled underneath, where it reads as the frame having slipped.
-          (!compact || fill) && 'min-h-0 flex-1 items-center',
+          (!compact || fill) && 'min-h-0 flex-1',
         )}
       >
+        {!bleed && (
+          /*
+            The caption belongs to the frame, so it travels with it: exactly as
+            wide, and inside the same centred stack.
+
+            It used to be as wide as the *column* and pinned to the top of it,
+            while the frame was centred in what was left. Measured at 1280×800
+            that put the creature's name a hundred and thirty-seven pixels above
+            the thing it names, at the far left of an empty band, with the light
+            switch a hand's width away at the other end. Two labels floating in
+            space over a picture — most of why the left-hand side read as a
+            canvas dropped onto a page rather than as an object on it.
+
+            `frame` is the measurement the card itself is sized from, so the two
+            widths cannot drift; before it lands there is nothing to align to and
+            the row is simply full width for one frame, under the loading veil.
+          */
+          <div
+            ref={captionRef}
+            className="mb-2 flex w-full shrink-0 items-center justify-between gap-2 px-1"
+            style={frame ? { maxWidth: frame.width + FRAME } : undefined}
+          >
+            {identity}
+
+            <div className="flex shrink-0 items-center gap-2">
+              {placementPill}
+              {lights}
+            </div>
+          </div>
+        )}
+
         <div
           className={cn(
             'relative',
@@ -1017,7 +1251,36 @@ export const PetHabitat = forwardRef<PetHabitatHandle, PetHabitatProps>(function
                 // is a pixel of width the room does not get, and the shadow of
                 // a card that touches both edges falls off the screen anyway.
                 'w-full bg-card'
-              : 'rounded-[2rem] border-8 border-card bg-card p-1 shadow-xl shadow-foreground/10 ring-1 ring-border',
+              : /*
+                 * A window in a wall, not a canvas on a page.
+                 *
+                 * The metrics are fixed and must stay fixed: `border-8` twice
+                 * plus `p-1` twice is the 24 pixels `FRAME` accounts for, and
+                 * changing any of them puts the *canvas* off 16:9 and leaves a
+                 * sliver of letterbox down one side. So everything here is
+                 * colour, depth and light — nothing that moves an edge.
+                 *
+                 * What changed and why:
+                 *
+                 * ```text
+                 *   ring-border → ring-foreground/10   a cream hairline on a
+                 *                 cream page is a hairline nobody can see; the
+                 *                 frame had no outline at all in practice
+                 *   one shadow  → two                  a wide soft one for the
+                 *                 room sitting on the page, and a tight dark
+                 *                 one right under the lip, which is what stops
+                 *                 a large soft shadow reading as a blur
+                 *   +ring-inset                        a half-pixel of light
+                 *                 along the inside of the mount, so the frame
+                 *                 has a top edge catching the light and a
+                 *                 bottom edge that does not
+                 * ```
+                 */
+                cn(
+                  'rounded-[2rem] border-8 border-card bg-card p-1',
+                  'ring-1 ring-foreground/10',
+                  'shadow-[0_1px_2px_rgba(0,0,0,0.06),0_18px_40px_-12px_rgba(0,0,0,0.28)]',
+                ),
             !bleed && compact && !fill && 'w-full',
             bleed && compact && !fill && 'w-full',
           )}
@@ -1102,6 +1365,35 @@ export const PetHabitat = forwardRef<PetHabitatHandle, PetHabitatProps>(function
             )}
             role="presentation"
           />
+
+          {/*
+            The glass.
+
+            A hairline of shadow around the inside of the opening, and a thread
+            of light along its top edge. Two rules, no colour of their own —
+            both are black and white at low alpha, so they read the same over a
+            noon wall and a midnight one, which nothing tinted could.
+
+            This is the difference between a picture *in* a frame and a picture
+            *on* one. The mount is `bg-card` on a `bg-background` page, which
+            are near enough the same cream that the frame's own thickness is
+            invisible; without an inner edge the room was a bright rectangle
+            sitting on a pale field, with nothing saying which was in front. A
+            shadow cast inward by the mount says it in one line.
+
+            Not in bleed: there is no mount there to cast it, and a dark edge
+            around a room that already touches both sides of a phone is a
+            vignette, which is a different thing and not one anybody asked for.
+          */}
+          {!bleed && (
+            <div
+              aria-hidden
+              className={cn(
+                'pointer-events-none absolute inset-1 rounded-[1.4rem]',
+                'shadow-[inset_0_1px_0_rgba(255,255,255,0.18),inset_0_0_0_1px_rgba(0,0,0,0.10),inset_0_10px_22px_-14px_rgba(0,0,0,0.55)]',
+              )}
+            />
+          )}
 
           {/*
             The name and the light switch, over the room.

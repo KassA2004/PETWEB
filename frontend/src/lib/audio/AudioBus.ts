@@ -32,10 +32,13 @@
  * that way silently. `unlock()` is wired to the first real interaction, and
  * everything before it is a no-op rather than an error.
  *
- * There are no audio files. Every sound is synthesised (`./voices.ts`), which
- * is the same choice the artwork makes and for the same reasons: nothing to
- * download, nothing to license, and a bounce can be tuned by changing a number
- * rather than by opening an editor.
+ * **Both halves of the audio go through here.** Sounds are recordings where a
+ * recording is better and oscillators where it is not (`./library.ts` argues
+ * which is which), and the point of this file is that nothing downstream can
+ * tell: `voices.sampled` hands a decoded buffer to the same `take`, the same
+ * panner and the same voice budget that `voices.bounce` uses. A recording that
+ * played itself through `new Audio(...)` would be outside the mix, and the mix
+ * is the only reason any of this is one system.
  */
 
 export const CHANNELS = ['music', 'environment', 'pet', 'sfx', 'ui'] as const;
@@ -51,8 +54,12 @@ export type Channel = (typeof CHANNELS)[number];
  * loudest per event and shortest by far — a click is 60 milliseconds, and
  * making it quiet enough to "not dominate" only makes it feel broken.
  *
- * Numbers, not adjectives, and tuned against the synthesised voices in
- * `./voices.ts` — swapping those out means retuning these.
+ * Numbers, not adjectives. Tuned against the synthesised voices in
+ * `./voices.ts` first, and the recordings are then matched *to them* rather
+ * than the other way round: `tools/audio/fetch.mjs` normalises every one-shot
+ * to a stated peak and every bed and track to a stated loudness, which is what
+ * lets a sound be swapped from an oscillator to a file without this table
+ * moving.
  */
 export const DEFAULT_LEVELS: Record<Channel | 'master', number> = {
   master: 0.75,

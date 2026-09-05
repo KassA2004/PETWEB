@@ -22,7 +22,11 @@ import { useEffect, useState } from 'react';
  *
  * ```text
  *   --app-height       the height the page may use, keyboard excluded
- *   --keyboard-inset   how much of the screen the keyboard is taking, in px
+ *   --keyboard-inset   how much of the screen the keyboard is taking, in px.
+ *                      Continuous, and it is what the room band's height is
+ *                      subtracted by — so the room gives up exactly the space
+ *                      the keyboard is taking, in step with it, instead of
+ *                      running a transition of its own alongside
  * ```
  *
  * A CSS variable rather than React state for the height, deliberately: the
@@ -200,15 +204,36 @@ export function useViewport(): Viewport {
       const inset = Math.max(0, baseline - visible);
       const keyboardOpen = inset >= KEYBOARD_MIN_PX;
 
-      const shownInset = keyboardOpen ? inset : 0;
-
-      // Only when it has actually moved. The two properties are set together so
-      // a frame that changes both still costs one style invalidation.
-      if (visible !== writtenHeight || shownInset !== writtenInset) {
+      /*
+       * The inset is published **continuously**, not only once the keyboard has
+       * passed the "this is definitely a keyboard" threshold.
+       *
+       * `keyboardOpen` is a verdict and has to be one: it decides whether the
+       * header and the tab strip are in the tree at all, and a control that
+       * flickered in and out while somebody scrolled would be worse than one
+       * that is late. But the room band above the tools does not want a verdict,
+       * it wants the number — it now gives up exactly as many pixels as the
+       * keyboard has taken, on the same frames the browser is already
+       * re-laying-out the shell for.
+       *
+       * That is what replaced a 300 ms `transition-[height]` on that band. The
+       * transition was a second animation running *against* the system's own,
+       * on its own clock, with its own easing, re-laying-out the tools column
+       * beneath it on every one of its frames — two animations of the same
+       * distance that never agreed about where they were. Driving the height
+       * from this number instead means there is one animation, the keyboard's,
+       * and the room is simply always in the right place during it.
+       *
+       * Writing it on every frame of that costs nothing extra: `--app-height`
+       * is changing on those same frames anyway, and both properties are set
+       * inside the same guard so a frame that moves both still invalidates
+       * style once.
+       */
+      if (visible !== writtenHeight || inset !== writtenInset) {
         writtenHeight = visible;
-        writtenInset = shownInset;
+        writtenInset = inset;
         root.style.setProperty('--app-height', `${visible}px`);
-        root.style.setProperty('--keyboard-inset', `${shownInset}px`);
+        root.style.setProperty('--keyboard-inset', `${inset}px`);
       }
 
       const layout = measure(width, baseline);

@@ -31,3 +31,14 @@ export const TOO_SHORT_MESSAGE =
 export const ALREADY_FOCUSING_MESSAGE =
   'Something is already being worked on. Finish it, or step away from it, before ' +
   'starting something else.';
+
+/**
+ * What the user is told when they try to start one from a park.
+ *
+ * Says where they are and what to do about it, because there is exactly one
+ * thing to do about it. A message that only reported the refusal would leave
+ * somebody pressing the same button in the same park.
+ */
+export const IN_A_PARK_MESSAGE =
+  'You are still out in a park. Come home first — an hour with the lights off is ' +
+  'not much use somewhere people can walk up to you.';

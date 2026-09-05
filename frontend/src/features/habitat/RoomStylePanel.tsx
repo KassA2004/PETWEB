@@ -168,10 +168,6 @@ export function RoomStylePanel({
    */
   const [locked, setLocked] = useState<ObjectType | null>(null);
 
-  const takeDown = (id: string) => {
-    onChange({ decor: style.decor.filter((item) => item.id !== id) });
-  };
-
   /**
    * Place it, or explain why not.
    *
@@ -220,12 +216,26 @@ export function RoomStylePanel({
 
           <ObjectsSection onPlace={place} progress={progress} />
 
+          {/*
+            No list of what is already up, and no ✕ beside each of them.
+
+            There used to be one — a row of pills reading "Painting ✕" — and it
+            was a second way to do something the room already does better. A
+            piece comes down the same way a chair goes away: turn Edit room on,
+            pick it up, lift it out of the top of the frame. One gesture for
+            every object in the product, learned once, with the room itself
+            showing the refusal or the discard as it happens. The pills could
+            not show which painting was which (they were all called "Painting"),
+            they duplicated a control the frame already had, and they were the
+            only destructive action in the panel that worked without edit mode
+            being on at all.
+          */}
           <Section
             title="On the wall"
             description={
               compact
-                ? 'Tap a piece and it goes up in the first free space.'
-                : 'Drag a piece onto the wall in the frame, or tap it to hang it.'
+                ? 'Tap a piece and it goes up in the first free space. Turn on Edit room to move or remove one.'
+                : 'Drag a piece onto the wall in the frame, or tap it to hang it. Turn on Edit room to move or remove one.'
             }
           >
             <WallCatalog
@@ -233,7 +243,6 @@ export function RoomStylePanel({
               onWallDragStart={onWallDragStart}
               onHangWallDecor={onHangWallDecor}
             />
-            <HangingUp decor={style.decor} onTakeDown={takeDown} />
           </Section>
         </div>
       )}
@@ -514,9 +523,11 @@ function SurfacesSection({
       FLOOR_PATTERNS.map((pattern) => ({
         value: pattern,
         label: FLOOR_PATTERN_LABELS[pattern],
-        preview: () => renderFloorIcon(pattern, style.tint),
+        preview: () => renderFloorIcon(pattern, style.tint, style.ambience),
       })),
-    [style.tint],
+    // The hour as well as the paint: a floor is previewed in the light it will
+    // be seen in, so repainting *or* changing the hour redraws these tiles.
+    [style.tint, style.ambience],
   );
 
   const walls = useMemo<GridOption<string>[]>(
@@ -524,9 +535,9 @@ function SurfacesSection({
       WALL_TEXTURES.map((texture) => ({
         value: texture,
         label: WALL_TEXTURE_LABELS[texture],
-        preview: () => renderWallIcon(texture, style.tint),
+        preview: () => renderWallIcon(texture, style.tint, style.ambience),
       })),
-    [style.tint],
+    [style.tint, style.ambience],
   );
 
   return (
@@ -635,47 +646,6 @@ function WallCatalog({
           No space left on the wall — take something down first.
         </p>
       )}
-    </div>
-  );
-}
-
-/** What is already up, and the way to take it down again. */
-function HangingUp({
-  decor,
-  onTakeDown,
-}: {
-  decor: RoomStyle['decor'];
-  onTakeDown: (id: string) => void;
-}) {
-  if (decor.length === 0) return null;
-
-  return (
-    <div className="space-y-1.5">
-      <p className="text-[0.65rem] tracking-wide text-muted-foreground uppercase">
-        Hanging up
-      </p>
-      <ul className="flex flex-wrap gap-1.5">
-        {decor.map((placement) => {
-          const spec = WALL_DECOR_LIST.find((item) => item.kind === placement.kind);
-
-          return (
-            <li key={placement.id}>
-              <button
-                type="button"
-                aria-label={`Take down the ${(spec?.label ?? placement.kind).toLowerCase()}`}
-                onClick={() => onTakeDown(placement.id)}
-                className={cn(
-                  'press rounded-full border border-primary/40 bg-primary/10 px-3 py-1 text-xs font-medium',
-                  'text-foreground outline-none',
-                  'hover:border-destructive/50 hover:bg-destructive/10 focus-visible:ring-2 focus-visible:ring-ring',
-                )}
-              >
-                {spec?.label ?? placement.kind} <span aria-hidden>✕</span>
-              </button>
-            </li>
-          );
-        })}
-      </ul>
     </div>
   );
 }

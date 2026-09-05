@@ -1,10 +1,16 @@
 /**
  * The one audio system, and the only thing components are allowed to talk to.
  *
- * `AudioBus` owns the mix, `voices.ts` owns what things sound like, `ambience`
- * and `music` own the two continuous layers. This file is the front door: a
- * single instance, the mapping from "something happened in the room" to "this
- * is what that sounds like", and the small amount of React glue.
+ * `AudioBus` owns the mix, `voices.ts` owns what things sound like, `samples.ts`
+ * owns the recordings that are better than what `voices.ts` can make, and
+ * `ambience` and `music` own the two continuous layers. This file is the front
+ * door: a single instance, the mapping from "something happened in the room" to
+ * "this is what that sounds like", and the small amount of React glue.
+ *
+ * The mapping now has two answers for most events — a recording, and the
+ * oscillators that were there before it — and choosing between them is one
+ * private method (`recorded`). The recording wins whenever it has finished
+ * downloading; nothing waits for one, and nothing breaks without one.
  *
  * The rule the rest of the application follows is short: **no component
  * constructs audio.** A button calls `sfx.click()`. It does not know what a
@@ -17,6 +23,9 @@ import { AudioBus, CHANNELS, DEFAULT_LEVELS } from './AudioBus';
 import type { Channel } from './AudioBus';
 import { Ambience } from './ambience';
 import { Music } from './music';
+import { Samples } from './samples';
+import type { OneShotName } from './library';
+import { ONE_SHOTS } from './library';
 import * as voice from './voices';
 import type { RoomSound } from '../../scenes/room/RoomSound';
 import type { ObjectType } from '../../assets/objects/ObjectRenderer';
@@ -71,9 +80,42 @@ const MATERIAL: Partial<Record<ObjectType, 'bounce' | 'knock' | 'pat' | 'thud'>>
   star: 'pat',
 };
 
+/**
+ * How often each recorded sound may be retriggered, and under which key.
+ *
+ * Copied from the synthesised voice it stands in for, deliberately and exactly.
+ * A recorded bounce and a synthesised bounce are the same *event* as far as the
+ * ear is concerned, so they must share one cooldown — if they had separate keys
+ * a room mid-download could play both for one collision, which is the one
+ * artefact the whole fallback arrangement exists to avoid.
+ *
+ * The numbers themselves are argued for in `voices.ts`. The short version:
+ * about three bounces a second gets the rhythm of a bouncing ball across and
+ * everything past that was going to be mush, and a creature that speaks more
+ * often than four times a second is not a creature.
+ */
+const THROTTLE: Record<OneShotName, { key: string; cooldownMs: number }> = {
+  'pet-idle': { key: 'chirp', cooldownMs: 220 },
+  'pet-happy': { key: 'chirp', cooldownMs: 220 },
+  'pet-startled': { key: 'chirp', cooldownMs: 220 },
+  'pet-poked': { key: 'chirp', cooldownMs: 220 },
+  'pet-sleepy': { key: 'chirp', cooldownMs: 220 },
+  'pet-glum': { key: 'chirp', cooldownMs: 220 },
+
+  bounce: { key: 'bounce', cooldownMs: 90 },
+  knock: { key: 'knock', cooldownMs: 70 },
+  pat: { key: 'pat', cooldownMs: 70 },
+  thud: { key: 'thud:sfx', cooldownMs: 45 },
+
+  chime: { key: 'chime', cooldownMs: 400 },
+  lights: { key: 'light', cooldownMs: 160 },
+  celebrate: { key: 'fanfare', cooldownMs: 600 },
+};
+
 class Audio {
   readonly bus = new AudioBus();
-  readonly ambience = new Ambience(this.bus);
+  readonly samples = new Samples();
+  readonly ambience = new Ambience(this.bus, this.samples);
   readonly music = new Music(this.bus);
 
   /** Whether the user wants music at all, separate from its level. */
@@ -109,6 +151,13 @@ class Audio {
     await this.bus.unlock();
     if (!this.bus.ready) return;
 
+    // The first gesture is the first moment a sample can be decoded — there is
+    // no context before it — so it is also the first moment worth fetching one.
+    // Guarded inside `load`, and deliberately not awaited: everything it
+    // fetches has a synthesised voice playing in the meantime.
+    const context = this.bus.channel('sfx')?.context;
+    if (context) this.samples.load(context);
+
     if (this.pendingView) this.ambience.set(this.pendingView);
     if (this.musicWanted) this.music.start();
 
@@ -121,6 +170,7 @@ class Audio {
   async dispose(): Promise<void> {
     this.music.stop();
     this.ambience.stop();
+    this.samples.clear();
     await this.bus.dispose();
   }
 
@@ -151,6 +201,12 @@ class Audio {
         // A wall is a glancing blow, not a landing.
         const scaled = { ...at, strength: kind === 'prop-wall' ? strength * 0.7 : strength };
 
+        // Impacts get the widest detune of anything in the room. They are the
+        // sounds that repeat — a ball settling is eleven of them inside two
+        // seconds — and six per cent either way is what turns eleven copies of
+        // one waveform back into eleven bounces.
+        if (this.recorded(material, { ...scaled, detune: 0.06 })) return;
+
         if (material === 'bounce') voice.bounce(this.bus, scaled);
         else if (material === 'knock') voice.knock(this.bus, scaled);
         else if (material === 'pat') voice.pat(this.bus, scaled);
@@ -170,41 +226,98 @@ class Audio {
         voice.refuse(this.bus, at);
         return;
 
+      /*
+       * The creature.
+       *
+       * One recording per mood, and the mood is the *file* rather than a
+       * parameter — which is the whole difference between a voice and a
+       * synthesiser. The synthesised version slid one interval up for happy and
+       * down for startled, because that is all an oscillator can do about
+       * feeling; a recording of a delighted animal and a recording of a
+       * startled one are different sounds, not the same sound transposed.
+       *
+       * A narrow detune, unlike the impacts. A creature whose pitch wanders by
+       * six per cent is a different creature each time it speaks.
+       */
       case 'pet-idle':
+        if (this.recorded('pet-idle', { ...at, detune: 0.03 })) return;
         voice.chirp(this.bus, { ...at, mood: 'idle' });
         return;
 
       case 'pet-happy':
+        if (this.recorded('pet-happy', { ...at, detune: 0.03 })) return;
         voice.chirp(this.bus, { ...at, mood: 'happy' });
         return;
 
       case 'pet-startled':
+        if (this.recorded('pet-startled', { ...at, detune: 0.03 })) return;
         voice.chirp(this.bus, { ...at, mood: 'startled' });
         return;
 
       case 'pet-poked':
+        if (this.recorded('pet-poked', { ...at, detune: 0.03 })) return;
         voice.chirp(this.bus, { ...at, mood: 'poked' });
         return;
 
       case 'pet-sleepy':
+        if (this.recorded('pet-sleepy', { ...at, detune: 0.02 })) return;
         voice.chirp(this.bus, { ...at, mood: 'sleepy' });
         return;
 
       case 'pet-glum':
+        if (this.recorded('pet-glum', { ...at, detune: 0.02 })) return;
         voice.chirp(this.bus, { ...at, mood: 'glum' });
         return;
 
       case 'chime':
+        // A struck note, so barely any detune: a music box that is a semitone
+        // out on every strike is a broken music box.
+        if (this.recorded('chime', { ...at, detune: 0.01 })) return;
         voice.chime(this.bus, at);
         return;
 
       case 'lights':
+        if (this.recorded('lights', { ...at, detune: 0.02 })) return;
         voice.lightSwitch(this.bus, at);
         return;
 
       default:
         return;
     }
+  }
+
+  /**
+   * Play the recording for a sound, if there is one to play.
+   *
+   * The one place the two halves of the audio meet, and it is three lines
+   * because everything either side of it was built to make it three lines: the
+   * sample layer answers "is it here yet" without waiting (`Samples.take`), and
+   * `voices.sampled` puts a buffer through the same chain, the same panner and
+   * the same voice budget as an oscillator.
+   *
+   * The throttle key and cooldown are the *synthesised voice's own*, so a
+   * recorded bounce and a synthesised one compete for one slot rather than two.
+   * That also makes the fallthrough safe: if this returns false because the bus
+   * refused rather than because the file is missing, the synthesised voice below
+   * asks the same bus with the same key and is refused identically — so a
+   * refusal can never turn into two sounds.
+   *
+   * @returns whether anything was played, which is the caller's cue to stop.
+   */
+  private recorded(
+    name: OneShotName,
+    options: Parameters<typeof voice.sampled>[3],
+  ): boolean {
+    const buffer = this.samples.take(name);
+    if (!buffer) return false;
+
+    return voice.sampled(
+      this.bus,
+      ONE_SHOTS[name].channel,
+      buffer,
+      options,
+      THROTTLE[name],
+    );
   }
 
   /**
@@ -225,8 +338,18 @@ class Audio {
     click: () => voice.click(this.bus),
     open: () => voice.open_(this.bus),
     close: () => voice.close_(this.bus),
-    /** The one interface sound that is an event rather than an acknowledgement. */
-    celebrate: () => voice.fanfare(this.bus),
+    /**
+     * The one interface sound that is an event rather than an acknowledgement.
+     *
+     * The only recorded sound in `ui`, and it earns it for the same reason the
+     * room's sounds do: a fanfare is a *performance*, and three sine tones in
+     * an arpeggio is a description of one. Everything else here stays
+     * synthesised — see `library.ts`.
+     */
+    celebrate: () => {
+      if (this.recorded('celebrate', { strength: 0.9, detune: 0.01 })) return;
+      voice.fanfare(this.bus);
+    },
     refuse: () => voice.refuse(this.bus, { gain: 0.7 }),
 
     /* --- picking a goal up and putting it somewhere --------------------- */

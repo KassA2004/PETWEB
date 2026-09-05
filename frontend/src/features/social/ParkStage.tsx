@@ -109,6 +109,22 @@ interface ParkStageProps {
    * — which is where they can act on the answer — and shows the reason there.
    */
   onRefused: (message: string) => void;
+  /**
+   * Where to leave the way out, for somebody who is not in this tree.
+   *
+   * The dashboard's Focus slot has to be able to end an outing it did not
+   * start — an hour cannot begin from a park — and "leave" is an *event*, not a
+   * state anything can render from. A prop that went true would have to be put
+   * back afterwards by whoever set it, after a departure they cannot observe;
+   * an effect watching one is a `setState` in an effect, which is the shape
+   * React asks you not to write. So the departure is handed *upward* as a
+   * function instead, and the caller invokes it from the click that meant it.
+   *
+   * It is `session.leave` rather than `onLeave`, and the difference is a page
+   * reload: leaving on purpose forgets the park, while merely unmounting keeps
+   * it so a refresh comes back to the same lawn (`parkMemory.ts`).
+   */
+  leaveRef?: React.RefObject<(() => void) | null>;
 }
 
 /**
@@ -167,6 +183,7 @@ export function ParkStage({
   worldHost,
   onLeave,
   onRefused,
+  leaveRef,
 }: ParkStageProps) {
   const habitat = useRef<PetHabitatHandle | null>(null);
   const [draft, setDraft] = useState('');
@@ -186,6 +203,19 @@ export function ParkStage({
   const [distance, setDistance] = useState(Number.POSITIVE_INFINITY);
 
   const session = usePark({ parkId, passcode, selfId, habitat, onLeft: onLeave });
+
+  // Publish the way out, and take it back down on the way out. A stale
+  // function left in the ref would be a "leave" that leaves a park nobody is
+  // in — harmless, and still a lie about what the button does.
+  const leave = session.leave;
+
+  useEffect(() => {
+    if (!leaveRef) return;
+    leaveRef.current = leave;
+    return () => {
+      leaveRef.current = null;
+    };
+  }, [leaveRef, leave]);
 
   /*
    * The position stream, outbound.

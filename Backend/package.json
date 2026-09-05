@@ -7,7 +7,8 @@
     "start": "nest start",
     "start:dev": "nest start --watch",
     "start:prod": "node dist/main.js",
-    "lint": "tsc -p tsconfig.json --noEmit"
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "seed:showcase": "node scripts/seed-showcase-account.mjs"
   },
   "dependencies": {
     "@nestjs/common": "^11.2.1",

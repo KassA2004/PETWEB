@@ -20,6 +20,14 @@ export const ErrorCode = {
    * seconds so it can resynchronise and keep waiting rather than show an error.
    */
   FOCUS_NOT_FINISHED: 'FOCUS_NOT_FINISHED',
+  /**
+   * A session cannot start because the user is standing in a park.
+   *
+   * Its own code rather than a plain CONFLICT because the client's response is
+   * specific and is not "show the message and give up": there is exactly one
+   * thing to do about it, and the interface offers it (leave the park).
+   */
+  IN_A_PARK: 'IN_A_PARK',
   /** An upload cannot be deleted because a memory still points at it. */
   FILE_IN_USE: 'FILE_IN_USE',
 

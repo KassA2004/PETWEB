@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { MessagesSquare, Trees, UserRound } from 'lucide-react';
 import { Tabs } from '../../components/ui/tabs';
@@ -16,6 +16,9 @@ import type { Park } from './api';
 import { connectSocial, onSocial, onSocialStatus, socialStatus } from './socket';
 import type { SocialStatus } from './socket';
 import { useFriends } from './useFriends';
+import { PORTRAIT } from './PersonRow';
+import { warmPetPortrait } from '../pets/renderPortrait';
+import { createPetAppearance } from '../../assets/pets/customization/PetAppearance';
 
 /**
  * The social layer.
@@ -159,6 +162,15 @@ interface SocialLayerProps {
   worldHost: HTMLElement | null;
   /** Somewhere else is on screen, or is not any more. */
   onPlaceChange: (place: SocialPlace | null) => void;
+  /**
+   * Where to leave "go home", for the dashboard to call.
+   *
+   * The Focus slot is the one caller: a session cannot begin from a park — the
+   * server refuses it too — so the slot offers the way back rather than only
+   * reporting that it is unavailable. Handed up as a function rather than down
+   * as a flag, because leaving is an event; see `ParkStage`'s `leaveRef`.
+   */
+  homeRef?: React.RefObject<(() => void) | null>;
   /** How many things are waiting to be looked at, for the header's badge. */
   onAttention: (count: number) => void;
 }
@@ -176,6 +188,7 @@ export function SocialLayer({
   worldHost,
   onPlaceChange,
   onAttention,
+  homeRef,
 }: SocialLayerProps) {
   const [tab, setTab] = useState<SocialTab>('parks');
   /*
@@ -296,9 +309,102 @@ export function SocialLayer({
     }
   }, [screen, parkName, onPlaceChange]);
 
+  /*
+   * Draw everybody's creature before anybody asks to see it.
+   *
+   * A person in this product *is* their creature (`PersonRow`) — there are no
+   * initials in a circle to fall back to — so a friends list whose portraits are
+   * still being drawn is a list of grey squares, and that was the reported
+   * "People and Messages take a moment before the avatar appears". It was never
+   * a data problem: the friends payload already carries every appearance
+   * (`api.ts`, `PublicPet.appearanceData`), so nothing is being fetched. It is
+   * drawing work, and drawing work can be done early.
+   *
+   * So it is done here, the moment the roster lands, rather than in each row's
+   * own mount effect — which is one render too late by construction, because a
+   * row cannot start drawing until the panel that contains it is on screen.
+   * By the time somebody presses People or Messages the pictures are in the
+   * shared cache and the rows are drawn with them.
+   *
+   * Everybody the layer can show, not just the friends: an incoming request is
+   * the row most likely to be looked at first, and the same person appears in
+   * both a conversation list and a friends list, where one cache entry serves
+   * both.
+   *
+   * Sequential, one per idle callback. They share a single offscreen WebGL
+   * context, so firing thirty at once would not make the GPU faster — it would
+   * only take the main thread away from the room. This is the same cadence
+   * `features/dashboard/prefetch.ts` uses, and for the same reason.
+   */
+  const roster = friends.friends;
+
+  useEffect(() => {
+    const people = [...roster.friends, ...roster.incoming, ...roster.outgoing];
+    const appearances = people
+      .map((person) => person.pet?.appearanceData)
+      .filter((data): data is NonNullable<typeof data> => data != null);
+
+    if (appearances.length === 0) return;
+
+    let index = 0;
+    let handle: number | null = null;
+
+    const idle: (callback: () => void) => number =
+      typeof requestIdleCallback === 'function'
+        ? (callback) => requestIdleCallback(callback, { timeout: 500 })
+        : (callback) => window.setTimeout(callback, 0);
+
+    const cancelIdle: (id: number) => void =
+      typeof cancelIdleCallback === 'function' ? cancelIdleCallback : clearTimeout;
+
+    const step = () => {
+      const next = appearances[index++];
+      if (next === undefined) return;
+
+      warmPetPortrait(createPetAppearance(next as never), PORTRAIT);
+      handle = idle(step);
+    };
+
+    handle = idle(step);
+
+    return () => {
+      if (handle !== null) cancelIdle(handle);
+    };
+  }, [roster]);
+
   /** Anything asking to be looked at, for the badge on the header's switch. */
   const attention = friends.friends.incoming.length;
   useEffect(() => onAttention(attention), [attention, onAttention]);
+
+  /*
+   * Going home, on somebody else's word.
+   *
+   * The two places are left in two different ways, and the difference is not
+   * cosmetic. A park is a membership row, a socket and a remembered id, so it
+   * is told to *leave* — `ParkStage` puts that function here, and it forgets
+   * the park on the way out so a later refresh does not walk back in. A visit
+   * is only a page somebody is looking at, and closing it is the whole of
+   * leaving one.
+   *
+   * `parkLeave` calls back into `onLeave` below, which is what returns the
+   * screen to the list — so the browse case here is the fallback rather than
+   * the general path.
+   */
+  const parkLeave = useRef<(() => void) | null>(null);
+
+  const goHome = useCallback(() => {
+    const leaveThePark = parkLeave.current;
+    if (leaveThePark) leaveThePark();
+    else setScreen({ kind: 'browse' });
+  }, []);
+
+  useEffect(() => {
+    if (!homeRef) return;
+    homeRef.current = goHome;
+    return () => {
+      homeRef.current = null;
+    };
+  }, [homeRef, goHome]);
 
   // Escape steps back out of a place, the way "back" means when you are
   // standing somewhere. From the browsing screens it does nothing — there is
@@ -357,6 +463,7 @@ export function SocialLayer({
           compact={compact}
           world={world}
           worldHost={worldHost}
+          leaveRef={parkLeave}
           onLeave={() => setScreen({ kind: 'browse' })}
           onRefused={(message) => {
             setRefusal(message);

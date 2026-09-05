@@ -249,3 +249,34 @@ wins.
 > done" are different sentences, and a goal may span many sessions. See
 > `12-focus-endpoints.md` §1.
 
+
+**Every goal carries the time served against it.** `focusedMinutes`, on every
+goal the API returns, is the sum of `durationMinutes` over that goal's
+`FocusSession` rows with `status: 'completed'` — so the list can say
+`2h 15m focused` under a title without the client keeping a tally of its own.
+
+```json
+{
+  "id": "g-01",
+  "title": "Write the report",
+  "status": "open",
+  "focusedMinutes": 135
+}
+```
+
+Four properties of it are worth stating, because each one is a decision:
+
+- **Derived, never stored.** There is no counter on `Goal`. `FocusSession`
+  already records every stretch of time against the goal it was served for, and
+  a column here would be a second copy of that fact — one that can disagree with
+  it. `list` pays one grouped query for the whole page, over the
+  `@@index([ownerId, status])` the one-slot rule already needs.
+- **Only served time counts**, the same rule `FocusService.seal` applies to
+  `User.focusMinutes`: a session abandoned half way adds nothing, because the
+  time was not served.
+- **Finishing the goal does not clear it, and reopening does not restore it** —
+  it was never affected by either. The hours happened.
+- **Deleting the goal takes its total with it.** `FocusSession.goalId` is
+  `ON DELETE SET NULL`, so the sessions survive and keep counting toward
+  `User.focusMinutes`; they simply no longer describe any goal, and no other
+  goal inherits them.

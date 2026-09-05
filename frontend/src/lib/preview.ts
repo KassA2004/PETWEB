@@ -148,6 +148,34 @@ export function unionOf(parts: readonly Rectangle[]): Rectangle | null {
   return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
 }
 
+/** The cache key a size and a subject resolve to. One place, so peeks agree. */
+function fullKey(key: string, size: number, height: number): string {
+  return `${size}x${height}@${RESOLUTION}:${key}`;
+}
+
+/**
+ * The picture, if it has already been drawn. Synchronous, and never draws.
+ *
+ * The reason this exists is a frame of grey. `renderPreview` is `async`, so
+ * even a dead-certain cache hit resolves in a microtask — which means a
+ * component that asks for it in an effect renders its skeleton *first*, every
+ * time, however warm the cache is. Fifty tiles doing that is a panel that
+ * flashes as a grid of placeholders before becoming a grid of pictures, and it
+ * makes a warm-up that has already done all the work look like it did none.
+ *
+ * So the components that show previews read this during render, as their
+ * initial state, and fall back to the asynchronous path when it misses. A hit
+ * paints the picture in the first frame; a miss behaves exactly as before.
+ *
+ * Deliberately does not consult `pending`: a render in flight has no pixels
+ * yet, and a peek that returned a promise would be `renderPreview` with a
+ * different name.
+ */
+export function peekPreview(key: string, options: PreviewOptions = {}): string | null {
+  const size = options.size ?? 96;
+  return cache.get(fullKey(key, size, options.height ?? size)) ?? null;
+}
+
 /**
  * Draw something once and hand back a PNG data URL.
  *
@@ -164,7 +192,7 @@ export async function renderPreview(
   const size = options.size ?? 96;
   const height = options.height ?? size;
   const fill = options.fill ?? DEFAULT_FILL;
-  const full = `${size}x${height}@${RESOLUTION}:${key}`;
+  const full = fullKey(key, size, height);
 
   const hit = cache.get(full);
   if (hit) return hit;

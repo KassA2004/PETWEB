@@ -37,21 +37,54 @@ The scene has no `AudioContext` and never will — which is also why
 
 ---
 
-## 2. There are no audio files
+## 2. Recordings for the world, synthesis for the interface
 
-Every sound is synthesised (`lib/audio/voices.ts`) from three ingredients: an
-oscillator with a falling pitch, a burst of filtered noise, and an envelope.
+Everything used to be synthesised (`lib/audio/voices.ts`) from three
+ingredients: an oscillator with a falling pitch, a burst of filtered noise, and
+an envelope. The argument was the one `AGENTS.md` makes for artwork — an asset
+you cannot tune stays slightly wrong for ever — and for part of the product it
+is still right.
 
-This is the same argument `AGENTS.md` makes for artwork, and it holds for the
-same reasons. An asset you cannot tune stays slightly wrong for ever; a bounce
-that is a shade too bright is one number here rather than an afternoon in an
-editor. Nothing is downloaded, nothing is licensed, and nothing has to be
-committed as a binary.
+It was not right for the part the ear has heard before. Filtered noise is
+convincing *wind*, because air moving past things genuinely is broadband noise
+with a wandering filter on it and there is no further detail to miss. It is not
+a convincing sea: a sea is thousands of individual collapses with a shape to
+each, and a band of noise breathing every eight seconds is a *description* of
+one. The same holds for a creature (a two-note sine is a beep), for material (a
+rubber ball has a timbre; "impact" does not), and most of all for the music,
+where a random pentatonic picker is — after twenty minutes — audibly a random
+pentatonic picker.
+
+So the split is:
+
+```text
+  recorded    the creature, impacts, the six ambience beds, the music, the
+              clock, the light switch, the fanfare
+  synthesised every interface sound (click, open, close, grab, drop, hover,
+              hush, restore, refuse, place, lift) — and a fallback for every
+              one of the recorded ones
+```
+
+**The synthesised voice is never deleted.** It is what plays before a file has
+downloaded, when a file 404s, and when a browser will not decode one. Nothing in
+the product waits for audio: `Samples.take` answers immediately with a buffer or
+with null, and the caller has an oscillator either way. So the first chirp after
+the first click may be synthesised and the second one a real animal, and nobody
+sees a loading state for a sound.
+
+**Files are never added by hand.** They are pinned in `tools/audio/sources.json`
+— Pixabay Content Licence for music, CC0 and nothing else from Freesound — and
+fetched, trimmed, level-matched and credited by `tools/audio/fetch.mjs`. That is
+what keeps the licence claim true and the levels reproducible; see §3.
 
 **Strength changes brightness, not only level.** A hard knock is not a loud
 version of a soft one — it has more high end. A mixer that only scales gain
 makes every event sound like the same event at a different distance, which is
-precisely what a room full of physics must not sound like.
+precisely what a room full of physics must not sound like. A *recording* has the
+brightness the microphone heard and cannot be given more of it without sounding
+filtered, so for those, strength moves level (across a range with a floor, so a
+light touch is still audible) and the variation comes from two takes and a few
+per cent of playback rate instead.
 
 ---
 
@@ -94,6 +127,72 @@ near 0.018 RMS. Retuning one means measuring it against the others.
 **The ball was the loudest thing in the room.** A single throw sounded great; a
 game of fetch was exhausting. A sound that *repeats* has to sit below the sounds
 that do not.
+
+### The recordings are matched to the table, not the other way round
+
+Thirty files recorded by thirty people arrive thirty different distances from
+the microphone, and a table like the one above means nothing against that. So
+nothing is used as downloaded. `tools/audio/fetch.mjs` measures and corrects
+every file on the way in:
+
+```text
+  one-shots   peak-normalised to a stated dBFS per sound (sources.json's
+              `peakDb`), then trimmed of head and tail silence and given a 4 ms
+              fade in and a ~25 ms fade out. Peak rather than loudness because
+              R128's integration window is longer than most of these are
+  beds        integrated loudness (EBU R128) to −30/−31 LUFS, which is where the
+              synthesised beds already sat. An upgrade mid-crossfade is then a
+              change of material and not of level
+  tracks      the same, to −21 LUFS
+```
+
+The correction is a measured constant gain plus a limiter, never `loudnorm`'s
+dynamic mode: dynamic normalisation on a quiet ambience bed audibly pumps the
+noise floor, which is the one artefact a bed cannot have.
+
+This is also why the channel table did **not** move when the recordings landed.
+The recordings were fitted to it. Measured at the master bus, through an
+`AnalyserNode`, with the beds and the music silenced — recorded against
+synthesised, both at strength 0.8, distance 0.2:
+
+| one-shot | synthesised | recorded |
+|---|---|---|
+| ball bounce | 0.042 | 0.046 |
+| knock | 0.044 | 0.044 |
+| soft thud | 0.044 | 0.046 |
+| creature, happy | 0.033 | 0.039 |
+| clock chime | 0.028 | 0.025 |
+| light switch | 0.017 | 0.016 |
+| goal completed | 0.045 | 0.045 |
+
+The creature is the one deliberately over parity, by about a fifth: it is the
+thing the user is looking at, and a real voice earns a little more room than the
+beep it replaces. Everything else is within measurement error of the sound it
+took over from.
+
+### The beds are matched in LUFS, not in RMS — and that is a change
+
+The old synthesised beds were matched on **unweighted RMS**, because the failure
+being fixed was that low-frequency material (the sea, the city) carried three
+times the energy of the meadow for the same apparent loudness. Equal RMS was the
+crude fix for that.
+
+The recordings are matched on **K-weighted loudness** instead, which is the
+thing R128 exists to model: it discounts the low end roughly the way hearing
+does. So they are *deliberately* not equal in RMS. At the master, over five
+seconds:
+
+```text
+  park 0.0055   mountains 0.0051   ocean 0.0041   city 0.0039
+  dungeon 0.0026   meadow 0.0022
+```
+
+A two-and-a-half-fold spread, and it is the right spread — the meadow is almost
+entirely birds and crickets, which are loud to the ear at a fraction of the
+energy. The two quiet ones were nudged up 3 dB from strict loudness parity
+anyway (`sources.json`: meadow −27, dungeon −28 LUFS against −30/−31 for the
+rest), because R128 gates out quiet passages and a cave that is mostly silence
+between drips ends up matched on its drips alone.
 
 ### Focus sessions, measured against a click
 
