@@ -1,5 +1,4 @@
 import { createAuthClient } from 'better-auth/react';
-import { emailOTPClient } from 'better-auth/client/plugins';
 
 /**
  * Better Auth's own client. Per /Docs/API-endpoints/01-auth-endpoints.md, the
@@ -8,15 +7,12 @@ import { emailOTPClient } from 'better-auth/client/plugins';
  *
  * `basePath` must match the backend's mount point exactly (Backend/src/auth/auth.ts).
  *
- * `emailOTPClient` is the client half of the plugin the backend mounts. It adds
- * two calls and nothing else: `emailOtp.sendVerificationOtp` and
- * `emailOtp.verifyEmail`. Without it those two endpoints exist on the server
- * and have no typed way to be reached from here.
+ * No plugins. It briefly carried `emailOTPClient`, for the email-verification
+ * step that has since been removed — if that comes back, so does this line.
  */
 export const authClient = createAuthClient({
   baseURL: import.meta.env.VITE_API_URL ?? 'http://localhost:3000',
   basePath: '/api/auth',
-  plugins: [emailOTPClient()],
 });
 
 export const { useSession, signIn, signUp, signOut } = authClient;

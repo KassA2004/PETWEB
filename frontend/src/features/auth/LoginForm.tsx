@@ -9,24 +9,12 @@ import { loginSchema } from './schemas';
 
 interface LoginFormProps {
   onSuccess: () => void;
-  /**
-   * The account exists but its address has never been proved.
-   *
-   * Better Auth refuses the sign-in and sends a fresh code, so this is not an
-   * error to display — it is the rest of a sign-up somebody abandoned, and the
-   * caller shows `VerifyForm` to finish it.
-   */
-  onNeedsVerification: (email: string) => void;
   onSwitchToRegister: () => void;
 }
 
 type FieldErrors = Partial<Record<'email' | 'password', string>>;
 
-export function LoginForm({
-  onSuccess,
-  onNeedsVerification,
-  onSwitchToRegister,
-}: LoginFormProps) {
+export function LoginForm({ onSuccess, onSwitchToRegister }: LoginFormProps) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
@@ -58,13 +46,6 @@ export function LoginForm({
     setSubmitting(false);
 
     if (error) {
-      // The one failure that is not a failure: the password was right and the
-      // address was never confirmed. The server has just sent another code.
-      if (error.code === 'EMAIL_NOT_VERIFIED') {
-        onNeedsVerification(result.data.email);
-        return;
-      }
-
       setFormError(authErrorMessage(error, 'Could not log you in. Please try again.'));
       return;
     }

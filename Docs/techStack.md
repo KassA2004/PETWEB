@@ -172,54 +172,19 @@ Potential uses, unchanged: WebSocket coordination, Pub/Sub.
 Open-source authentication solution to handle security locally without relying on paid third-party services.
 Handles: Registration, login, sessions, password management.
 
-Configured in `Backend/src/auth/auth.ts`. Three properties that file is
+Configured in `Backend/src/auth/auth.ts`. Two properties that file is
 responsible for, and `Docs/API-endpoints/01-auth-endpoints.md` is the reference:
 
-- **An account belongs to a real address.** `requireEmailVerification` means
-  signing up creates no session at all, so there is no state in which a made-up
-  address is a usable account.
 - **A session ends when the user says so.** `databaseHooks.session.delete.after`
   announces it, and the social gateway closes the sockets that session
   authenticated — 71 ms, measured, against a ten-minute revalidation backstop.
 - **A session ends by itself.** Thirty days, slid daily.
 
-#### `emailOTP` — the verification code
-
-`better-auth/plugins/email-otp`, not a separate library: it is part of the
-authentication system this project already runs, so the alternative would have
-been a second one.
-
-A **code, not a link**, and that is the whole reason the plugin is here rather
-than Better Auth's built-in link flow (`overrideDefaultEmailVerification: true`
-turns the link off, so there is one way to prove an address rather than two that
-can disagree). A link has to survive being copied between devices, rewritten by
-a mail client's URL scanner and opened in a browser that did not start the
-sign-up; when any of that fails the user is on a dead page with nothing to do.
-Six digits typed into the form already open works when the mail is read on a
-phone and the account is being made on a laptop.
-
-Six digits, ten minutes, five attempts, hashed at rest. A table of live
-verification codes in plaintext is a table of live credentials.
-
-### nodemailer — sending that code
-Added Sept 2026, and it is the only reason this backend talks to anything
-outside itself. One message type (`Backend/src/auth/mailer.ts`): a transport
-built from a single `SMTP_URL`, one template with a plain-text twin, and no
-images or web fonts — the same rule the product holds itself to, which here is
-also what keeps the message readable and out of a spam filter.
-
-Deliberately **not** a mail provider's SDK. A product that sends one kind of
-email does not need a queue, a templating language or a provider abstraction;
-SMTP is what every provider speaks, and a URL is the shape they all hand you.
-A missing `SMTP_URL` logs the code with a warning in development and is fatal
-when `MAIL_REQUIRED=1`, which every deployment should set.
-
-Address *plausibility* is checked before any of this, without a dependency:
-`Backend/src/auth/email-address.ts` is shape, an RFC-reserved-name list, a small
-disposable-provider list and a DNS MX/A lookup from `node:dns`. A blocklist of
-throwaway providers is a treadmill nobody wins — the code is the guarantee, and
-this only avoids spending an account row and an email on an address that
-obviously cannot receive one.
+**Email verification was added and then removed on request** (Sept 2026). While
+it existed, sign-up created no session until a six-digit code mailed to the
+address was typed back in — the `emailOTP` plugin plus **nodemailer**, which is
+no longer a dependency. Both are in the history if it returns; nothing else in
+the stack changed to accommodate its removal.
 
 ---
 

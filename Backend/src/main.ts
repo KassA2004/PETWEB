@@ -8,7 +8,6 @@ import compression from 'compression';
 import express from 'express';
 import { AppModule } from './app.module';
 import { auth, getCorsOrigins } from './auth/auth';
-import { describeMailer } from './auth/mailer';
 import { HttpExceptionFilter } from './common/http-exception.filter';
 import { MEDIA_URL_PREFIX, uploadRoot } from './media/media-paths';
 import { toValidationDetails, ValidationFailedException } from './common/validation.exception';
@@ -110,11 +109,6 @@ async function bootstrap(): Promise<void> {
   await app.listen(port, '0.0.0.0');
   // eslint-disable-next-line no-console
   console.log(`Backend listening on http://localhost:${port}`);
-  // Which of the four mail modes this process is in. One line, at boot, because
-  // the failure it prevents — sign-up works, the code never arrives, nothing
-  // says why — is otherwise invisible.
-  // eslint-disable-next-line no-console
-  console.log(describeMailer());
 }
 
 void bootstrap();

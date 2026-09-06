@@ -8,20 +8,13 @@ import { authErrorMessage } from './error-messages';
 import { registerSchema } from './schemas';
 
 interface RegisterFormProps {
-  /**
-   * The account exists and a code is on its way to this address.
-   *
-   * Not "you are signed in" — with `requireEmailVerification` on the server,
-   * signing up creates no session at all. The caller's job is to show
-   * `VerifyForm`, which is where the session actually comes from.
-   */
-  onCodeSent: (email: string) => void;
+  onSuccess: () => void;
   onSwitchToLogin: () => void;
 }
 
 type FieldErrors = Partial<Record<'username' | 'email' | 'password', string>>;
 
-export function RegisterForm({ onCodeSent, onSwitchToLogin }: RegisterFormProps) {
+export function RegisterForm({ onSuccess, onSwitchToLogin }: RegisterFormProps) {
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -61,15 +54,9 @@ export function RegisterForm({ onCodeSent, onSwitchToLogin }: RegisterFormProps)
       return;
     }
 
-    /*
-     * Signed up, not signed in.
-     *
-     * `emailAndPassword.requireEmailVerification` means this response carries no
-     * session — the account is real and cannot be entered until the address is
-     * proved. `sendVerificationOnSignUp` has already put a six-digit code in
-     * the inbox, so the honest next screen is the one that asks for it.
-     */
-    onCodeSent(result.data.email);
+    // Signed up and signed in: the response carries the session cookie, so the
+    // next screen is the world.
+    onSuccess();
   };
 
   return (
@@ -124,10 +111,6 @@ export function RegisterForm({ onCodeSent, onSwitchToLogin }: RegisterFormProps)
       <Button type="submit" disabled={submitting} className="mt-2">
         {submitting ? 'Creating your world…' : 'Create account'}
       </Button>
-
-      <p className="text-center text-xs text-muted-foreground">
-        We will email you a six-digit code to confirm the address.
-      </p>
 
       <p className="text-center text-sm text-muted-foreground">
         Already have a pet waiting?{' '}

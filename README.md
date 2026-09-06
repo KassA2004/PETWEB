@@ -25,11 +25,9 @@ npm run dev --prefix frontend             # http://localhost:5173
 the API must be reached on the same host, or the session cookie is cross-site
 and is never stored.
 
-Signing up sends a six-digit code to the address given. **You do not need a
-mail account to develop against this**: with no `SMTP_URL` set, the backend
-prints the code and a link to the rendered email on a throwaway Ethereal inbox.
-`Backend/.env.example` has paste-ready `SMTP_URL` lines for real providers, and
-`MAIL_REQUIRED=1` — which every deployment should set — turns the fallback off.
+Signing up is immediate — no email is sent and no address is verified, so
+`you@example.com` makes a working account. The address is only checked for
+shape.
 
 ## Where to read next
 
