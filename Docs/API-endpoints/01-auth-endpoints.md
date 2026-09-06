@@ -145,10 +145,26 @@ The parameters, all in `auth.ts`: six digits, ten minutes, five attempts,
 a table of live credentials). 10^6 with five guesses inside ten minutes is not a
 space anybody walks.
 
-Delivery is `Backend/src/auth/mailer.ts`: nodemailer over `SMTP_URL`, one
-template, a plain-text twin and no images. With no `SMTP_URL` configured the
-code is written to the server log with a warning — a development affordance
-that `MAIL_REQUIRED=1` turns off, and every deployment should set it.
+### Delivery
+
+`Backend/src/auth/mailer.ts`: nodemailer, one template, a plain-text twin and
+no images. Four modes, and the backend prints which one it is in at boot —
+because the failure this prevents is otherwise invisible (sign-up succeeds, no
+code arrives, nothing says why):
+
+```text
+  SMTP_URL set          real delivery
+  unset                 a throwaway Ethereal inbox. The code is logged AND a
+                        URL is logged where the rendered email can be read.
+                        Zero configuration; this is the development default
+  unset, network down   the code is still logged. That path cannot break
+  MAIL_REQUIRED=1       no SMTP_URL is a refusal. Ethereal is never reached
+                        for and no code is ever logged. Set this in production
+```
+
+`Backend/.env.example` carries paste-ready `SMTP_URL` lines for Brevo, Resend,
+Gmail (App Password, not the account password) and Mailtrap. The password
+usually needs percent-encoding — `@` is `%40`.
 
 ### Signing in before verifying
 

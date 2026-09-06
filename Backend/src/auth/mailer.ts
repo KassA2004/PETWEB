@@ -28,57 +28,127 @@ import type { Transporter } from 'nodemailer';
  *
  * ## When it is not configured
  *
- * Development, mostly, and the honest answer there is not to pretend. The
- * transport is null, `sendVerificationCode` writes the code to the server log
- * with a loud warning, and it **says so in the log every time** rather than
- * once — a server quietly printing verification codes is a thing you want to
- * notice you have running.
+ * Development, mostly, and there the useful thing is not a refusal — it is
+ * being able to *see the email*. So with no `SMTP_URL` this falls back to
+ * **Ethereal**, nodemailer's own throwaway SMTP service: it creates a test
+ * account on the fly, accepts the message, delivers it nowhere, and hands back
+ * a URL where the rendered mail can be read. Zero configuration, and it answers
+ * the question a logged six-digit code cannot ("does the message look right").
  *
- * It does not fail closed, and that is a deliberate, narrow exception: failing
- * closed would mean nobody can register locally without a mail account, and the
- * check that actually matters — that the address is real — is still enforced by
- * `email-address.ts` and by the code having to be typed back in. In production
- * `MAIL_REQUIRED=1` turns the exception off and a missing transport becomes a
- * refusal, which is what a deployment should set.
+ * The code is written to the log as well, every time, in both modes — because
+ * Ethereal needs the network and the log does not, and because a server quietly
+ * printing verification codes is a thing you want to keep noticing you have
+ * running.
+ *
+ * None of this fails closed, and that is a deliberate, narrow exception:
+ * failing closed would mean nobody can register locally without a mail account,
+ * and the check that actually matters — that the address is real — is still
+ * enforced by `email-address.ts` and by the code having to be typed back in.
+ *
+ * **`MAIL_REQUIRED=1` turns the exception off**, and every deployment should
+ * set it: no `SMTP_URL` then becomes a refusal, Ethereal is never reached for,
+ * and the code is never logged.
  */
 
 const logger = new Logger('Mailer');
+
+/** How this process is sending mail. Decided once, reported at boot. */
+export type MailMode = 'smtp' | 'ethereal' | 'log' | 'refuse';
+
+export function mailMode(): MailMode {
+  if (process.env.SMTP_URL) return 'smtp';
+  return process.env.MAIL_REQUIRED === '1' ? 'refuse' : 'ethereal';
+}
+
+/**
+ * One line at boot saying which of the four this is.
+ *
+ * Worth a line of startup noise because the failure it prevents is the one
+ * that wastes an afternoon: sign-up succeeds, the code never arrives, and
+ * nothing anywhere says that no mail server was ever configured. Called from
+ * `main.ts`.
+ */
+export function describeMailer(): string {
+  switch (mailMode()) {
+    case 'smtp':
+      return `Mail: SMTP, from ${FROM}.`;
+    case 'refuse':
+      return 'Mail: NOT CONFIGURED and MAIL_REQUIRED=1 — sign-up will be refused. Set SMTP_URL.';
+    default:
+      return (
+        'Mail: no SMTP_URL, so verification codes go to a throwaway Ethereal ' +
+        'inbox and are printed below. Set SMTP_URL before deploying.'
+      );
+  }
+}
 
 /**
  * Built once, lazily, and kept.
  *
  * A transporter holds a connection pool; building one per message would open a
  * TCP connection and do a TLS handshake for every code sent.
+ *
+ * The promise, not the transporter, is what is cached: building the Ethereal
+ * one is a network round trip, and two sign-ups landing at the same moment must
+ * not each create a throwaway account.
  */
-let transport: Transporter | null | undefined;
+let building: Promise<Transporter | null> | undefined;
 
-function mailer(): Transporter | null {
-  if (transport !== undefined) return transport;
-
-  const url = process.env.SMTP_URL;
-  if (!url) {
-    transport = null;
+function mailer(): Promise<Transporter | null> {
+  building ??= build().catch((error) => {
+    // Reset, so a transport that failed to build because the network was down
+    // is retried on the next send rather than being null for the process's life.
+    building = undefined;
+    logger.warn(`Could not build a mail transport: ${error}`);
     return null;
+  });
+
+  return building;
+}
+
+async function build(): Promise<Transporter | null> {
+  const url = process.env.SMTP_URL;
+
+  if (url) {
+    return nodemailer.createTransport({
+      url,
+      // A verification code is worthless in ninety seconds, so a mail server
+      // that is not answering should surface as a failed send rather than as a
+      // request that hangs until the browser gives up on it.
+      connectionTimeout: 8000,
+      greetingTimeout: 8000,
+      socketTimeout: 12000,
+      pool: true,
+      maxConnections: 3,
+    });
   }
 
-  transport = nodemailer.createTransport({
-    url,
-    // A verification code is worthless in ninety seconds, so a mail server that
-    // is not answering should surface as a failed send rather than as a request
-    // that hangs until the browser gives up on it.
+  if (mailMode() !== 'ethereal') return null;
+
+  /*
+   * No configuration: a throwaway inbox, so the message can be looked at.
+   *
+   * `createTestAccount` registers with Ethereal and returns SMTP credentials
+   * for a mailbox that accepts everything and delivers nothing. The point is
+   * the preview URL logged after each send — the rendered email, exactly as a
+   * client would show it, which is the one thing a logged code cannot tell you.
+   *
+   * Not pooled: this is one developer's occasional sign-up, and a pool held
+   * open against a service that will forget the account tomorrow is a
+   * connection kept for nothing.
+   */
+  const account = await nodemailer.createTestAccount();
+  logger.log(`Ethereal test inbox: ${account.user}`);
+
+  return nodemailer.createTransport({
+    host: account.smtp.host,
+    port: account.smtp.port,
+    secure: account.smtp.secure,
+    auth: { user: account.user, pass: account.pass },
     connectionTimeout: 8000,
     greetingTimeout: 8000,
     socketTimeout: 12000,
-    pool: true,
-    maxConnections: 3,
   });
-
-  return transport;
-}
-
-/** Whether a real mail server is configured. */
-export function mailerConfigured(): boolean {
-  return mailer() !== null;
 }
 
 const FROM = process.env.MAIL_FROM ?? 'Pocus <no-reply@pocus.local>';
@@ -171,27 +241,36 @@ export async function sendVerificationCode(
   code: string,
   purpose: CodePurpose,
 ): Promise<void> {
-  const transporter = mailer();
-
-  if (!transporter) {
-    if (process.env.MAIL_REQUIRED === '1') {
-      throw new Error('No SMTP_URL is configured, so no verification code can be sent.');
-    }
-
-    logger.warn(
-      `SMTP is not configured. The ${purpose} code for ${email} is ${code} — ` +
-        'printed here because there is nowhere to send it. Set SMTP_URL.',
-    );
-    return;
+  if (mailMode() === 'refuse') {
+    throw new Error('No SMTP_URL is configured, so no verification code can be sent.');
   }
+
+  /*
+   * The code, in the log, before anything is attempted.
+   *
+   * Only when there is no real mail server — a production process must never
+   * write a live credential to its logs — but in that case it goes out *first*,
+   * so it is there whether the send works, fails, or times out against a
+   * network that is not available. It is the path that cannot break.
+   */
+  if (mailMode() !== 'smtp') {
+    logger.warn(`No SMTP_URL. The ${purpose} code for ${email} is ${code}`);
+  }
+
+  const transporter = await mailer();
+  if (!transporter) return;
 
   const { text, html } = body(code, purpose);
 
-  await transporter.sendMail({
+  const info = await transporter.sendMail({
     from: FROM,
     to: email,
     subject: SUBJECTS[purpose],
     text,
     html,
   });
+
+  // Ethereal only: where to read the message that was just "sent".
+  const preview = nodemailer.getTestMessageUrl(info);
+  if (preview) logger.log(`Read it here: ${preview}`);
 }
