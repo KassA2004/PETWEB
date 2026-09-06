@@ -26,6 +26,11 @@ consumes them and because session behaviour defines the rest of the API.
 | 7 | `POST` | `/api/auth/forget-password` | public | `[LATER]` | Send reset token |
 | 8 | `POST` | `/api/auth/reset-password` | public | `[LATER]` | Consume reset token |
 | 9 | `GET` | `/api/auth/list-sessions` | session | `[LATER]` | Active sessions for the user |
+| 10 | `POST` | `/api/auth/email-otp/send-verification-otp` | public | `[MVP]` | Mail a fresh six-digit code |
+| 11 | `POST` | `/api/auth/email-otp/verify-email` | public | `[MVP]` | Prove the address; creates the session |
+
+Rows 10 and 11 come from the `emailOTP` plugin (`better-auth/plugins/email-otp`),
+mounted in `Backend/src/auth/auth.ts`.
 
 ---
 
@@ -55,7 +60,34 @@ consumes them and because session behaviour defines the rest of the API.
 }
 ```
 
-Errors: `409 EMAIL_TAKEN`, `422 VALIDATION_FAILED`, `429 TOO_MANY_REQUESTS`.
+Errors: `409 EMAIL_TAKEN`, `422 VALIDATION_FAILED`, `429 TOO_MANY_REQUESTS`,
+`400 EMAIL_NOT_DELIVERABLE`.
+
+**Signing up does not sign you in.** `token` is `null` and no cookie is set:
+`emailAndPassword.requireEmailVerification` is on, so the account exists and
+cannot be entered until its address has been proved. The session comes from
+§2b.
+
+### The address has to be real
+
+Two layers, in increasing cost, and only the second is a guarantee.
+
+**Before the row** — `Backend/src/auth/email-address.ts`, run from a
+`hooks.before` middleware on this route, so a refusal is a clean `400` with a
+sentence rather than a failed insert:
+
+```text
+shape        one @, a dotted domain, sane lengths
+reputation   not an RFC-reserved name, not a known throwaway-inbox provider
+existence    the domain publishes an MX (or an A/AAAA, which RFC 5321 §5.1
+             still allows) — "no such domain" refuses; a resolver that cannot
+             answer passes, because a DNS outage is our problem, not the user's
+```
+
+It deliberately does not probe the *mailbox*. Most receiving servers refuse to
+answer, and the ones that answer honestly are an account-enumeration oracle.
+
+**The guarantee** is §2b: a code is sent to the address and has to come back.
 
 ### First-login bootstrap
 
@@ -72,8 +104,58 @@ create default Environment  ("<username>'s Room")
 grant starter InventoryItems (seeded ObjectDefinitions)
 ```
 
+This runs *before* verification, on purpose: a username has to be reserved at
+the moment it is chosen or two people can pick the same one and only find out
+ten minutes later, and the room has to exist before the first session because
+verification signs the user straight into it. An account nobody verifies is a
+row nobody can sign in to.
+
 A **Pet is not auto-created** — the MVP loop starts at the pet creator
 (`project-overview.md` §8).
+
+---
+
+## 2b. Verifying the address
+
+A **code, not a link**. A link has to survive being copied between devices,
+rewritten by a mail client and opened in a browser that did not start the
+sign-up, and when any of that goes wrong the user is on a dead page with
+nothing to do. Six digits typed into the form already open works when the mail
+is read on a phone and the account is being made on a laptop.
+
+`POST /api/auth/email-otp/verify-email`
+
+```json
+{ "email": "kass@example.com", "otp": "418205" }
+```
+
+`200` → `{ "status": true, "token": "...", "user": { ..., "emailVerified": true } }`
+plus the session cookie. `emailVerification.autoSignInAfterVerification` is what
+puts the user inside the product rather than back at a login form typing the
+password they chose ninety seconds ago.
+
+Errors: `400 INVALID_OTP`, `400 OTP_EXPIRED`, `429 TOO_MANY_REQUESTS`.
+
+`POST /api/auth/email-otp/send-verification-otp` with
+`{ "email": "...", "type": "email-verification" }` sends another. Rate limited
+to two a minute by the plugin and four in five minutes by the route rule.
+
+The parameters, all in `auth.ts`: six digits, ten minutes, five attempts,
+**hashed at rest** (`storeOTP: 'hashed'` — a table of live codes in plaintext is
+a table of live credentials). 10^6 with five guesses inside ten minutes is not a
+space anybody walks.
+
+Delivery is `Backend/src/auth/mailer.ts`: nodemailer over `SMTP_URL`, one
+template, a plain-text twin and no images. With no `SMTP_URL` configured the
+code is written to the server log with a warning — a development affordance
+that `MAIL_REQUIRED=1` turns off, and every deployment should set it.
+
+### Signing in before verifying
+
+`POST /api/auth/sign-in/email` answers `403 EMAIL_NOT_VERIFIED` **and sends a
+fresh code**. That is not an error state for the client to render: it is the
+rest of a sign-up somebody abandoned, so `LoginForm` hands it straight to the
+same verification step the register form uses.
 
 ---
 
@@ -111,7 +193,48 @@ decide between the landing screen and the world.
 
 ## 5. Sign out
 
-`POST /api/auth/sign-out` → `200 { "success": true }`, cookie cleared.
+`POST /api/auth/sign-out` → `200 { "success": true }`, cookie cleared and the
+`AuthSession` row deleted. Replaying the old cookie afterwards gets `null` from
+get-session and `401` from any guarded route.
+
+### The session is more than the cookie
+
+Ending it is one client-side routine, `frontend/src/lib/session.ts`, in this
+order and for these reasons:
+
+```text
+1  teardowns   while the cookie is still valid — a socket has to be able to say
+               "I am leaving the park" before its credential dies. They unwind
+               in reverse registration order, which is dependency order
+2  audio       stop the room immediately, not after a round trip
+3  storage     forget this tab's whereabouts (`petweb.park`) and the returning
+               hint (`petweb.returning`)
+4  sign out    the request above. This is the step that revokes anything
+5  reload      `location.replace('/')` — a new document, so no WebGL context,
+               world, socket or module singleton can outlive the session
+```
+
+Steps 3 and 5 are not tidiness. Without 3, the next account signed into that tab
+was walked straight into the previous user's park; without 5, the `AudioContext`
+kept playing the room to a signed-out browser. Both were reported.
+
+### And on the server
+
+`databaseHooks.session.delete.after` announces the end through
+`Backend/src/auth/session-events.ts`, and `SocialGateway` closes every socket
+that session authenticated. Hooking the *row* rather than the route means this
+covers `/sign-out`, revoking one session and revoking all of them, without
+anybody having to remember to.
+
+Measured: 71 ms from the request to `io server disconnect`, against a
+`REVALIDATE_MS` backstop of ten minutes.
+
+### Session lifetime
+
+Thirty days, slid at most once a day (`session.updateAge`), with a one-day
+`freshAge` before Better Auth will accept a password or email change. The
+`cookieCache` window stays at five minutes — the exposure for a session revoked
+*elsewhere*, which is what the socket teardown above bounds.
 
 ---
 

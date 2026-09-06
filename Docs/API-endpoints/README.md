@@ -1,6 +1,6 @@
 # API ENDPOINTS — INDEX
 
-This folder specifies the complete REST surface of the **Digital Pet World** backend.
+This folder specifies the complete REST surface of the **Pocus** backend.
 
 It is a *specification*, not an implementation report. No backend code exists yet
 (`/Backend` is empty), so every endpoint listed here is planned work.

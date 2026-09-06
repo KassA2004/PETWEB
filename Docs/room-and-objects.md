@@ -242,7 +242,7 @@ One row per object type. Every other system reads its answer from here.
   label, category,                 // inventory
   footprint: { cols, rows },       // THE size
   fill,                            // how much of its cells it claims, 0..1
-  height,                          // world units
+  height,                          // world units — the object's BULK. See below
   round,                           // cylinder collider instead of a box
   body, mass, restitution, friction, solidity, drag, rolls,
   surface,                         // what can rest on it, and how nice that is
@@ -261,6 +261,41 @@ colliderFor(traits)    -> the physics volume, from the same box
 
 `fill` defaults to 0.92 so neighbouring objects have a visible gap rather than a
 shared edge — a room where the furniture touches reads as a packed shelf.
+
+### `height` is where the top is, not where the tallest pixel is
+
+For anything with a top, `height` **is** that top: the tabletop, the desk's
+worktop, the chair's seat, the cabinet's lid, the shelf's top shelf.
+`colliderFor` extrudes the footprint to it, so one number is simultaneously the
+collision box, the plane the creature stands on, and the plane a candle set down
+on the thing rests at. Those three can therefore never disagree.
+
+A renderer may draw **above** it, and several do — the desk's lamp, the chair's
+back, the bookshelf's trailing plant, the cabinet's jug, the music box's dancer.
+None of that is a surface and none of it is solid. It is decoration standing on
+the bulk.
+
+Getting this backwards is the "everything floats" bug, fixed Sept 2026. Six
+objects had a `height` that was their silhouette rather than their top, so
+everything set down on them hung in mid-air:
+
+```text
+  table       top at 94% of the drawing   candles 6 units up
+  scratcher   platform at 92%             candles 14 units up
+  music box   lid at 56%                  candles 26 units up
+  chair       seat at 52%                 the creature sat at back-rest height
+  loveseat    seat at 44%                 the same
+  desk        worktop at 62%              candles 49 units up, beside the lamp
+```
+
+The catalog heights are the support plane now, and each renderer divides back
+out by a named constant of its own (`TOP`, `SEAT`, `LID`, `PLATFORM`) so every
+picture is unchanged. **If a renderer's top face is not at `-ctx.height`, one of
+the two is wrong** — verify with the probe in §9 before touching anything else.
+
+Two rows changed kind rather than number: the Wish Star and the Soft Pillow are
+`surface.kind: 'bed'`, not `'shelf'`. They are somewhere to flop, and `shelf`
+made `acceptsPropsOn` true, which let a candle be balanced on a star's point.
 
 **Toy `friction` was halved in Sept 2026**, and the number is the whole of the
 feel of throwing something. `applyGroundFriction` decelerates at
@@ -344,6 +379,36 @@ Helpers worth knowing before writing anything new:
 | `grain`, `weave` | material evidence — six strokes, not thirty |
 | `glowPool`, `glowBall` | light, as stacked translucent shapes |
 | `groundShadow` | a contact shadow sized from the footprint |
+
+### A toy behind something stays findable
+
+The one thing a user wants from a toy is to know where it is, so a toy that is
+genuinely buried is drawn *over* whatever is covering it, dimmed to
+`GHOST_ALPHA` (0.62) — present, clearly behind, findable. `PetRoom.occludedToys`
+decides, once a frame.
+
+**"Buried" is doing the work, and it did not used to.** The pass measured both
+rectangles with `screenRectOf`, which deliberately includes the *floor* a thing
+covers because it is the picking target, and it ghosted on a single pixel of
+overlap. So a toy on open carpet beside a 24-unit basket, or anywhere inside a
+rug's two cells, was permanently at 45%: toys read as faded by default, which is
+the opposite of what the effect is for. Two corrections:
+
+```text
+  floor hides nothing      both rectangles are `uprightRectOf` — contact point
+                           to crown, no skirt. A rug in front of a ball covers
+                           none of it, because a rug is five units tall
+  a sliver is not an       coverage must reach GHOST_COVERAGE (half the toy's
+  occlusion                own artwork) before anything changes
+```
+
+The thing a toy is *standing on* is also not standing in front of it: the
+occlusion pass passes the real holder to `sortKeyOf`, exactly as `syncEntity`
+does, or a ball on a table is hidden by the table.
+
+Verified by measurement rather than by eye — a ball fully behind the bookshelf
+reads coverage 1.0 and is ghosted; the same ball behind the bed reads 0.37 and
+is drawn honestly at full strength.
 
 ### Traps that have already cost time
 
@@ -704,6 +769,19 @@ wrong:
 The exit animation gates nothing: the object leaves the physics and the
 arrangement immediately, and what shrinks is a picture of something that has
 already gone.
+
+### Artwork above the collider is still clickable
+
+A consequence of `height` meaning the bulk: the desk's lamp, the cabinet's jug
+and the shelf's plant stand outside the collision box, and the click target
+comes from the box. `pickAt` takes a per-body **headroom** for this, and
+`PetRoom` supplies it from `Entity.crown` — the artwork's own local bounds,
+measured once when the object enters the room.
+
+Measured rather than authored, because a second number in the catalog saying how
+tall the picture is would be a copy of something the picture already knows, and
+copies drift. Never less than the flat 1.18 the room used to give everything, so
+nothing that was easy to grab before is harder now.
 
 ### Why a deleted piece of starting furniture has to be remembered
 

@@ -280,6 +280,33 @@ All five live in one file (`src/parks/park-limits.ts`) so the gateway and the
 sweeper cannot disagree — a heartbeat interval the sweeper thought was longer
 than the gateway did would evict people who are still standing there.
 
+### 6.0 What the heartbeat costs, and how it is paid
+
+`HEARTBEAT_MS` is per *process*, not per socket — one interval, not one timer
+each. Inside it, two things scale with the number of live parks, and both are
+bounded on purpose:
+
+```text
+  touching lastSeenAt    one UPDATE per chunk of 40 parks (`touchMany`), whose
+                         WHERE is an OR of (parkId, userId IN …) satisfied from
+                         the unique index the join's upsert already needs
+  the repair roster      every third beat, through a concurrency limit of 8
+```
+
+Both replaced a `Promise.all` over every participant and every park, which is
+not a lot of *work* but is a lot of round trips issued in one tick — enough to
+drain the connection pool, at which point the failure appears as timeouts on
+unrelated requests three layers away from the cause.
+
+Measured against the real database at 200 parks × 6 participants:
+**157 ms → 46 ms** (median of five) and **1200 statements → 5**.
+
+Arrivals, departures and removals are unaffected: those broadcast the instant
+they happen, which is the only latency a person actually sees. The repair
+broadcast is a backstop for the two things that change a park with no event at
+all — the sweeper deleting a row, and a dropped packet on a park that then goes
+quiet — and once a minute is far faster than anybody notices a stale list.
+
 ### 6.1 Three mechanisms, because one is never enough
 
 1. **`handleDisconnect`** — the clean case, and the fast one. A closed tab, a
@@ -419,6 +446,7 @@ never runs a physics step.
 | `park:move` | `{ x, z, facing, state }` | none — fire and forget |
 | `park:say` | `{ body }` | `{ ok, message? }` |
 | `park:interact` | `{ targetUserId, kind }` | `{ ok }` |
+| `park:kick` | `{ userId }` | `{ ok, removed }` or `{ ok: false, code, message }` |
 | `dm:send` | `{ toUserId, body }` | `{ ok, sent? }` |
 | `park:roster` | — | `{ ok, parkId, park, members, positions }` |
 | `friends:presence` | — | `{ online: string[] }` |
@@ -444,6 +472,17 @@ stable vocabulary that has to survive this codebase adding an animation state
 without every other client understanding it. `kind` is one of
 `greet | play | nuzzle | copy`.
 
+**`park:kick` carries a user and not a park.** Which park is
+`connection.parkId`, a fact about the socket asking, established when it
+joined. Taking it from the payload would turn "the host of this park may remove
+somebody from it" into "a host may remove somebody from any park whose id they
+can guess", and `readKick` therefore has exactly one field.
+
+`park:removed` is the one directed event in the protocol, and it has to be: a
+roster describes who is *in* a park, and the person who most needs to know about
+a removal is the one who no longer is. It carries a reason, because a lawn that
+goes quiet with no explanation is the worst version of this feature.
+
 ### 8.4 Server → client
 
 | Event | Payload |
@@ -452,6 +491,7 @@ without every other client understanding it. `kind` is one of
 | `park:moved` | `{ userId, x, z, facing, state }` |
 | `park:message` | the stored `ParkMessage` |
 | `park:interaction` | `{ parkId, fromUserId, toUserId, kind, durationMs }` |
+| `park:removed` | `{ parkId, code, message }` — sent only to the person removed |
 | `dm:message` | the stored `DirectMessage`, with `withUserId` per recipient |
 | `friends:changed` | `{}` — a nudge to re-read `GET /friends`, never data |
 | `friends:presence` | `{ userId, online }` |
@@ -474,6 +514,58 @@ types uninteresting rather than dangerous. Coordinates are clamped to a
 generous absolute box rather than to the actual grid, for the reason
 `PlacedObjectDto` gives: the room's shape belongs to the renderer, and a backend
 that hard-coded a tile size would need redeploying to change one.
+
+### 8.5a Host control
+
+A park is somebody's living room, and the person who opened it decides who is
+standing in it. `ParksService.kick` is the whole decision:
+
+```text
+  not the host        404, and 404 rather than 403 for the same reason as
+                      everywhere else in this API — somebody else's row is not
+                      a thing you are told you lack permission for
+  removing yourself   422. That is leaving, and leaving has its own door
+  not in the park      { removed: false }, not an error. The roster the caller
+                      was looking at was one beat stale
+```
+
+The order of operations matters and is the same shape as a departure:
+
+```text
+1  delete the ParkParticipant row   — this is what revokes `say` and `interact`,
+                                      both of which ask the database
+2  evict their sockets in this park — leave the room, emit `park:removed`.
+                                      Their other sockets are untouched: a tab
+                                      open on their own room is not in this park
+3  broadcast the roster              — as always, the whole membership, once
+```
+
+**It is not a ban.** They can come back to a public park. A ban list is a
+different feature with its own questions — how long, who lifts it, what a public
+park means if anybody can be permanently excluded — and the honest small feature
+beats a sketch of the large one.
+
+### 8.5b Ceilings
+
+A park is not free to exist: every live one costs a heartbeat write per
+participant and a roster read, whether or not anybody in it moves. Nothing
+bounded the number of them, so one account in a loop could open parks until the
+heartbeat could not finish inside its own interval — at which point every park
+in the process degrades together. The numbers are in `parks/park-limits.ts`:
+
+```text
+  PARKS_PER_HOST         3      live parks one account may host
+  MAX_LIVE_PARKS         500    parks in existence, across everybody
+  MAX_SOCKETS            2000   social sockets this process will hold
+  MAX_SOCKETS_PER_USER   4      a laptop, a phone, a spare tab of each
+```
+
+Each is a refusal with a sentence, not a queue or a degradation: a park that is
+opened and then runs badly for the eight people in it is worse than a park that
+was never opened. The two socket limits are enforced in the handshake
+middleware, so a refused connection never exists — the client sees
+`connect_error`, which is the path it already has for a dropped network, and
+retries with backoff.
 
 ### 8.6 Rate limits
 

@@ -1,11 +1,11 @@
 ## `PROJECT_OVERVIEW.md`
 
 ````md
-# Digital Pet World
+# Pocus
 
 ## 1. Project Overview
 
-Digital Pet World is a 2D interactive digital pet application where users create, customize, and interact with unique creatures inside a beautiful, living environment.
+Pocus is a 2D interactive digital pet application where users create, customize, and interact with unique creatures inside a beautiful, living environment.
 
 The application combines:
 
@@ -165,7 +165,7 @@ The system should support creativity rather than forcing every creature into a c
 
 # 5. What the Application Is
 
-Digital Pet World is:
+Pocus is:
 
 * A digital pet experience
 * A 2D interactive environment

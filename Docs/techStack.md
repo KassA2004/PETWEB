@@ -1,6 +1,6 @@
-# Digital Pet World - Technology Stack
+# Pocus - Technology Stack
 
-**Purpose:** This document outlines the required technology stack for the Digital Pet World application. Ensure all architectural decisions align with these constraints.
+**Purpose:** This document outlines the required technology stack for the Pocus application. Ensure all architectural decisions align with these constraints.
 
 ## Core Stack
 
@@ -155,6 +155,13 @@ precisely so that they are not one process's memory; the in-memory parts —
 last-known creature positions and interaction cooldowns — are per-park ephemera
 a second process would simply hold its own copy of.
 
+**The ceilings added in Sept 2026 are per-process and one of them is not.**
+`MAX_SOCKETS` counts this process's own connections and is correct as it stands;
+`MAX_LIVE_PARKS` counts rows and is therefore already global, which is the right
+answer for the thing it protects — the database. `PARKS_PER_HOST` is a row count
+too. So the only number a second process would need to think about is the socket
+one, and the thinking is a division. See `13-social-endpoints.md` §8.5b.
+
 Potential uses, unchanged: WebSocket coordination, Pub/Sub.
 
 ---
@@ -164,6 +171,55 @@ Potential uses, unchanged: WebSocket coordination, Pub/Sub.
 ### Better Auth
 Open-source authentication solution to handle security locally without relying on paid third-party services.
 Handles: Registration, login, sessions, password management.
+
+Configured in `Backend/src/auth/auth.ts`. Three properties that file is
+responsible for, and `Docs/API-endpoints/01-auth-endpoints.md` is the reference:
+
+- **An account belongs to a real address.** `requireEmailVerification` means
+  signing up creates no session at all, so there is no state in which a made-up
+  address is a usable account.
+- **A session ends when the user says so.** `databaseHooks.session.delete.after`
+  announces it, and the social gateway closes the sockets that session
+  authenticated — 71 ms, measured, against a ten-minute revalidation backstop.
+- **A session ends by itself.** Thirty days, slid daily.
+
+#### `emailOTP` — the verification code
+
+`better-auth/plugins/email-otp`, not a separate library: it is part of the
+authentication system this project already runs, so the alternative would have
+been a second one.
+
+A **code, not a link**, and that is the whole reason the plugin is here rather
+than Better Auth's built-in link flow (`overrideDefaultEmailVerification: true`
+turns the link off, so there is one way to prove an address rather than two that
+can disagree). A link has to survive being copied between devices, rewritten by
+a mail client's URL scanner and opened in a browser that did not start the
+sign-up; when any of that fails the user is on a dead page with nothing to do.
+Six digits typed into the form already open works when the mail is read on a
+phone and the account is being made on a laptop.
+
+Six digits, ten minutes, five attempts, hashed at rest. A table of live
+verification codes in plaintext is a table of live credentials.
+
+### nodemailer — sending that code
+Added Sept 2026, and it is the only reason this backend talks to anything
+outside itself. One message type (`Backend/src/auth/mailer.ts`): a transport
+built from a single `SMTP_URL`, one template with a plain-text twin, and no
+images or web fonts — the same rule the product holds itself to, which here is
+also what keeps the message readable and out of a spam filter.
+
+Deliberately **not** a mail provider's SDK. A product that sends one kind of
+email does not need a queue, a templating language or a provider abstraction;
+SMTP is what every provider speaks, and a URL is the shape they all hand you.
+A missing `SMTP_URL` logs the code with a warning in development and is fatal
+when `MAIL_REQUIRED=1`, which every deployment should set.
+
+Address *plausibility* is checked before any of this, without a dependency:
+`Backend/src/auth/email-address.ts` is shape, an RFC-reserved-name list, a small
+disposable-provider list and a DNS MX/A lookup from `node:dns`. A blocklist of
+throwaway providers is a treadmill nobody wins — the code is the guarantee, and
+this only avoids spending an account row and an email on an address that
+obviously cannot receive one.
 
 ---
 
