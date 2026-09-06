@@ -152,6 +152,16 @@ export interface SocialEvents {
     kind: InteractionKind;
     durationMs: number;
   };
+  /**
+   * The host put you out of their park.
+   *
+   * A directed event rather than a roster, and it has to be: a roster says who
+   * is in a park, and the one person who most needs to know about this is the
+   * one who is no longer in it — so there is nobody left to tell by describing
+   * the membership. It carries a reason because "the lawn went away" with no
+   * explanation is the worst version of this feature.
+   */
+  'park:removed': { parkId: string; code: string; message: string };
   'dm:message': DirectMessage;
   'friends:changed': Record<string, never>;
   'friends:presence': { userId: string; online: boolean };

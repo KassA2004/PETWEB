@@ -105,6 +105,16 @@ export interface ParkSession {
   select: (userId: string | null) => void;
   say: (body: string) => Promise<boolean>;
   interact: (targetUserId: string, kind: InteractionKind) => Promise<boolean>;
+  /**
+   * Put somebody out of this park. The host's, and refused for anybody else.
+   *
+   * Resolves to a message when the server said no, and to null when it worked.
+   * The member list is not touched here: the removal is broadcast as a roster
+   * like every other change to who is in a park, so the list repairs itself
+   * from the server's answer rather than from an optimistic guess that would
+   * have to be reconciled with it.
+   */
+  remove: (userId: string) => Promise<string | null>;
   leave: () => void;
 }
 
@@ -374,12 +384,40 @@ export function usePark(options: UseParkOptions): ParkSession {
         if (message.parkId !== parkId) return;
         setMessages((current) => [...current, message].slice(-CHAT_WINDOW));
       }),
+
+      /*
+       * The host removed us.
+       *
+       * Handled as a refusal rather than as a departure, and the distinction is
+       * the whole of what the user sees: `left` is a thing you did and needs no
+       * explanation, `refused` carries a reason and is already wired to put the
+       * person back in front of the park list with it shown (`ParkStage`'s
+       * `onRefused`). Being removed is much more like being turned away at the
+       * gate than like walking out of it.
+       *
+       * The park is forgotten too, so a reload does not try to walk back into
+       * somewhere we have just been asked to leave.
+       */
+      onSocial('park:removed', (event) => {
+        if (event.parkId !== parkId) return;
+
+        habitat.current?.clearVisitors();
+        shown.current.clear();
+        forgetPark();
+        setRefusal(event.message);
+        setPhase('refused');
+      }),
     ];
 
     return () => {
       for (const stop of stops) stop();
     };
   }, [parkId, selfId, applyRoster, habitat]);
+
+  const remove = useCallback(async (userId: string): Promise<string | null> => {
+    const reply = await askSocial<{ ok: true; removed: boolean }>('park:kick', { userId });
+    return isRefusal(reply) ? reply.message : null;
+  }, []);
 
   // --- Leaving --------------------------------------------------------------
   const leave = useCallback(() => {
@@ -478,6 +516,7 @@ export function usePark(options: UseParkOptions): ParkSession {
     select: setSelected,
     say,
     interact,
+    remove,
     leave,
   };
 }

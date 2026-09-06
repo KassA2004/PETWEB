@@ -20,14 +20,20 @@ import {
   HEARTBEAT_MS,
   INTERACTION_MS,
   INTERACTION_RANGE,
+  MAX_SOCKETS,
+  MAX_SOCKETS_PER_USER,
   MOVE_RATE,
+  ROSTER_CONCURRENCY,
+  ROSTER_REPAIR_EVERY,
 } from '../parks/park-limits';
 import { onSessionEnded } from '../auth/session-events';
+import { defaultCodeForStatus } from '../common/error-codes';
 import { ParksService } from '../parks/parks.service';
 import type { ParkMemberView, ParkView } from '../parks/parks.service';
 import {
   BadPayload,
   readDirectSend,
+  readKick,
   readInteract,
   readJoin,
   readSay,
@@ -180,6 +186,9 @@ export class SocialGateway
 
   private heartbeat: NodeJS.Timeout | null = null;
 
+  /** Heartbeats since boot, so the roster repair can run on every third one. */
+  private beats = 0;
+
   /** Unsubscribes the sign-out listener. See the constructor. */
   private stopWatchingSessions: (() => void) | null = null;
 
@@ -249,10 +258,35 @@ export class SocialGateway
    */
   afterInit(server: Server): void {
     server.use((socket, next) => {
+      /*
+       * Full is an answer, and it is given here for the same reason
+       * authentication is: a connection refused in the middleware never
+       * exists, so there is no window in which a socket over the ceiling has an
+       * id, is in a room, or can have a handler run on it.
+       *
+       * The client treats this exactly like a dropped network — it is the same
+       * `connect_error` — and retries with backoff, which is the behaviour
+       * wanted. A server that accepted every socket and then could not service
+       * them would take every park down together instead of turning one person
+       * away.
+       */
+      if (this.connections.size >= MAX_SOCKETS) {
+        next(new Error('SERVER_BUSY'));
+        return;
+      }
+
       void resolveSocketUser(socket)
         .then((user) => {
           if (!user) {
             next(new Error('UNAUTHORIZED'));
+            return;
+          }
+
+          // And one account may not be the reason everybody else is turned
+          // away. Four is a laptop, a phone and a spare tab of each; beyond
+          // that it is a script.
+          if (this.socketsOf(user.id) >= MAX_SOCKETS_PER_USER) {
+            next(new Error('TOO_MANY_CONNECTIONS'));
             return;
           }
 
@@ -498,6 +532,95 @@ export class SocialGateway
     }
 
     return { ok: true };
+  }
+
+  /**
+   * The host puts somebody out.
+   *
+   * **Which park is not in the payload.** It is `connection.parkId` — a fact
+   * about this socket, established when it joined — and that is the whole
+   * difference between "the host of this park may remove somebody from it" and
+   * "a host may remove somebody from any park whose id they can guess".
+   * `readKick` deliberately has one field.
+   *
+   * Whether the caller is the host is `ParksService.kick`'s decision, read from
+   * the row. Nothing about it is repeated here, for the reason `onJoin` gives:
+   * a rule implemented twice is a rule with two answers.
+   *
+   * ## Removed means removed
+   *
+   * The membership row goes first, which is what actually revokes permission —
+   * `say`, `interact` and the next heartbeat all ask the database. Then the
+   * sockets: every one the removed person has *in this park* is taken out of
+   * the room and told why, so their client shows a reason and returns to the
+   * list rather than sitting on a lawn it can no longer speak in.
+   *
+   * Their other sockets are untouched. Another tab open on their own room is
+   * not in this park and is none of the host's business.
+   *
+   * Finally the roster, once, to everybody still there. As everywhere else in
+   * this gateway, what a park is told is the whole membership rather than
+   * "so-and-so was removed" — one message that cannot disagree with itself, and
+   * one that repairs a client that had already drifted.
+   */
+  @SubscribeMessage('park:kick')
+  async onKick(
+    @ConnectedSocket() socket: Socket,
+    @MessageBody() payload: unknown,
+  ): Promise<{ ok: true; removed: boolean } | Refusal> {
+    const connection = this.connections.get(socket.id);
+    if (!connection) return { ok: false, code: 'UNAUTHORIZED', message: 'Not connected.' };
+
+    const parkId = connection.parkId;
+    if (!parkId) {
+      return { ok: false, code: 'PARK_CLOSED', message: 'You are not in a park.' };
+    }
+
+    try {
+      const { userId } = readKick(payload);
+      const removed = await this.parks.kick(connection.user.id, parkId, userId);
+
+      await this.evict(userId, parkId);
+      await this.broadcastRoster(parkId);
+
+      return { ok: true, removed };
+    } catch (error) {
+      return this.asReply(error);
+    }
+  }
+
+  /**
+   * Take one person's sockets out of one park, and tell them why.
+   *
+   * Separate from `departPark` because it is the *other* half of a removal: the
+   * membership row is already gone (`ParksService.kick` deleted it), so this
+   * must not delete it again — `leave` on an empty membership would report the
+   * park empty and delete the park out from under the host who just used the
+   * button.
+   *
+   * The forgotten position is what stops a removed creature standing on the
+   * lawn until the next roster; the `park:removed` event is what lets their
+   * client say something true instead of going quiet.
+   */
+  private async evict(userId: string, parkId: string): Promise<void> {
+    this.positions.get(parkId)?.delete(userId);
+    this.forgetCooldownsFor(userId);
+
+    for (const [socketId, connection] of this.connections) {
+      if (connection.user.id !== userId || connection.parkId !== parkId) continue;
+
+      connection.parkId = null;
+
+      const theirs = this.socketById(socketId);
+      if (!theirs) continue;
+
+      await theirs.leave(roomForPark(parkId));
+      theirs.emit('park:removed', {
+        parkId,
+        code: 'PARK_REMOVED',
+        message: 'The host removed you from that park.',
+      });
+    }
   }
 
   /**
@@ -765,7 +888,7 @@ export class SocialGateway
     parkId: string,
     socketId: string,
   ): Promise<void> {
-    const socket = this.server?.sockets?.sockets?.get(socketId);
+    const socket = this.socketById(socketId);
     if (socket) await socket.leave(roomForPark(parkId));
 
     // Another tab of the same person may still be standing there. Their
@@ -829,6 +952,8 @@ export class SocialGateway
       this.logger.warn(`Session revalidation failed: ${error}`),
     );
 
+    this.pruneCooldowns();
+
     const byPark = new Map<string, Set<string>>();
 
     for (const connection of this.connections.values()) {
@@ -839,11 +964,17 @@ export class SocialGateway
       byPark.set(connection.parkId, users);
     }
 
-    await Promise.all(
-      [...byPark].map(([parkId, users]) =>
-        Promise.all([...users].map((userId) => this.parks.touch(userId, parkId))),
-      ),
-    );
+    /*
+     * One statement per chunk of parks, not one per person.
+     *
+     * This was `Promise.all` over a `touch()` per participant, which at two
+     * hundred parks of six is twelve hundred `UPDATE`s issued in the same tick,
+     * three times a minute. The work is trivial and the *shape* is not: a burst
+     * that size drains the connection pool, and what comes out is pool timeouts
+     * on unrelated requests that happened to be in flight. See
+     * `ParksService.touchMany`.
+     */
+    await this.parks.touchMany(byPark);
 
     /*
      * And then tell every park what it looks like.
@@ -855,10 +986,119 @@ export class SocialGateway
      * dropped packet on a park that then goes quiet. Both would otherwise
      * persist until somebody happened to walk in.
      *
-     * One query per occupied park per heartbeat is the price, and it is the
-     * right one: the alternative is every client polling for the same answer.
+     * **Not every beat, and never all at once.** It used to be both, and both
+     * were the same mistake — a cost proportional to the number of live parks,
+     * paid in one tick, for a message almost always identical to the last one.
+     * Once a minute is still far faster than anybody notices a stale member
+     * list, and `ROSTER_CONCURRENCY` keeps the reads in a shape the connection
+     * pool can absorb. Arrivals, departures and removals are unaffected: those
+     * broadcast the instant they happen, which is what a person actually sees.
      */
-    await Promise.all([...byPark.keys()].map((parkId) => this.broadcastRoster(parkId)));
+    this.beats += 1;
+    if (this.beats % ROSTER_REPAIR_EVERY !== 0) return;
+
+    await this.forEachLimited([...byPark.keys()], ROSTER_CONCURRENCY, (parkId) =>
+      this.broadcastRoster(parkId),
+    );
+  }
+
+  /**
+   * Run `work` over `items`, never more than `limit` of them at once.
+   *
+   * Twelve lines instead of a dependency, and the property it buys is the only
+   * one that matters here: the *burst* is bounded, not just the total. Failures
+   * are already swallowed by every caller (`broadcastRoster` logs and returns),
+   * so nothing here needs to decide what a rejection means.
+   */
+  private async forEachLimited<T>(
+    items: T[],
+    limit: number,
+    work: (item: T) => Promise<void>,
+  ): Promise<void> {
+    let next = 0;
+
+    const worker = async (): Promise<void> => {
+      while (next < items.length) {
+        const item = items[next];
+        next += 1;
+        await work(item);
+      }
+    };
+
+    await Promise.all(
+      Array.from({ length: Math.min(limit, items.length) }, () => worker()),
+    );
+  }
+
+  /**
+   * Drop interaction cooldowns that have already expired.
+   *
+   * A cooldown lives for `INTERACTION_MS` — under three seconds — and the map
+   * was only ever pruned when a park emptied, so a long-running process
+   * accumulated one entry for every pair of creatures that had ever greeted
+   * each other and never gave any of them back. Small per entry and unbounded
+   * in aggregate, which is the definition of the leak that takes a week to show
+   * up. Sweeping expired keys on the heartbeat bounds the map to the pairs that
+   * interacted in the last twenty seconds.
+   */
+  private pruneCooldowns(): void {
+    const now = Date.now();
+
+    for (const [key, until] of this.interactionCooldowns) {
+      if (until <= now) this.interactionCooldowns.delete(key);
+    }
+  }
+
+  /**
+   * One socket, by id.
+   *
+   * A method rather than the expression it replaces, because that expression
+   * was **wrong everywhere it appeared** and quietly so:
+   *
+   * ```text
+   *   this.server?.sockets?.sockets?.get(socketId)   // always undefined
+   * ```
+   *
+   * `@WebSocketServer()` on a gateway declared with a `namespace` gives Nest's
+   * *namespace*, not the io server — and a namespace's `.sockets` is already
+   * the `Map<id, Socket>`. So `.sockets.sockets` is a property of a Map, which
+   * is nothing, and every lookup returned `undefined` while looking exactly
+   * like a lookup that had simply missed. Each of the three callers then took
+   * its "socket has gone" branch, which is a plausible thing for each of them
+   * to do, so nothing ever threw:
+   *
+   *   `revalidate` never disconnected a socket whose session had ended — the
+   *   whole backstop was a no-op
+   *
+   *   `departPark` never called `socket.leave` on the old park, so somebody
+   *   moving from one park to another stayed in the first one's Socket.IO room
+   *   and went on receiving its rosters and its chat
+   *
+   *   `evict` could not tell a removed guest why their lawn had gone quiet
+   *
+   * Written to accept either shape, because "which one Nest hands you" is a
+   * property of how the gateway is declared and this should not break again if
+   * the namespace ever moves.
+   */
+  private socketById(socketId: string): Socket | undefined {
+    const sockets: unknown = this.server?.sockets;
+
+    if (sockets instanceof Map) {
+      return sockets.get(socketId) as Socket | undefined;
+    }
+
+    return (sockets as { sockets?: Map<string, Socket> } | undefined)?.sockets?.get(
+      socketId,
+    );
+  }
+
+  /** How many sockets this account currently holds. */
+  private socketsOf(userId: string): number {
+    let count = 0;
+    for (const connection of this.connections.values()) {
+      if (connection.user.id === userId) count += 1;
+    }
+    return count;
   }
 
   /**
@@ -887,7 +1127,7 @@ export class SocialGateway
 
     await Promise.all(
       stale.map(async ([socketId, connection]) => {
-        const socket = this.server?.sockets?.sockets?.get(socketId);
+        const socket = this.socketById(socketId);
         if (!socket) return;
 
         if (await sessionStillValid(socket, connection.user.id)) {
@@ -960,7 +1200,7 @@ export class SocialGateway
    * Anything unrecognised becomes a flat "something went wrong": an internal
    * message is not something to hand a stranger's browser.
    */
-  private asReply(error: unknown): JoinReply {
+  private asReply(error: unknown): Refusal {
     if (error instanceof BadPayload) {
       return { ok: false, code: 'VALIDATION_FAILED', message: error.message };
     }
@@ -969,8 +1209,25 @@ export class SocialGateway
 
     if (response && typeof response === 'object') {
       const body = response as { code?: string; message?: string };
+
       if (body.code && body.message) {
         return { ok: false, code: body.code, message: body.message };
+      }
+
+      /*
+       * A plain Nest exception, which carries a sentence and no code.
+       *
+       * `AppException` is the project's own shape and has both. But the
+       * services also throw `NotFoundException` — `say`, `history` and `kick`
+       * all do, for the rule that somebody else's row is a 404 rather than a
+       * 403 — and those were falling through to "Something went wrong", which
+       * threw away a perfectly good explanation on the way past. The status is
+       * what supplies the missing code, through the same mapping the HTTP
+       * filter uses, so the two transports still say the same word.
+       */
+      if (body.message) {
+        const status = (error as { getStatus?: () => number }).getStatus?.() ?? 500;
+        return { ok: false, code: defaultCodeForStatus(status), message: body.message };
       }
     }
 
@@ -1016,7 +1273,16 @@ type JoinReply =
       members: ParkMemberView[];
       positions: (PetTransform & { userId: string })[];
     }
-  | { ok: false; code: string; message: string };
+  | Refusal;
+
+/**
+ * A no, with the reason attached.
+ *
+ * The same stable `code` the REST API uses (`error-codes.ts`), so a client
+ * handles `PARK_FULL` identically whether it heard about it over HTTP or over
+ * a socket, and there is no second vocabulary of socket errors to keep in step.
+ */
+export type Refusal = { ok: false; code: string; message: string };
 
 /**
  * Who is in a park, and where they are standing.
@@ -1034,7 +1300,7 @@ interface Roster {
 }
 
 /** What `park:roster` resolves to — the roster, or why there isn't one. */
-type RosterReply = ({ ok: true } & Roster) | { ok: false; code: string; message: string };
+type RosterReply = ({ ok: true } & Roster) | Refusal;
 
 /**
  * How long a socket may go without its session being re-checked.

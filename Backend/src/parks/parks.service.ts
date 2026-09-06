@@ -14,13 +14,16 @@ import { UsersService } from '../users/users.service';
 import type { PublicPetView } from '../users/users.service';
 import {
   EMPTY_PARK_GRACE_MS,
+  MAX_LIVE_PARKS,
   MESSAGE_MAX_LENGTH,
+  PARKS_PER_HOST,
   PARK_CAPACITY_MESSAGE,
   PARK_MAX_AGE_MS,
   PARK_MAX_CAPACITY,
   PARK_MIN_CAPACITY,
   PARTICIPANT_STALE_MS,
   SWEEP_INTERVAL_MS,
+  TOUCH_CHUNK,
 } from './park-limits';
 import { hashPasscode, verifyPasscode } from './passcode';
 
@@ -211,6 +214,8 @@ export class ParksService implements OnModuleInit, OnModuleDestroy {
       );
     }
 
+    await this.checkThereIsRoomForAnotherPark(hostId);
+
     // Hashed before the insert, so a failure to hash never leaves a row whose
     // credential column is null and whose visibility says private — which is a
     // park anybody can walk into.
@@ -247,6 +252,49 @@ export class ParksService implements OnModuleInit, OnModuleDestroy {
       occupancy: 0,
       createdAt: park.createdAt.toISOString(),
     };
+  }
+
+  /**
+   * Is there room on this server for one more park?
+   *
+   * Two ceilings, asked in the order that gives the better message: a user who
+   * has three parks open is told about their own parks, and only somebody who
+   * is within their own allowance is told the server is busy.
+   *
+   * **A park is not free to exist.** Every live one costs a heartbeat write per
+   * participant and a roster read every minute, whether or not anybody in it
+   * moves, so the number of them is the thing that decides whether this process
+   * stays up. Nothing bounded it before: one account in a loop could open parks
+   * until the timer that services them could not finish inside its own
+   * interval, at which point every park in the process degrades together. See
+   * `park-limits.ts`.
+   *
+   * Counted rather than tracked. A counter would be a second source of truth
+   * that the sweeper, a restart or a cascade delete could each falsify, and the
+   * count is an aggregate over a table that never holds many rows — precisely
+   * because of this check.
+   */
+  private async checkThereIsRoomForAnotherPark(hostId: string): Promise<void> {
+    const [mine, total] = await Promise.all([
+      this.prisma.park.count({ where: { hostId } }),
+      this.prisma.park.count(),
+    ]);
+
+    if (mine >= PARKS_PER_HOST) {
+      throw new AppException(
+        HttpStatus.CONFLICT,
+        ErrorCode.PARK_LIMIT_REACHED,
+        `You already have ${PARKS_PER_HOST} parks open. Close one before opening another.`,
+      );
+    }
+
+    if (total >= MAX_LIVE_PARKS) {
+      throw new AppException(
+        HttpStatus.SERVICE_UNAVAILABLE,
+        ErrorCode.PARK_LIMIT_REACHED,
+        'There are as many parks open as we can hold right now. Join one, or try again in a minute.',
+      );
+    }
   }
 
   // --- Getting in -----------------------------------------------------------
@@ -446,12 +494,104 @@ export class ParksService implements OnModuleInit, OnModuleDestroy {
     return { removed: gone.count > 0, empty: true };
   }
 
+  /**
+   * Put somebody out of a park.
+   *
+   * The host's power, and only the host's: the check is against `park.hostId`
+   * read here, never against anything the caller said about themselves. A park
+   * is somebody's living room, and the person who opened it is the one who
+   * decides who is standing in it.
+   *
+   * Three refusals, each with its own answer rather than a shared no:
+   *
+   * ```text
+   *   not the host       you cannot remove people from somebody else's park
+   *   removing yourself  that is leaving, and leaving has its own door
+   *   not in the park    already gone. The roster the caller was looking at was
+   *                      one beat stale, which is not an error
+   * ```
+   *
+   * The last returning `false` rather than throwing is what stops a double tap
+   * on Remove producing a red error about somebody who has already left. The
+   * gateway broadcasts a roster either way, so the list repairs itself.
+   *
+   * This does **not** stop the person coming back, and that is a scope
+   * decision rather than an oversight: a ban list is a different feature with
+   * its own questions — how long, who lifts it, what a public park means if
+   * anybody can be permanently excluded from one — and the honest small feature
+   * is better than a sketch of the large one. What it does do is put them out
+   * *now*, socket and all (see the gateway).
+   */
+  async kick(hostId: string, parkId: string, userId: string): Promise<boolean> {
+    if (hostId === userId) {
+      throw new AppException(
+        HttpStatus.UNPROCESSABLE_ENTITY,
+        ErrorCode.VALIDATION_FAILED,
+        'To leave your own park, leave it.',
+      );
+    }
+
+    const park = await this.prisma.park.findUnique({
+      where: { id: parkId },
+      select: { hostId: true },
+    });
+
+    if (!park) throw this.closed();
+
+    if (park.hostId !== hostId) {
+      // A 404 rather than a 403, matching the rule the rest of the API follows
+      // (AGENTS.md, Persistence Rules): somebody else's row is not a thing you
+      // are told you lack permission for.
+      throw new NotFoundException('That is not your park.');
+    }
+
+    const gone = await this.prisma.parkParticipant.deleteMany({
+      where: { parkId, userId },
+    });
+
+    return gone.count > 0;
+  }
+
   /** Keep a participant's heartbeat alive. Called by the gateway on a timer. */
   async touch(userId: string, parkId: string): Promise<void> {
     await this.prisma.parkParticipant.updateMany({
       where: { parkId, userId },
       data: { lastSeenAt: new Date() },
     });
+  }
+
+  /**
+   * Keep everybody's heartbeat alive, in as few statements as possible.
+   *
+   * The heartbeat used to be `touch()` per participant through `Promise.all` —
+   * so a server holding two hundred parks of six people issued twelve hundred
+   * `UPDATE`s in a single tick, every twenty seconds. That is not a lot of
+   * *work*; it is a lot of round trips and a burst that exhausts the connection
+   * pool, and what it produces is pool timeouts spread across every unrelated
+   * request that happened to be in flight at the same moment. A failure with no
+   * obvious cause, three layers away from what caused it.
+   *
+   * One `UPDATE` per chunk of parks instead. The `WHERE` is an `OR` of
+   * `(parkId, userId IN ...)` clauses, satisfied from the unique index on
+   * `(parkId, userId)` that the join's upsert already requires.
+   *
+   * Chunked rather than one statement for everything, because the query text
+   * grows with the number of parks and a five-hundred-clause `OR` is a plan
+   * nobody should have to read.
+   */
+  async touchMany(byPark: Map<string, Set<string>>): Promise<void> {
+    const clauses = [...byPark]
+      .filter(([, users]) => users.size > 0)
+      .map(([parkId, users]) => ({ parkId, userId: { in: [...users] } }));
+
+    const now = new Date();
+
+    for (let at = 0; at < clauses.length; at += TOUCH_CHUNK) {
+      await this.prisma.parkParticipant.updateMany({
+        where: { OR: clauses.slice(at, at + TOUCH_CHUNK) },
+        data: { lastSeenAt: now },
+      });
+    }
   }
 
   /**

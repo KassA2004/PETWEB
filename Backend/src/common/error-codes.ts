@@ -49,6 +49,16 @@ export const ErrorCode = {
   PARK_PASSCODE_REQUIRED: 'PARK_PASSCODE_REQUIRED',
   /** The park stopped existing — everybody left while this request was in flight. */
   PARK_CLOSED: 'PARK_CLOSED',
+  /**
+   * No more parks: this account has as many open as it may, or the server does.
+   *
+   * One code for both, because the client's response to either is the same —
+   * show the sentence, which says which — and because which of the two it was
+   * is the server's business rather than something a client should branch on.
+   */
+  PARK_LIMIT_REACHED: 'PARK_LIMIT_REACHED',
+  /** The host removed you from their park. */
+  PARK_REMOVED: 'PARK_REMOVED',
   INTERNAL_ERROR: 'INTERNAL_ERROR',
 } as const;
 

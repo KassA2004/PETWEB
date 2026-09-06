@@ -37,6 +37,96 @@ export const PARTICIPANT_STALE_MS = HEARTBEAT_MS * 3;
 /** How often the sweeper runs. */
 export const SWEEP_INTERVAL_MS = 30_000;
 
+/* -------------------------------------------------------------------------- */
+/* What one server can hold                                                   */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The ceilings, and why a feature that "scales" needs them.
+ *
+ * A park costs the server real work every twenty seconds whether or not
+ * anybody in it does anything: a heartbeat write per participant and a roster
+ * read for the park. That cost is linear in the number of *live parks*, and
+ * nothing in the design bounded that number — one account in a loop could open
+ * as many as it liked, and the process would go down under the weight of its
+ * own timer rather than under any traffic.
+ *
+ * So the number is stated. Every one of these is a refusal with a sentence
+ * attached rather than a queue or a degradation, because the honest answer to
+ * "the server is full" is to say so: a park that is opened and then runs badly
+ * for the eight people in it is worse than a park that was never opened.
+ *
+ * They are deliberately generous relative to what this deployment is: at
+ * `MAX_LIVE_PARKS` the heartbeat is roughly 500 roster reads and 500 batched
+ * writes a minute, which a single Postgres and a single Node process carry
+ * without noticing. Raise them by measuring, not by guessing.
+ */
+
+/**
+ * How many live parks one account may be hosting.
+ *
+ * Three, because there is one legitimate reason to have more than one — you
+ * opened one, it emptied, you opened another before the sweeper collected the
+ * first — and no legitimate reason to have four.
+ */
+export const PARKS_PER_HOST = 3;
+
+/** How many parks may exist at once, across everybody. */
+export const MAX_LIVE_PARKS = 500;
+
+/**
+ * How many social sockets this process will hold.
+ *
+ * Refused at the handshake, before the connection exists, so a server at its
+ * limit stops accepting rather than accepting and then falling over. The client
+ * already handles `connect_error` — it is the same path a dropped network takes
+ * — and retries with backoff, which is exactly the behaviour wanted here.
+ */
+export const MAX_SOCKETS = 2_000;
+
+/**
+ * How many sockets one account may hold.
+ *
+ * Four: a laptop, a phone, and a spare tab of each. This is what stops one
+ * signed-in account consuming the whole ceiling above, which is the only way a
+ * single user could deny the park to everybody else.
+ */
+export const MAX_SOCKETS_PER_USER = 4;
+
+/**
+ * How many heartbeats apart the *repair* roster broadcast is.
+ *
+ * Arrivals and departures still broadcast immediately; this is only the
+ * backstop that repairs a park nobody is entering or leaving (see
+ * `SocialGateway.beat`). Every beat meant a roster read for every occupied park
+ * three times a minute for a message that is, almost always, identical to the
+ * last one. Once a minute is still far faster than anybody notices a stale
+ * member list, and it is a third of the read load.
+ */
+export const ROSTER_REPAIR_EVERY = 3;
+
+/**
+ * How many parks the heartbeat may be reading rosters for at once.
+ *
+ * The burst matters more than the total. `Promise.all` over every occupied park
+ * issues every query in the same tick, which at a few hundred parks exhausts
+ * the connection pool and turns a heartbeat into a wave of pool timeouts —
+ * which look like database failures and are really a missing bound. Eight at a
+ * time finishes the same work in a shape the pool can absorb.
+ */
+export const ROSTER_CONCURRENCY = 8;
+
+/**
+ * How many parks' heartbeats go into one `UPDATE`.
+ *
+ * The heartbeat used to be one statement per *participant*, so a full server
+ * was four thousand round trips every twenty seconds. It is now one statement
+ * per chunk of parks, which is two orders of magnitude fewer. Chunked rather
+ * than done in one statement because the `WHERE` is an `OR` per park, and a
+ * five-hundred-clause `OR` is a query plan nobody should have to look at.
+ */
+export const TOUCH_CHUNK = 40;
+
 /**
  * How long an empty park is allowed to exist.
  *

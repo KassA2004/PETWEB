@@ -113,6 +113,18 @@ export function readTransform(value: unknown): PetTransform {
   };
 }
 
+/**
+ * A host removing somebody from their own park.
+ *
+ * One field, and pointedly *not* a park id: which park is a fact about the
+ * socket asking (`connection.parkId`), and taking it from the payload would let
+ * a host of one park remove people from another they merely knew the id of.
+ */
+export function readKick(value: unknown): { userId: string } {
+  const raw = asObject(value);
+  return { userId: readUuid(raw.userId, 'userId') };
+}
+
 export function readSay(value: unknown): SayPayload {
   const raw = asObject(value);
   const body = readString(raw.body, 'body');

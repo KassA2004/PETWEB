@@ -2,18 +2,23 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   Copy,
+  Crown,
   Hand,
   Loader2,
   Lock,
   LogOut,
+  MessageCircle,
   PartyPopper,
   SendHorizonal,
   Sparkles,
+  UserMinus,
   Users,
   WifiOff,
 } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
+import { Tabs } from '../../components/ui/tabs';
+import type { TabItem } from '../../components/ui/tabs';
 import { cn } from '../../lib/utils';
 import { useStickToBottom } from '../../lib/useStickToBottom';
 import type { PetAppearance } from '../../assets/pets/customization/PetAppearance';
@@ -30,7 +35,7 @@ import type { PetHabitatHandle } from '../habitat/PetHabitat';
 import { PetPortrait } from '../pets/PetPortrait';
 import type { VisitorHit, VisitorTransform } from '../../scenes/room/Visitors';
 import { cssTintFor } from './tints';
-import { emitSocial } from './socket';
+import { emitSocial, onSocial } from './socket';
 import type { InteractionKind, ParkMember } from './socket';
 import type { WorldChrome } from './SocialLayer';
 import { usePark } from './usePark';
@@ -57,6 +62,26 @@ import { usePark } from './usePark';
  *   world column   ← createPortal(the lawn, worldHost)
  *   tools column   ← what this component returns: who is here, and the chat
  * ```
+ *
+ * ## Two tabs, because they are two jobs
+ *
+ * The panel used to be one column: a strip of portraits, then whatever the
+ * selection was, then the chat and its composer in whatever height was left.
+ * That works while the only thing you can do to a person is greet their
+ * creature. It stops working the moment the host can *remove* somebody —
+ * a destructive control a thumb-width away from a text field is a control
+ * somebody will hit on the way to typing, and on a phone the chat was already
+ * squeezed to about four lines by the things above it.
+ *
+ * ```text
+ *   People   who is here, whose creature is whose, what yours can do to
+ *            theirs, and — for the host — the way to ask somebody to go
+ *   Chat     the conversation, and nothing else, at full height
+ * ```
+ *
+ * The chat tab carries an unread dot rather than a count: a number would be a
+ * second thing to read on a strip whose whole job is to be glanceable, and the
+ * question anybody actually has is "has anyone said anything", not "how many".
  *
  * ## The pets are the interface
  *
@@ -147,6 +172,9 @@ const PARK_STYLE: RoomStyle = {
   removed: [],
 };
 
+/** The two halves of the park panel. See the note at the top of the file. */
+type PanelTab = 'people' | 'chat';
+
 /** Nothing about a park is saved by anybody standing in it. */
 const NO_WRITE = () => undefined;
 
@@ -203,6 +231,15 @@ export function ParkStage({
   const [distance, setDistance] = useState(Number.POSITIVE_INFINITY);
 
   const session = usePark({ parkId, passcode, selfId, habitat, onLeft: onLeave });
+
+  /**
+   * Which half of the panel is showing.
+   *
+   * People first: arriving somewhere, the question is who is here. The chat is
+   * one tap away and says so when it has something to say.
+   */
+  const [tab, setTab] = useState<PanelTab>('people');
+
 
   // Publish the way out, and take it back down on the way out. A stale
   // function left in the ref would be a "leave" that leaves a park nobody is
@@ -273,6 +310,51 @@ export function ParkStage({
   }, [notice]);
 
   /*
+   * Something was said while the chat was not on screen.
+   *
+   * Set from the socket's own callback rather than by watching the message
+   * list, and that is the difference between a subscription and a derivation.
+   * Watching the list would mean a `setState` inside an effect — a render, then
+   * a second render to correct it — and it could not tell "a message arrived"
+   * from "the window slid": the log is capped at `CHAT_WINDOW`, so once it is
+   * full every new message leaves its length exactly where it was, and a
+   * length-watching version goes quiet precisely when a park is busiest.
+   *
+   * A second subscription to `park:message` alongside the hook's, on purpose.
+   * They are different questions — the hook asks what was said, this asks
+   * whether to draw a dot — and the socket's listeners are a set, so the cost
+   * of the second one is a function call.
+   *
+   * Your own message is not unread. It arrives back through the same event as
+   * everybody else's (the server echoes the stored row rather than the client
+   * appending an optimistic copy — see `usePark.say`), so it has to be excluded
+   * by hand or sending a line from the chat tab would light the dot you are
+   * looking at.
+   */
+  const [unread, setUnread] = useState(false);
+
+  /*
+   * The visible tab, readable from a callback.
+   *
+   * Written in an effect and read only inside the socket handler below —
+   * never during render, which is what keeps it a legitimate ref rather than
+   * state pretending to be one.
+   */
+  const showing = useRef(tab);
+  useEffect(() => {
+    showing.current = tab;
+  }, [tab]);
+
+  useEffect(
+    () =>
+      onSocial('park:message', (message) => {
+        if (message.parkId !== parkId || message.senderId === selfId) return;
+        if (showing.current !== 'chat') setUnread(true);
+      }),
+    [parkId, selfId],
+  );
+
+  /*
    * Turned away at the gate.
    *
    * The park was full, the passcode was wrong, or it closed while the user was
@@ -290,6 +372,26 @@ export function ParkStage({
     session.members.find((member) => member.userId === session.selected) ?? null;
 
   const inRange = distance <= INTERACTION_RANGE;
+
+  /**
+   * Whether this is our park.
+   *
+   * Compared against the park the *server* described, never against anything
+   * remembered from having created one — a client that decided locally it was
+   * the host would render a button the server refuses, which is a worse
+   * interface than no button. `ParksService.kick` re-reads `hostId` from the
+   * row regardless; this only decides whether the control is drawn.
+   */
+  const isHost = session.park?.hostId === selfId;
+
+  /** Who is being asked to leave, pending a confirmation. */
+  const [removing, setRemoving] = useState<string | null>(null);
+
+  const remove = async (member: ParkMember) => {
+    setRemoving(null);
+    const failure = await session.remove(member.userId);
+    setNotice(failure ?? `${member.username} has left the park.`);
+  };
 
   const send = async () => {
     const text = draft.trim();
@@ -343,6 +445,12 @@ export function ParkStage({
     );
 
   const others = session.members.filter((member) => member.userId !== selfId);
+
+  const tabs: TabItem<PanelTab>[] = [
+    { value: 'people', label: 'Guests', count: others.length, icon: Users },
+    { value: 'chat', label: 'Chat', icon: MessageCircle },
+  ];
+
 
   return (
     <>
@@ -401,146 +509,194 @@ export function ParkStage({
           </p>
         )}
 
-        {/* --- Who is on the lawn ----------------------------------------- */}
-        {/*
-          A strip of creatures rather than a stacked list, and the reason is
-          the space it is in: this panel now shares its column with a chat that
-          wants to be as tall as it can be, and eight full-width rows would use
-          all of it to say something a row of portraits says in one line. It is
-          also closer to what the user is looking at — the same creatures, in
-          the same order, in the same colours as the rings on the lawn.
-        */}
-        <section className="shrink-0 space-y-1.5">
-          <h4 className="text-[0.65rem] font-medium tracking-wide text-muted-foreground uppercase">
-            On the lawn
-          </h4>
-
-          {others.length === 0 ? (
-            <p className="rounded-xl border border-dashed border-border px-3 py-2.5 text-xs text-muted-foreground">
-              Just {petName} so far. Somebody may wander in.
-            </p>
-          ) : (
-            <ul className="no-scrollbar -mx-0.5 flex gap-2 overflow-x-auto px-0.5 py-0.5">
-              {others.map((member) => (
-                <li key={member.userId}>
-                  <CreatureChip
-                    member={member}
-                    selected={session.selected === member.userId}
-                    onClick={() =>
-                      select(session.selected === member.userId ? null : member.userId)
-                    }
-                  />
-                </li>
-              ))}
-            </ul>
+        <div className="relative shrink-0">
+          <Tabs
+            items={tabs}
+            value={tab}
+            onValueChange={(next) => {
+              setTab(next);
+              // Looking at the chat is the only thing that honestly clears the
+              // dot, so it is cleared here and nowhere else.
+              if (next === 'chat') setUnread(false);
+            }}
+            dense={compact}
+          />
+          {unread && (
+            <span
+              aria-hidden
+              className="absolute top-1 right-2 size-2 rounded-full bg-primary"
+            />
           )}
-        </section>
+        </div>
 
-        {/* --- The creature you tapped, and what yours can do about it ----- */}
-        {selectedMember && (
-          <section className="animate-rise shrink-0 space-y-2 rounded-xl border border-primary/40 bg-primary/5 p-3">
-            <div className="flex items-baseline justify-between gap-2">
-              <p className="min-w-0 truncate text-sm font-medium">
-                {selectedMember.pet?.name ?? selectedMember.username}
-                <span className="text-muted-foreground"> · {selectedMember.username}</span>
+        {/* --- Who is on the lawn ----------------------------------------- */}
+        {tab === 'people' && (
+          <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto">
+            {others.length === 0 ? (
+              <p className="shrink-0 rounded-xl border border-dashed border-border px-3 py-2.5 text-xs text-muted-foreground">
+                Just {petName} so far. Somebody may wander in.
               </p>
+            ) : (
+              <ul className="shrink-0 space-y-1.5">
+                {others.map((member) => (
+                  <li key={member.userId}>
+                    <GuestRow
+                      member={member}
+                      selected={session.selected === member.userId}
+                      isHost={member.userId === session.park?.hostId}
+                      /*
+                        The control is drawn for the host and for nobody else,
+                        and it is drawn *here* rather than inside the selection
+                        panel below on purpose: removing somebody is a thing you
+                        do to a person in a list, not a thing you do to a
+                        creature you have tapped, and putting it beside the four
+                        friendly interactions would make it the fifth one.
+                      */
+                      onRemove={isHost ? () => setRemoving(member.userId) : undefined}
+                      onClick={() =>
+                        select(session.selected === member.userId ? null : member.userId)
+                      }
+                    />
+                  </li>
+                ))}
+              </ul>
+            )}
 
-              <button
-                type="button"
-                onClick={() => select(null)}
-                className="shrink-0 text-xs text-muted-foreground hover:text-foreground"
-              >
-                Close
-              </button>
-            </div>
+            {/* --- The creature you tapped, and what yours can do about it -- */}
+            {selectedMember && (
+              <section className="animate-rise shrink-0 space-y-2 rounded-xl border border-primary/40 bg-primary/5 p-3">
+                <div className="flex items-baseline justify-between gap-2">
+                  <p className="min-w-0 truncate text-sm font-medium">
+                    {selectedMember.pet?.name ?? selectedMember.username}
+                    <span className="text-muted-foreground"> · {selectedMember.username}</span>
+                  </p>
 
-            <p
-              className={cn(
-                'text-xs',
-                inRange ? 'text-accent' : 'text-muted-foreground',
-              )}
-            >
-              {inRange
-                ? `${petName} is close enough`
-                : `${petName} is too far away — walk over`}
-            </p>
+                  <button
+                    type="button"
+                    onClick={() => select(null)}
+                    className="shrink-0 text-xs text-muted-foreground hover:text-foreground"
+                  >
+                    Close
+                  </button>
+                </div>
 
-            <div className="grid grid-cols-2 gap-1.5">
-              {INTERACTIONS.map((interaction) => (
-                <Button
-                  key={interaction.kind}
-                  size="sm"
-                  variant="secondary"
-                  disabled={!inRange}
-                  title={interaction.hint}
-                  className="h-9 justify-start gap-1.5 px-2.5 text-xs"
-                  onClick={() => void doInteract(interaction.kind)}
-                >
-                  <interaction.icon aria-hidden className="size-3.5 shrink-0" />
-                  {interaction.label}
-                </Button>
-              ))}
-            </div>
-          </section>
-        )}
+                <p className={cn('text-xs', inRange ? 'text-accent' : 'text-muted-foreground')}>
+                  {inRange
+                    ? `${petName} is close enough`
+                    : `${petName} is too far away — walk over`}
+                </p>
 
-        {!selectedMember && others.length > 0 && (
-          <p className="shrink-0 rounded-xl border border-dashed border-border px-3 py-2 text-center text-xs text-muted-foreground">
-            Tap a creature — on the lawn or above — to say hello to it.
-          </p>
+                <div className="grid grid-cols-2 gap-1.5">
+                  {INTERACTIONS.map((interaction) => (
+                    <Button
+                      key={interaction.kind}
+                      size="sm"
+                      variant="secondary"
+                      disabled={!inRange}
+                      title={interaction.hint}
+                      className="h-9 justify-start gap-1.5 px-2.5 text-xs"
+                      onClick={() => void doInteract(interaction.kind)}
+                    >
+                      <interaction.icon aria-hidden className="size-3.5 shrink-0" />
+                      {interaction.label}
+                    </Button>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {!selectedMember && others.length > 0 && (
+              <p className="shrink-0 rounded-xl border border-dashed border-border px-3 py-2 text-center text-xs text-muted-foreground">
+                Tap a creature — on the lawn or above — to say hello to it.
+              </p>
+            )}
+
+            {isHost && others.length > 0 && (
+              <p className="shrink-0 text-[0.65rem] text-muted-foreground">
+                <Crown aria-hidden className="mr-1 inline size-3 align-[-1px]" />
+                This is your park — you can ask anybody here to leave.
+              </p>
+            )}
+          </div>
         )}
 
         {/* --- What is being said ----------------------------------------- */}
-        <ChatLog messages={session.messages} selfId={selfId} />
+        {tab === 'chat' && (
+          <>
+            <ChatLog messages={session.messages} selfId={selfId} />
 
-        <form
-          className="flex shrink-0 gap-2"
-          onSubmit={(event) => {
-            event.preventDefault();
-            void send();
-          }}
-        >
-          <Input
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            placeholder="Say something…"
-            name="message"
-            autoComplete="off"
-            enterKeyHint="send"
-            maxLength={400}
-            disabled={session.phase !== 'in'}
-            aria-label="Say something in the park"
+            <form
+              className="flex shrink-0 gap-2"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void send();
+              }}
+            >
+              <Input
+                value={draft}
+                onChange={(event) => setDraft(event.target.value)}
+                placeholder="Say something…"
+                name="message"
+                autoComplete="off"
+                enterKeyHint="send"
+                maxLength={400}
+                disabled={session.phase !== 'in'}
+                aria-label="Say something in the park"
+              />
+              <Button
+                type="submit"
+                size="sm"
+                className="shrink-0 px-3"
+                aria-label="Send"
+                disabled={sending || !draft.trim() || session.phase !== 'in'}
+              >
+                <SendHorizonal aria-hidden className="size-4" />
+              </Button>
+            </form>
+          </>
+        )}
+
+        {/* --- Asking somebody to go -------------------------------------- */}
+        {removing && (
+          <RemoveDialog
+            member={others.find((member) => member.userId === removing) ?? null}
+            onCancel={() => setRemoving(null)}
+            onConfirm={(member) => void remove(member)}
           />
-          <Button
-            type="submit"
-            size="sm"
-            className="shrink-0 px-3"
-            aria-label="Send"
-            disabled={sending || !draft.trim() || session.phase !== 'in'}
-          >
-            <SendHorizonal aria-hidden className="size-4" />
-          </Button>
-        </form>
+        )}
       </div>
     </>
   );
 }
 
 /**
- * One person, as their creature, small enough to sit in a row of eight.
+ * One person in the park, as a row.
  *
- * The tint ring is the whole point of the control: it is the same colour as the
- * ring drawn under that creature's feet on the lawn (`tints.ts` explains why
- * that is a ring rather than a floating name), so matching the portrait to the
- * animal is a glance rather than a puzzle.
+ * It was a chip in a horizontally scrolling strip, which was the right shape
+ * when this shared a column with a chat log that wanted every pixel. It is a
+ * row now because the guests have a tab of their own: there is height to
+ * spend, a row can carry a name that is not truncated to eight characters, and
+ * — the reason the change was needed at all — it has somewhere to put a Remove
+ * control that is not on top of something else.
+ *
+ * The tint ring stays and is the whole point of the portrait: it is the same
+ * colour as the ring drawn under that creature's feet on the lawn
+ * (`tints.ts`), so matching a name to an animal is a glance rather than a
+ * puzzle.
  */
-function CreatureChip({
+function GuestRow({
   member,
   selected,
+  isHost,
+  onRemove,
   onClick,
 }: {
   member: ParkMember;
   selected: boolean;
+  /** Whether *this* member is the park's host. Not whether the viewer is. */
+  isHost: boolean;
+  /** Present only for the host, and never for their own row. */
+  onRemove?: () => void;
   onClick: () => void;
 }) {
   /*
@@ -557,42 +713,134 @@ function CreatureChip({
   );
 
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={`${member.pet?.name ?? 'No creature'} · ${member.username}`}
+    /*
+     * A row of two controls, not a button containing a button.
+     *
+     * Nesting an interactive element inside another is invalid HTML and the
+     * browser's recovery from it is to move one out, which is how a Remove
+     * button ends up somewhere nobody put it. The div carries the styling; the
+     * two buttons inside it carry the behaviour.
+     */
+    <div
       className={cn(
-        'press flex w-[4.5rem] flex-col items-center gap-1 rounded-xl border p-1.5 transition-colors',
-        'focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none',
-        selected
-          ? 'border-primary/60 bg-primary/10'
-          : 'border-border bg-card hover:bg-muted/50',
+        'flex items-center gap-2 rounded-xl border p-1.5 pr-2 transition-colors',
+        selected ? 'border-primary/60 bg-primary/10' : 'border-border bg-card',
       )}
     >
-      {/*
-        The tint as a ring, drawn with `box-shadow` rather than a border so it
-        costs no layout and cannot change the portrait's size by two pixels.
-      */}
-      <span
-        className="rounded-lg"
-        style={{ boxShadow: `0 0 0 2px ${cssTintFor(member.userId)}` }}
-      >
-        {appearance ? (
-          <PetPortrait appearance={appearance} size={40} alt={`${member.username}'s creature`} />
-        ) : (
-          <span
-            aria-hidden
-            className="grid size-10 place-items-center text-muted-foreground"
-          >
-            ·
-          </span>
+      <button
+        type="button"
+        onClick={onClick}
+        aria-pressed={selected}
+        className={cn(
+          'press flex min-w-0 flex-1 items-center gap-2 rounded-lg text-left outline-none',
+          'focus-visible:ring-2 focus-visible:ring-ring',
         )}
-      </span>
+      >
+        {/*
+          The tint as a ring, drawn with `box-shadow` rather than a border so it
+          costs no layout and cannot change the portrait's size by two pixels.
+        */}
+        <span
+          className="shrink-0 rounded-lg"
+          style={{ boxShadow: `0 0 0 2px ${cssTintFor(member.userId)}` }}
+        >
+          {appearance ? (
+            <PetPortrait appearance={appearance} size={36} alt={`${member.username}'s creature`} />
+          ) : (
+            <span aria-hidden className="grid size-9 place-items-center text-muted-foreground">
+              ·
+            </span>
+          )}
+        </span>
 
-      <span className="w-full truncate text-center text-[0.65rem] leading-tight">
-        {member.username}
-      </span>
-    </button>
+        <span className="min-w-0 flex-1">
+          <span className="flex items-center gap-1 truncate text-sm leading-tight font-medium">
+            {member.pet?.name ?? member.username}
+            {isHost && (
+              <Crown
+                aria-label="Host"
+                className="size-3 shrink-0 text-muted-foreground"
+              />
+            )}
+          </span>
+          <span className="block truncate text-[0.65rem] leading-tight text-muted-foreground">
+            {member.username}
+          </span>
+        </span>
+      </button>
+
+      {onRemove && (
+        <button
+          type="button"
+          onClick={onRemove}
+          aria-label={`Remove ${member.username} from the park`}
+          title={`Remove ${member.username}`}
+          className={cn(
+            'press grid size-8 shrink-0 place-items-center rounded-lg text-muted-foreground',
+            'transition-colors hover:bg-destructive/10 hover:text-destructive',
+            'focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none',
+          )}
+        >
+          <UserMinus aria-hidden className="size-4" />
+        </button>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Are you sure?
+ *
+ * Asked, because this is the one thing in the park that happens *to* somebody
+ * else and cannot be undone from here — they are put out mid-conversation, and
+ * the only apology available is not doing it by accident. One tap to ask, one
+ * to confirm.
+ *
+ * Rendered in the panel's own flow rather than as a modal over the page: the
+ * lawn is in the other column and the person being talked about is standing on
+ * it, so covering the window would hide the thing the decision is about.
+ */
+function RemoveDialog({
+  member,
+  onCancel,
+  onConfirm,
+}: {
+  member: ParkMember | null;
+  onCancel: () => void;
+  onConfirm: (member: ParkMember) => void;
+}) {
+  // Gone already — the roster arrived while the question was on screen.
+  if (!member) return null;
+
+  return (
+    <div
+      role="alertdialog"
+      aria-label={`Remove ${member.username}?`}
+      className="animate-rise shrink-0 space-y-2 rounded-xl border border-destructive/40 bg-destructive/5 p-3"
+    >
+      <p className="text-xs text-foreground">
+        Remove <span className="font-medium">{member.username}</span> from your park? They
+        can join again if the park is public.
+      </p>
+
+      <div className="flex gap-1.5">
+        <Button
+          size="sm"
+          variant="secondary"
+          className="h-8 flex-1 text-xs"
+          onClick={onCancel}
+        >
+          Keep them
+        </Button>
+        <Button
+          size="sm"
+          className="h-8 flex-1 bg-destructive text-xs text-destructive-foreground hover:bg-destructive/90"
+          onClick={() => onConfirm(member)}
+        >
+          Remove
+        </Button>
+      </div>
+    </div>
   );
 }
 
